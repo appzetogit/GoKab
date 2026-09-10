@@ -1,0 +1,542 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800;900&family=Poppins:wght@300;400;500;600;700;800;900&display=swap');
+
+@import "tailwindcss";
+
+* {
+  font-family: 'Poppins', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+}
+
+:root {
+  font-family: 'Poppins', system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: #1C2833;
+  background-color: #F9F9F9;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* Centralized branding and HSL theme matching myredigo.com */
+  --background: 0 0% 100%;
+  --foreground: 220 20% 15%;
+  --card: 0 0% 100%;
+  --card-foreground: 220 20% 15%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 220 20% 15%;
+  --primary: 145 70% 42%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 145 40% 95%;
+  --secondary-foreground: 145 70% 30%;
+  --muted: 145 20% 96%;
+  --muted-foreground: 220 10% 45%;
+  --accent: 200 75% 50%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 145 20% 90%;
+  --input: 145 20% 90%;
+  --ring: 145 70% 42%;
+  --radius: .75rem;
+
+  --gradient-hero: linear-gradient(135deg, hsl(145 70% 42%) 0%, hsl(200 75% 50%) 100%);
+  --gradient-subtle: linear-gradient(180deg, hsl(145 40% 97%) 0%, hsl(200 40% 97%) 100%);
+  --gradient-logo: linear-gradient(135deg, hsl(145 70% 45%) 0%, hsl(200 75% 55%) 100%);
+  --shadow-soft: 0 4px 20px -4px hsl(145 70% 42% / .15);
+  --shadow-card: 0 2px 12px -2px hsl(220 20% 15% / .08);
+  --shadow-card-hover: 0 8px 30px -8px hsl(145 70% 42% / .25);
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+#root {
+  width: 100%;
+}
+
+@theme {
+  --color-primary: #6FBF7A;
+  --color-secondary: #CFE8C9;
+  --font-sans: 'Poppins', system-ui, sans-serif;
+  --font-display: 'Poppins', sans-serif;
+  
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+  --radius-3xl: 2rem;
+  
+  --shadow-premium: 0 10px 40px -10px rgba(47,95,67,0.12);
+  --shadow-soft: 0 4px 20px -2px rgba(47,95,67,0.06);
+}
+
+/* Global scrollbar hiding for a cleaner mobile experience */
+* {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+}
+
+*::-webkit-scrollbar {
+    display: none; /* Chrome, Safari and Opera */
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Premium Driver-Specific Theme Layer */
+.driver-theme {
+    /* Centralized Color Controls - Update these to change the entire driver module appearance */
+    --color-primary: #1C2833;      /* Driver Brand Primary (Dark Navy/Slate for professional SaaS feel) */
+    --color-secondary: #334155;    /* Driver Brand Secondary (Lighter Slate) */
+    
+    /* Dedicated Variable-Based Mapping */
+    --driver-accent: #FFD700;
+    --driver-bg-soft: #F8F9FA;
+    --driver-card-white: #FFFFFF;
+    
+    background-color: var(--driver-bg-soft);
+    color: #0F172A;
+    font-family: 'Poppins', sans-serif;
+}
+
+/* Localize Tailwind's color mapping for the driver module */
+.driver-theme .text-primary { color: var(--color-primary); }
+.driver-theme .bg-primary { background-color: var(--color-primary); }
+.driver-theme .border-primary { border-color: var(--color-primary); }
+.driver-theme .shadow-premium { --tw-shadow: 0 10px 40px -10px rgba(0,0,0,0.15); box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow); }
+
+.glass-morphism {
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.admin-user-field,
+.admin-user-field:focus {
+  color-scheme: light;
+  background-color: #ffffff !important;
+  color: #000000 !important;
+}
+
+.admin-user-field::placeholder {
+  color: #6b7280 !important;
+  opacity: 1;
+}
+
+.admin-user-field option {
+  background-color: #ffffff;
+  color: #000000;
+}
+
+.admin-user-field:-webkit-autofill,
+.admin-user-field:-webkit-autofill:hover,
+.admin-user-field:-webkit-autofill:focus,
+.admin-user-field:-webkit-autofill:active {
+  -webkit-text-fill-color: #000000 !important;
+  caret-color: #000000 !important;
+  box-shadow: 0 0 0 1000px #ffffff inset !important;
+  transition: background-color 9999s ease-out 0s;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.skeleton {
+  background-color: #f1f5f9;
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0,
+    rgba(255, 255, 255, 0.2) 20%,
+    rgba(255, 255, 255, 0.5) 60%,
+    rgba(255, 255, 255, 0)
+  );
+  animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* ==========================================================================
+   GOKAB USER APP — PREMIUM THEME SCOPE
+   All GoKab-specific design tokens scoped to the user module wrapper.
+   Admin and Driver modules are NOT affected by these variables.
+   ========================================================================== */
+
+.gokab-user-root {
+  /* GoKab Brand Colors */
+  --gk-primary: #6FBF7A;
+  --gk-primary-dark: #4da65a;
+  --gk-accent: #F2D34F;
+  --gk-bg: #FBFBF6;
+  --gk-dark: #2F5F43;
+  --gk-light: #CFE8C9;
+  --gk-text: #1F2937;
+  --gk-muted: #6B7280;
+  --gk-border: #E8F3E9;
+
+  /* GoKab Shadows */
+  --gk-shadow-card: 0 2px 16px -4px rgba(47,95,67,0.08), 0 1px 4px -1px rgba(0,0,0,0.04);
+  --gk-shadow-card-hover: 0 8px 32px -8px rgba(111,191,122,0.22), 0 2px 8px -2px rgba(0,0,0,0.06);
+  --gk-shadow-btn: 0 4px 16px -4px rgba(111,191,122,0.40);
+  --gk-shadow-accent: 0 4px 16px -4px rgba(242,211,79,0.35);
+
+  background-color: var(--gk-bg);
+  font-family: 'Poppins', system-ui, -apple-system, sans-serif;
+  color: var(--gk-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* GoKab Premium Card */
+.gk-card {
+  background: #ffffff;
+  border: 1px solid var(--gk-border, #E8F3E9);
+  border-radius: 20px;
+  box-shadow: var(--gk-shadow-card, 0 2px 16px -4px rgba(47,95,67,0.08));
+  transition: box-shadow 0.22s ease, border-color 0.22s ease, transform 0.18s ease;
+}
+.gk-card:hover {
+  box-shadow: var(--gk-shadow-card-hover, 0 8px 32px -8px rgba(111,191,122,0.22));
+  border-color: #CFE8C9;
+  transform: translateY(-1px);
+}
+.gk-card:active {
+  transform: translateY(0px);
+  box-shadow: var(--gk-shadow-card, 0 2px 16px -4px rgba(47,95,67,0.08));
+}
+
+/* GoKab Primary Button */
+.gk-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background-color: var(--gk-primary, #6FBF7A);
+  color: #ffffff;
+  font-family: 'Poppins', sans-serif;
+  font-weight: 700;
+  font-size: 0.875rem;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  padding: 0.875rem 1.75rem;
+  border: none;
+  box-shadow: var(--gk-shadow-btn, 0 4px 16px -4px rgba(111,191,122,0.40));
+  transition: background-color 0.18s ease, box-shadow 0.18s ease, transform 0.12s ease;
+  cursor: pointer;
+}
+.gk-btn-primary:hover {
+  background-color: var(--gk-primary-dark, #4da65a);
+  box-shadow: 0 6px 22px -4px rgba(111,191,122,0.50);
+}
+.gk-btn-primary:active {
+  transform: scale(0.98);
+  box-shadow: 0 2px 8px -2px rgba(111,191,122,0.30);
+}
+
+/* GoKab Accent Button */
+.gk-btn-accent {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background-color: var(--gk-accent, #F2D34F);
+  color: var(--gk-dark, #2F5F43);
+  font-family: 'Poppins', sans-serif;
+  font-weight: 800;
+  font-size: 0.875rem;
+  letter-spacing: 0.05em;
+  border-radius: 999px;
+  padding: 0.875rem 1.75rem;
+  border: none;
+  box-shadow: var(--gk-shadow-accent, 0 4px 16px -4px rgba(242,211,79,0.35));
+  transition: background-color 0.18s ease, box-shadow 0.18s ease, transform 0.12s ease;
+  cursor: pointer;
+}
+.gk-btn-accent:hover {
+  background-color: #e8c93a;
+  box-shadow: 0 6px 22px -4px rgba(242,211,79,0.50);
+}
+.gk-btn-accent:active {
+  transform: scale(0.98);
+}
+
+/* GoKab Secondary Button */
+.gk-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background-color: #EFF8F0;
+  color: var(--gk-dark, #2F5F43);
+  font-family: 'Poppins', sans-serif;
+  font-weight: 600;
+  font-size: 0.875rem;
+  border-radius: 999px;
+  padding: 0.75rem 1.5rem;
+  border: 1.5px solid var(--gk-light, #CFE8C9);
+  transition: all 0.18s ease;
+  cursor: pointer;
+}
+.gk-btn-secondary:hover {
+  background-color: #D6F0DA;
+  border-color: var(--gk-primary, #6FBF7A);
+}
+
+/* GoKab Premium Input */
+.gk-input {
+  width: 100%;
+  background: #ffffff;
+  border: 1.5px solid #E8F3E9;
+  border-radius: 14px;
+  padding: 0.75rem 1rem;
+  font-family: 'Poppins', sans-serif;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #1F2937;
+  outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.gk-input::placeholder {
+  color: #9CA3AF;
+  font-weight: 400;
+}
+.gk-input:focus {
+  border-color: var(--gk-primary, #6FBF7A);
+  box-shadow: 0 0 0 3px rgba(111,191,122,0.15);
+}
+
+/* GoKab Status Badges */
+.gk-badge-success {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: #EFF8F0;
+  color: #2F5F43;
+  border: 1px solid #CFE8C9;
+  border-radius: 999px;
+  padding: 0.2rem 0.65rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.gk-badge-warning {
+  background: #FFFBEB;
+  color: #92400E;
+  border: 1px solid #FDE68A;
+  border-radius: 999px;
+  padding: 0.2rem 0.65rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.gk-badge-danger {
+  background: #FFF1F2;
+  color: #9F1239;
+  border: 1px solid #FECDD3;
+  border-radius: 999px;
+  padding: 0.2rem 0.65rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* GoKab Section Label */
+.gk-label {
+  font-family: 'Poppins', sans-serif;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--gk-muted, #6B7280);
+}
+
+/* GoKab Heading */
+.gk-heading {
+  font-family: 'Poppins', sans-serif;
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--gk-dark, #2F5F43);
+}
+
+/* Smooth page-level fade in */
+.gokab-user-root > * {
+  animation: gk-fade-in 0.3s ease both;
+}
+@keyframes gk-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ==========================================================================
+   REDIGO CENTRALIZED ADMIN THEME & TYPOGRAPHY
+   This layer unifies typography, alignment, form fields, cards, and tables
+   specifically inside the Admin Panel, scoped under .redigo-admin-root.
+   ========================================================================== */
+
+/* 1. Global Font and Typography Unification */
+.redigo-admin-root,
+.redigo-admin-root * {
+  font-family: 'Poppins', system-ui, -apple-system, sans-serif !important;
+}
+
+/* Normalise oversized headers and weight discrepancies */
+.redigo-admin-root h1 {
+  font-size: 1.5rem !important; /* Unified to 24px */
+  font-weight: 800 !important; /* Sleek bold */
+  letter-spacing: -0.025em !important;
+}
+
+.redigo-admin-root h2 {
+  font-size: 1.25rem !important; /* Unified to 20px */
+  font-weight: 700 !important;
+  letter-spacing: -0.02em !important;
+}
+
+.redigo-admin-root h3 {
+  font-size: 1rem !important; /* Unified to 16px */
+  font-weight: 600 !important;
+}
+
+/* Adjust overly heavy weights (900/black) to professional bold/semibold */
+.redigo-admin-root .font-black {
+  font-weight: 800 !important;
+}
+.redigo-admin-root .font-extrabold {
+  font-weight: 800 !important;
+}
+
+/* 2. Text Color Normalization */
+.redigo-admin-root .text-slate-900,
+.redigo-admin-root .text-gray-900 {
+  color: #0f172a !important; /* slate-900 */
+}
+
+.redigo-admin-root .text-slate-800,
+.redigo-admin-root .text-gray-800 {
+  color: #1e293b !important; /* slate-800 */
+}
+
+.redigo-admin-root .text-slate-700,
+.redigo-admin-root .text-gray-700 {
+  color: #334155 !important; /* slate-700 */
+}
+
+.redigo-admin-root .text-slate-500,
+.redigo-admin-root .text-gray-500 {
+  color: #64748b !important; /* slate-500 */
+}
+
+.redigo-admin-root .text-slate-400,
+.redigo-admin-root .text-gray-400 {
+  color: #94a3b8 !important; /* slate-400 */
+}
+
+/* 3. Outer Padding and Alignment Standardization */
+/* Prevents double padding between AdminLayout's main container and standalone page wrappers */
+.redigo-admin-root main > div,
+.redigo-admin-root main > section,
+.redigo-admin-root main > form {
+  padding: 0 !important;
+  background-color: transparent !important;
+  min-height: auto !important;
+}
+
+/* 4. Form Field Standardization (Inputs, Selects, Textareas) */
+.redigo-admin-root input[type="text"],
+.redigo-admin-root input[type="number"],
+.redigo-admin-root input[type="email"],
+.redigo-admin-root input[type="tel"],
+.redigo-admin-root input[type="password"],
+.redigo-admin-root select,
+.redigo-admin-root textarea {
+  border-radius: 8px !important; /* unified rounded-lg */
+  border-color: #cbd5e1 !important; /* slate-300 */
+  background-color: #ffffff !important;
+  color: #1e293b !important; /* slate-800 */
+  font-size: 0.875rem !important; /* text-sm */
+  transition: all 0.2s ease-in-out !important;
+}
+
+.redigo-admin-root input[type="text"]:focus,
+.redigo-admin-root input[type="number"]:focus,
+.redigo-admin-root input[type="email"]:focus,
+.redigo-admin-root input[type="tel"]:focus,
+.redigo-admin-root input[type="password"]:focus,
+.redigo-admin-root select:focus,
+.redigo-admin-root textarea:focus {
+  border-color: #4f46e5 !important; /* Indigo-600 */
+  outline: 2px solid transparent !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 1px #4f46e5 !important;
+}
+
+/* 5. Card and Border Uniformity */
+.redigo-admin-root .rounded-xl,
+.redigo-admin-root .rounded-2xl,
+.redigo-admin-root .rounded-\[28px\] {
+  border-radius: 16px !important; /* Standardize premium rounded cards */
+}
+
+.redigo-admin-root .border-slate-200,
+.redigo-admin-root .border-gray-200 {
+  border-color: #e2e8f0 !important; /* Standard slate-200 */
+}
+
+.redigo-admin-root .border-slate-100,
+.redigo-admin-root .border-gray-100 {
+  border-color: #f1f5f9 !important; /* Standard slate-100 */
+}
+
+/* 6. Unified Table Design */
+.redigo-admin-root thead {
+  background-color: #f8fafc !important; /* slate-50 */
+  border-bottom: 1px solid #e2e8f0 !important;
+}
+
+.redigo-admin-root th {
+  color: #64748b !important; /* slate-500 */
+  font-size: 0.75rem !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+}
+
+.redigo-admin-root td {
+  border-color: #f1f5f9 !important;
+}
