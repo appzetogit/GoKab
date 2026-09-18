@@ -174,6 +174,54 @@ const driverSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    // --- Driver network (Prime / Middle / Lower) ---
+    // Denormalised from the active subscription's tier. `account_type` above is
+    // *not* reused for this: that one is recomputed from vehicle count by the
+    // reconciliation cron and would overwrite anything stored there.
+    driver_category: {
+      type: String,
+      enum: ['prime', 'middle', 'lower'],
+      default: 'lower',
+      index: true,
+    },
+    driver_category_source_subscription_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'TaxiDriverSubscription',
+      default: null,
+    },
+    driver_category_updated_at: {
+      type: Date,
+      default: null,
+    },
+    // Set when the commercial+private vehicle rule breaks for a Prime/Middle
+    // driver; the category survives until this passes, then a cron downgrades.
+    category_grace_ends_at: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    vehicle_usage_type: {
+      type: String,
+      enum: ['commercial', 'private', ''],
+      default: '',
+    },
+    // `routeBooking` above is the older single-anchor version of this and is
+    // kept only so existing drivers keep matching. New clients use route_mode.
+    route_mode: {
+      type: String,
+      enum: ['all_locations', 'route'],
+      default: 'all_locations',
+    },
+    active_route_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'TaxiDriverRoute',
+      default: null,
+    },
+    max_routes_override: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
     pooling_enabled: {
       type: Boolean,
       default: false,
@@ -318,6 +366,14 @@ const driverSchema = new mongoose.Schema(
       isBlocked: {
         type: Boolean,
         default: false,
+      },
+      // Money committed to an in-flight escrow on a published ride. It stays
+      // part of `balance` (nothing has moved yet) but is not spendable, so
+      // every "can you afford this" check works off `balance - frozenBalance`.
+      frozenBalance: {
+        type: Number,
+        default: 0,
+        min: 0,
       },
     },
     bankDetails: {
@@ -502,6 +558,7 @@ driverSchema.index({ approve: 1, deletedAt: 1, createdAt: -1 });
 driverSchema.index({ status: 1, deletedAt: 1 });
 driverSchema.index({ phone: 1, deletedAt: 1 });
 driverSchema.index({ owner_id: 1, assignedFleetVehicleId: 1 });
+driverSchema.index({ service_location_id: 1, driver_category: 1, deletedAt: 1 });
 
 driverSchema.index({ location: '2dsphere' });
 driverSchema.index({ 'routeBooking.anchorLocation': '2dsphere' });

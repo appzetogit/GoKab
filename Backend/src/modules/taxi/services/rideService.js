@@ -948,25 +948,50 @@ export const createRideRecord = async ({
   userMaxBidFare,
   bidStepAmount,
   bookingPreferences,
+  origin = 'customer_app',
+  offlineCustomer = null,
+  createdByDriverId = null,
+  organizationOwnerId = null,
+  networkNotes = '',
 }) => {
-  const user = await User.findById(userId);
+  // A Prime/Middle driver can book for a walk-in customer who has no app
+  // account. Such a ride has no `User` behind it, so everything rider-scoped
+  // below (dues, active-ride displacement, subscriptions, promos) is skipped
+  // rather than crashing on a missing user.
+  const isDriverCreated = origin === 'driver_created';
+  const user = userId ? await User.findById(userId) : null;
 
-  if (!user) {
+  if (!user && (!isDriverCreated || userId)) {
     throw new ApiError(404, 'User not found');
   }
 
   // Fees the rider could not pay when they were charged are collected here, at
   // the next booking, rather than being written off. Imported lazily because
   // dispatchService imports this module.
-  const { assertNoOutstandingUserDues } = await import('./dispatchService.js');
-  await assertNoOutstandingUserDues(userId);
+  if (user) {
+    const { assertNoOutstandingUserDues } = await import('./dispatchService.js');
+    await assertNoOutstandingUserDues(userId);
+  }
 
   // Resolved up front because it decides whether this booking may displace the
   // ride the rider already has queued.
   const normalizedScheduledAt = normalizeScheduledAt(scheduledAt);
-  const { retainedRideId } = await clearUserActiveRideIfPresent(user, {
-    incomingRideIsScheduled: isRideScheduledForFuture({ scheduledAt: normalizedScheduledAt }),
-  });
+  const { retainedRideId } = user
+    ? await clearUserActiveRideIfPresent(user, {
+        incomingRideIsScheduled: isRideScheduledForFuture({ scheduledAt: normalizedScheduledAt }),
+      })
+    : { retainedRideId: null };
+
+  const networkFields = {
+    origin,
+    created_by_driver_id: createdByDriverId,
+    organization_owner_id: organizationOwnerId,
+    network_notes: String(networkNotes || '').trim(),
+    offline_customer: {
+      name: String(offlineCustomer?.name || '').trim(),
+      phone: String(offlineCustomer?.phone || '').trim(),
+    },
+  };
 
   const safeFare = Number(fare);
   const safeEstimatedDistanceMeters = Math.max(0, Number(estimatedDistanceMeters || 0));
@@ -1079,7 +1104,7 @@ export const createRideRecord = async ({
   };
 
   const promoCode = typeof promo_code === 'string' ? promo_code.trim() : '';
-  const applicableSubscription = primaryVehicleTypeId
+  const applicableSubscription = primaryVehicleTypeId && userId
     ? await resolveApplicableUserSubscription({
         userId,
         vehicleTypeId: primaryVehicleTypeId,
@@ -1135,7 +1160,8 @@ export const createRideRecord = async ({
 
   if (!promoCode) {
     const ride = await Ride.create({
-      userId,
+      userId: userId || null,
+      ...networkFields,
       vehicleTypeId: primaryVehicleTypeId,
       dispatchVehicleTypeIds,
       vehicleIconType: vehicleIconType || '',
@@ -1182,8 +1208,10 @@ export const createRideRecord = async ({
       },
     });
 
-    user.currentRideId = retainedRideId || ride._id;
-    await user.save();
+    if (user) {
+      user.currentRideId = retainedRideId || ride._id;
+      await user.save();
+    }
     await syncDeliveryWithRide(ride);
 
     return ride;
@@ -1200,7 +1228,8 @@ export const createRideRecord = async ({
       const ride = await Ride.create(
         [
           {
-            userId,
+            userId: userId || null,
+            ...networkFields,
             vehicleTypeId: primaryVehicleTypeId,
             dispatchVehicleTypeIds,
             vehicleIconType: vehicleIconType || '',
@@ -1252,8 +1281,10 @@ export const createRideRecord = async ({
 
       const rideDoc = ride[0];
 
-      user.currentRideId = retainedRideId || rideDoc._id;
-      await user.save({ session });
+      if (user) {
+        user.currentRideId = retainedRideId || rideDoc._id;
+        await user.save({ session });
+      }
 
       await applyPromoToRideInTransaction({
         session,
@@ -1814,7 +1845,7 @@ const rideStatusConfig = {
   },
 };
 
-export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymentMethod, riderRating }) => {
+export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymentMethod, riderRating, collectedBy }) => {
   const config = rideStatusConfig[nextStatus];
 
   if (!config) {
@@ -1829,6 +1860,28 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
   if (!config.allowedCurrent.includes(ride.liveStatus)) {
     throw new ApiError(409, `Ride cannot move from ${ride.liveStatus} to ${nextStatus}`);
+  }
+
+  // Resolved before anything is mutated: refusing later would leave the ride
+  // marked completed with money still frozen on both sides.
+  const requestedPaymentMethod =
+    paymentMethod !== undefined && paymentMethod !== null && String(paymentMethod).trim()
+      ? normalizeRidePaymentMethod(paymentMethod)
+      : ride.paymentMethod;
+  let escrowCollectedBy = null;
+
+  if (nextStatus === RIDE_LIVE_STATUS.COMPLETED && ride.escrow?.state === 'held') {
+    escrowCollectedBy =
+      String(collectedBy || '').trim() || (requestedPaymentMethod === 'online' ? 'platform' : '');
+
+    if (!['publisher', 'driver', 'platform'].includes(escrowCollectedBy)) {
+      throw new ApiError(
+        422,
+        'Tell us who collected the fare before completing this ride',
+        { options: ['publisher', 'driver', 'platform'] },
+        'COLLECTED_BY_REQUIRED',
+      );
+    }
   }
 
   ride.liveStatus = nextStatus;
@@ -1875,11 +1928,25 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
   if (nextStatus === RIDE_LIVE_STATUS.COMPLETED) {
     await Promise.all([
-      User.updateOne({ _id: ride.userId, currentRideId: ride._id }, { currentRideId: null }),
+      ...(ride.userId
+        ? [User.updateOne({ _id: ride.userId, currentRideId: ride._id }, { currentRideId: null })]
+        : []),
       Driver.findByIdAndUpdate(driverId, { isOnRide: false }),
     ]);
 
-    walletUpdate = await settleCompletedRideWallet({ rideId: ride._id });
+    // A published ride is settled between the two drivers, not against platform
+    // commission: whoever physically took the customer's cash pays the other.
+    // Running the normal commission settlement as well would double-charge.
+    if (escrowCollectedBy) {
+      const { settlePublishedRide } = await import('../driver/services/escrowService.js');
+      walletUpdate = await settlePublishedRide({
+        rideId: ride._id,
+        collectedBy: escrowCollectedBy,
+        confirmedBy: 'driver',
+      });
+    } else {
+      walletUpdate = await settleCompletedRideWallet({ rideId: ride._id });
+    }
     await consumeUserSubscriptionRide({ ride });
     const settledRide = await Ride.findById(ride._id).select('completedAt driverEarnings estimatedDistanceMeters');
 
@@ -1893,6 +1960,11 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
     await processCompletedRideReferralReward(ride);
     await processCompletedDriverReferralReward(ride);
   }
+
+  const { broadcastNetworkRideLifecycle } = await import('./liveMapService.js');
+  await broadcastNetworkRideLifecycle(ride).catch((error) =>
+    console.error('[rideService] live map lifecycle broadcast failed:', error.message),
+  );
 
   const populatedRide = await populateRideRealtime(ride._id);
   populatedRide.$locals.walletUpdate = walletUpdate;
@@ -1960,6 +2032,17 @@ export const updateRideDriverLocation = async ({ rideId, driverId, coordinates, 
   };
 
   await ride.save();
+
+  // Fan the position out to the organisation's live map (and to the publisher
+  // of a network ride). Imported lazily because liveMapService reaches back
+  // into dispatchService, which imports this module.
+  const { broadcastNetworkLocation } = await import('./liveMapService.js');
+  await broadcastNetworkLocation({
+    ride,
+    coordinates: normalizedCoords,
+    heading: ride.lastDriverLocation.heading,
+    speed: ride.lastDriverLocation.speed,
+  }).catch((error) => console.error('[rideService] live map broadcast failed:', error.message));
 
   return {
     rideId: String(ride._id),

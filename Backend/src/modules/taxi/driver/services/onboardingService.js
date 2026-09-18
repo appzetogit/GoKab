@@ -704,6 +704,7 @@ export const saveDriverVehicle = async ({
   taxNumber,
   vehicles = [],
   customFields = {},
+  vehicle_usage_type: vehicleUsageType,
 }) => {
   const session = await getSession(registrationId, phone);
 
@@ -815,6 +816,12 @@ export const saveDriverVehicle = async ({
       }
     });
 
+  const rawVehicleUsageType = String(vehicleUsageType || '').trim().toLowerCase();
+  if (rawVehicleUsageType && rawVehicleUsageType !== 'commercial' && rawVehicleUsageType !== 'private') {
+    throw new ApiError(400, "vehicle_usage_type must be either 'commercial' or 'private'", null, 'INVALID_USAGE_TYPE');
+  }
+  const normalizedVehicleUsageType = rawVehicleUsageType;
+
   session.vehicle = {
     registerFor: normalizedRegisterFor,
     serviceCategories: normalizedServiceCategories,
@@ -850,6 +857,9 @@ export const saveDriverVehicle = async ({
     city: String(city || selectedLocation).trim(),
     postalCode: normalizedPostalCode,
     taxNumber: String(taxNumber || '').trim().toUpperCase(),
+    // Commercial vs private. Blank is allowed here so existing app builds
+    // can still finish onboarding; it only blocks Prime/Middle plans later.
+    vehicleUsageType: normalizedVehicleUsageType,
     customFields: normalizedCustomFields,
   };
   session.status = 'vehicle_saved';
@@ -1131,6 +1141,7 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
     vehicleModel: session.vehicle.model,
     vehicleNumber: session.vehicle.number,
     vehicleColor: session.vehicle.color,
+    vehicle_usage_type: session.vehicle.vehicleUsageType || '',
     city: session.vehicle.city || session.vehicle.locationName,
     referredBy: referrer?._id || null,
     approve: false,

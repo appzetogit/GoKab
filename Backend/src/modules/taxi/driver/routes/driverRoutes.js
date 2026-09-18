@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { asyncHandler } from "../../../../utils/asyncHandler.js";
-import { authenticate } from "../../middlewares/authMiddleware.js";
+import { authenticate, optionalAuthenticate } from "../../middlewares/authMiddleware.js";
 import {
   addDriverEmergencyContact,
   completeOnboarding,
@@ -271,7 +271,7 @@ import {
   updateDriverCapabilitiesController,
 } from '../controllers/driverController.js';
 
-driverRouter.get('/subscription/tiers', asyncHandler(getDriverSubscriptionTiersController));
+driverRouter.get('/subscription/tiers', optionalAuthenticate(['driver']), asyncHandler(getDriverSubscriptionTiersController));
 driverRouter.get('/subscription/current', authenticate(['driver']), asyncHandler(getCurrentDriverSubscriptionController));
 driverRouter.post('/subscription/checkout', authenticate(['driver']), asyncHandler(createDriverSubscriptionCheckoutController));
 driverRouter.post('/subscription/verify-payment', authenticate(['driver']), asyncHandler(verifyDriverSubscriptionPaymentController));

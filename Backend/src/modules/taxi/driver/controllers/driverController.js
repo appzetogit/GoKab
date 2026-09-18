@@ -5743,8 +5743,16 @@ export const createDriverWithdrawalRequest = async (req, res) => {
     throw new ApiError(400, `amount must be at least ${minimumTransferAmount}`);
   }
 
-  if (amount > Number(wallet.balance || 0)) {
-    throw new ApiError(400, "Withdrawal amount cannot exceed current balance");
+  // Money frozen against an open escrow is already promised to another driver,
+  // so it must not be withdrawable even though it still sits in `balance`.
+  const withdrawableBalance = Number(wallet.available ?? wallet.balance ?? 0);
+  if (amount > withdrawableBalance) {
+    throw new ApiError(
+      400,
+      Number(wallet.frozenBalance || 0) > 0
+        ? `Withdrawal amount cannot exceed your available balance (₹${withdrawableBalance}); ₹${wallet.frozenBalance} is held for ongoing rides`
+        : "Withdrawal amount cannot exceed current balance",
+    );
   }
 
   const pendingRequest = await WithdrawalRequest.findOne({
@@ -7283,8 +7291,129 @@ export const recalculateOwnerVehicleCount = async (ownerId) => {
   return count;
 };
 
+/**
+ * Enforces the fleet-size cap that the Prime plan sells.
+ *
+ * Only applies when the caller is a *driver* acting as their own organisation —
+ * an owner-portal login has no subscription tier behind it, and gating that path
+ * would lock existing owners out of their own fleet.
+ */
+const assertFleetDriverCapacity = async ({ req, owner }) => {
+  if (req.auth?.role !== "driver") return;
+
+  const { getDriverPermissions } = await import(
+    "../../services/driverCategoryService.js"
+  );
+  const permissions = await getDriverPermissions(req.auth.sub);
+
+  if (!permissions.can_manage_fleet) {
+    throw new ApiError(
+      403,
+      "Your current plan does not allow adding drivers",
+      { category: permissions.category },
+      "CATEGORY_NOT_ALLOWED",
+    );
+  }
+
+  const limit = permissions.max_fleet_drivers;
+  if (!limit) return;
+
+  const used = await Driver.countDocuments({
+    owner_id: owner._id,
+    deletedAt: null,
+    _id: { $ne: req.auth.sub },
+  });
+
+  if (used >= limit) {
+    throw new ApiError(
+      403,
+      `Your plan allows up to ${limit} drivers`,
+      { limit, used },
+      "FLEET_DRIVER_LIMIT_REACHED",
+    );
+  }
+};
+
+/**
+ * Re-evaluates the commercial+private rule for every driver who sits under this
+ * organisation after its vehicle list changes. Adding a vehicle can clear a
+ * running grace period; removing one can start it.
+ */
+const recheckOwnerFleetCategoryRule = async (ownerId) => {
+  if (!ownerId) return;
+
+  const { recheckCategoryVehicleRule } = await import(
+    "../../services/driverCategoryService.js"
+  );
+  const drivers = await Driver.find({ owner_id: ownerId, deletedAt: null })
+    .select("_id")
+    .lean();
+
+  for (const driver of drivers) {
+    try {
+      await recheckCategoryVehicleRule(driver._id);
+    } catch (error) {
+      console.error("[driverController] category vehicle recheck failed:", error.message);
+    }
+  }
+};
+
+// Document slug that proves a vehicle may legally operate commercially. Seeded
+// into `DriverNeededDocument` by `seed_driver_network_tiers.js`.
+const COMMERCIAL_PERMIT_KEY = "commercial_permit";
+
+/**
+ * Commercial vs private decides whether a driver can hold a Prime/Middle
+ * category, so an unrecognised value must not quietly become "private" — a
+ * driver would then pay for a plan the rule silently blocks.
+ */
+const normalizeVehicleUsageType = (value, { required = true } = {}) => {
+  const normalized = String(value || "").trim().toLowerCase();
+
+  if (!normalized) {
+    if (required) {
+      throw new ApiError(
+        400,
+        "Vehicle usage type is required (commercial or private)",
+        null,
+        "USAGE_TYPE_REQUIRED",
+      );
+    }
+    return null;
+  }
+
+  if (normalized !== "commercial" && normalized !== "private") {
+    throw new ApiError(
+      400,
+      "Vehicle usage type must be either 'commercial' or 'private'",
+      null,
+      "INVALID_USAGE_TYPE",
+    );
+  }
+
+  return normalized;
+};
+
 export const addOwnerVehicle = async (req, res) => {
-  const owner = await resolveAuthenticatedOwner(req);
+  let owner = await resolveAuthenticatedOwner(req);
+
+  // A Middle driver has no organisation of their own, yet the commercial +
+  // private rule expects them to register a second vehicle. Create the
+  // organisation on first use rather than making them discover the
+  // enable-self-drive flow first.
+  if (!owner?._id && req.auth?.role === "driver") {
+    const { getDriverPermissions } = await import(
+      "../../services/driverCategoryService.js"
+    );
+    const permissions = await getDriverPermissions(req.auth.sub);
+
+    if (permissions.can_create_rides) {
+      const { ensureOrganizationForPrime } = await import(
+        "../services/networkRideService.js"
+      );
+      owner = await ensureOrganizationForPrime(req.auth.sub);
+    }
+  }
 
   if (!owner?._id) {
     throw new ApiError(
@@ -7293,11 +7422,14 @@ export const addOwnerVehicle = async (req, res) => {
     );
   }
 
-  const { vehicleTypeId, make, model, number, color, rcFile, documents } = req.body;
+  const { vehicleTypeId, make, model, number, color, rcFile, documents, usage_type: usageType } =
+    req.body;
 
   if (!make?.trim()) {
     throw new ApiError(400, "Car brand/make is required");
   }
+
+  const normalizedUsageType = normalizeVehicleUsageType(usageType);
 
   if (!model?.trim()) {
     throw new ApiError(400, "Car model is required");
@@ -7332,6 +7464,18 @@ export const addOwnerVehicle = async (req, res) => {
     throw new ApiError(
       400,
       `Missing required fleet documents: ${missingFleetDocuments.join(", ")}`,
+    );
+  }
+
+  // A commercial vehicle is what unlocks the Prime/Middle categories, so the
+  // permit that proves it is commercial has to be supplied up front — admin
+  // still verifies it before `usage_type_verified` is set.
+  if (normalizedUsageType === "commercial" && !normalizedDocuments[COMMERCIAL_PERMIT_KEY]) {
+    throw new ApiError(
+      400,
+      "A commercial permit document is required for a commercial vehicle",
+      { required_document: COMMERCIAL_PERMIT_KEY },
+      "COMMERCIAL_PERMIT_REQUIRED",
     );
   }
 
@@ -7370,11 +7514,13 @@ export const addOwnerVehicle = async (req, res) => {
     car_model: String(model).trim(),
     license_plate_number: normalizedPlate,
     car_color: String(color).trim(),
+    usage_type: normalizedUsageType,
     status: "pending",
     active: true,
     documents: normalizedDocuments,
   });
   await recalculateOwnerVehicleCount(owner._id);
+  await recheckOwnerFleetCategoryRule(owner._id);
 
   const populated = await FleetVehicle.findById(vehicle._id)
     .populate("owner_id", "company_name owner_name name email mobile")
@@ -7462,6 +7608,8 @@ export const getOwnerFleetVehicles = async (req, res) => {
         car_model: vehicle.car_model || "",
         license_plate_number: vehicle.license_plate_number || "",
         car_color: vehicle.car_color || "",
+        usage_type: vehicle.usage_type || "private",
+        usage_type_verified: Boolean(vehicle.usage_type_verified),
         status: vehicle.status || "pending",
         reason: vehicle.reason || "",
         documents: vehicle.documents || {},
@@ -7597,6 +7745,15 @@ export const updateOwnerFleetVehicle = async (req, res) => {
   vehicle.car_model = model;
   vehicle.license_plate_number = number;
   vehicle.car_color = color;
+  // Optional on update so existing clients that don't send it keep working;
+  // changing it re-opens verification because the permit has to be re-checked.
+  const nextUsageType = normalizeVehicleUsageType(req.body?.usage_type, {
+    required: false,
+  });
+  if (nextUsageType && nextUsageType !== vehicle.usage_type) {
+    vehicle.usage_type = nextUsageType;
+    vehicle.usage_type_verified = false;
+  }
   if (Object.keys(nextDocuments).length > 0) {
     vehicle.documents = {
       ...(vehicle.documents || {}),
@@ -7610,6 +7767,7 @@ export const updateOwnerFleetVehicle = async (req, res) => {
   }
 
   await vehicle.save();
+  await recheckOwnerFleetCategoryRule(owner._id);
 
   const populated = await FleetVehicle.findById(vehicle._id)
     .populate("vehicle_type_id", "name type_name transport_type icon_types")
@@ -7633,6 +7791,8 @@ export const updateOwnerFleetVehicle = async (req, res) => {
       car_model: populated.car_model || "",
       license_plate_number: populated.license_plate_number || "",
       car_color: populated.car_color || "",
+      usage_type: populated.usage_type || "private",
+      usage_type_verified: Boolean(populated.usage_type_verified),
       status: populated.status || "pending",
       reason: populated.reason || "",
       documents: populated.documents || {},
@@ -7670,6 +7830,9 @@ export const deleteOwnerFleetVehicle = async (req, res) => {
 
   await FleetVehicle.deleteOne({ _id: vehicle._id });
   await recalculateOwnerVehicleCount(owner._id);
+  // Losing the only commercial (or only private) vehicle breaks the Prime/Middle
+  // rule; that starts a grace window rather than downgrading on the spot.
+  await recheckOwnerFleetCategoryRule(owner._id);
 
   res.json({
     success: true,
@@ -7778,6 +7941,8 @@ export const createOwnerFleetDriver = async (req, res) => {
   if (existing) {
     throw new ApiError(409, "Phone number is already registered");
   }
+
+  await assertFleetDriverCapacity({ req, owner });
 
   const serviceLocation = owner.service_location_id
     ? await ServiceLocation.findById(owner.service_location_id).lean()
@@ -9438,26 +9603,30 @@ export const uploadPoolingOnboardingImageRequest = async (req, res) => {
 
 import { subscriptionTierService } from '../../services/subscriptionTierService.js';
 
-export const getDriverSubscriptionTiersController = asyncHandler(async (_req, res) => {
-  const tiers = await subscriptionTierService.getAllTiers(false);
+export const getDriverSubscriptionTiersController = asyncHandler(async (req, res) => {
+  // The route is public (the app shows plans before login too), so eligibility
+  // is only annotated when a driver token happens to be present.
+  const tiers = req.auth?.sub
+    ? await subscriptionTierService.listTiersForDriver(req.auth.sub)
+    : await subscriptionTierService.getAllTiers(false);
   res.json({ success: true, data: { results: tiers } });
 });
 
 export const getCurrentDriverSubscriptionController = asyncHandler(async (req, res) => {
-  const driverId = req.user?._id || req.params.driverId;
+  const driverId = req.auth?.sub || req.params.driverId;
   const effectiveTier = await subscriptionTierService.getEffectiveDriverTier(driverId);
   res.json({ success: true, data: effectiveTier });
 });
 
 export const createDriverSubscriptionCheckoutController = asyncHandler(async (req, res) => {
-  const driverId = req.user?._id;
+  const driverId = req.auth?.sub;
   const { tierId, billingCycle } = req.body;
   const checkoutData = await subscriptionTierService.createSubscriptionCheckout({ driverId, tierId, billingCycle });
   res.json({ success: true, data: checkoutData });
 });
 
 export const verifyDriverSubscriptionPaymentController = asyncHandler(async (req, res) => {
-  const driverId = req.user?._id;
+  const driverId = req.auth?.sub;
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
   const result = await subscriptionTierService.verifySubscriptionPayment({
     driverId,
@@ -9469,7 +9638,7 @@ export const verifyDriverSubscriptionPaymentController = asyncHandler(async (req
 });
 
 export const toggleDriverRenewalRemindersController = asyncHandler(async (req, res) => {
-  const driverId = req.user?._id;
+  const driverId = req.auth?.sub;
   const result = await subscriptionTierService.toggleRenewalReminders(driverId);
   res.json({ success: true, data: result });
 });
@@ -9483,7 +9652,7 @@ export const razorpayWebhookController = asyncHandler(async (req, res) => {
 import { getAccountTypeSettings, setAccountTypeAndRecalculateGracePeriod } from '../../services/accountTypeReconciliationService.js';
 
 export const updateDriverCapabilitiesController = asyncHandler(async (req, res) => {
-  const driverId = req.user?._id;
+  const driverId = req.auth?.sub;
   const driver = await Driver.findById(driverId);
   if (!driver) throw new ApiError(404, 'Driver not found');
 

@@ -450,6 +450,12 @@ const toEntityId = (value) => String(value?._id ?? value ?? '');
 export const getUserRoom = (userId) => `user:${toEntityId(userId)}`;
 export const getDriverRoom = (driverId) => `driver:${toEntityId(driverId)}`;
 export const getAdminRoom = () => 'admin:broadcast';
+// Driver-network rooms. `org:` is everyone watching one organisation's fleet,
+// `publisher:` is one driver watching the rides they published out to the
+// network, and `feed:city:` carries new leads to every driver in a city.
+export const getOrgRoom = (ownerId) => `org:${toEntityId(ownerId)}`;
+export const getPublisherRoom = (driverId) => `publisher:${toEntityId(driverId)}`;
+export const getFeedRoom = (serviceLocationId) => `feed:city:${toEntityId(serviceLocationId)}`;
 
 export const setSocketServer = (io) => {
   ioInstance = io;
@@ -472,7 +478,31 @@ export const addSocketSubscriptions = (socket, { role, entityId }) => {
 
   if (role === 'driver') {
     socket.join(getDriverRoom(entityId));
+    // Joined asynchronously: the driver is already connected, and failing to
+    // resolve their org must not tear down the socket.
+    joinDriverNetworkRooms(socket, entityId).catch((error) => {
+      console.error('[dispatchService] network room join failed:', error.message);
+    });
   }
+
+  if (role === 'owner') {
+    socket.join(getOrgRoom(entityId));
+  }
+};
+
+/**
+ * Puts a driver socket into the rooms their network role needs: always their
+ * own publisher room, plus the organisation room when they own a fleet, and
+ * their city's lead feed.
+ */
+const joinDriverNetworkRooms = async (socket, driverId) => {
+  socket.join(getPublisherRoom(driverId));
+
+  const driver = await Driver.findById(driverId).select('owner_id service_location_id').lean();
+  if (!driver) return;
+
+  if (driver.owner_id) socket.join(getOrgRoom(driver.owner_id));
+  if (driver.service_location_id) socket.join(getFeedRoom(driver.service_location_id));
 };
 
 const getDispatchVehicleTypeIds = (ride) => {
@@ -501,7 +531,7 @@ const emitToSocket = (socketId, event, payload) => {
   }
 };
 
-const emitToRoom = (room, event, payload) => {
+export const emitToRoom = (room, event, payload) => {
   if (ioInstance) {
     ioInstance.to(room).emit(event, payload);
   }
@@ -721,6 +751,7 @@ const closeRideAsUnmatched = async (rideId) => {
 
   // No driver was ever found, so the rider must not lose their promo use.
   await releasePromoForCancelledRide({ ride });
+  emitCustomerFeedEvent(ride, 'feed:customer:removed', { reason: 'UNMATCHED' });
 
   if (ride.deliveryId) {
     await Delivery.findByIdAndUpdate(ride.deliveryId, {
@@ -754,6 +785,25 @@ const closeRideAsUnmatched = async (rideId) => {
     status: ride.status,
     liveStatus: ride.liveStatus,
   });
+};
+
+/**
+ * Returns both escrow holds after a published ride is cancelled.
+ *
+ * Deliberately run *after* the cancellation commits rather than inside it:
+ * `releasePublishedRide` opens its own transaction and Mongo will not nest one.
+ * A failure here leaves money frozen against a dead ride, which is what the
+ * `escrowOrphanCheck` sweep exists to catch.
+ */
+const releaseEscrowAfterCancel = async (ride, { penaltyFrom = null, reason = 'ride_cancelled' } = {}) => {
+  if (ride?.escrow?.state !== 'held') return;
+
+  try {
+    const { releasePublishedRide } = await import('../driver/services/escrowService.js');
+    await releasePublishedRide({ rideId: ride._id, reason, penaltyFrom });
+  } catch (error) {
+    console.error('[dispatchService] escrow release after cancel failed:', error.message);
+  }
 };
 
 export const cancelRideByAdmin = async (rideId) => {
@@ -800,6 +850,9 @@ export const cancelRideByAdmin = async (rideId) => {
     User.updateOne({ _id: ride.userId, currentRideId: ride._id }, { currentRideId: null }),
     ride.driverId ? Driver.findByIdAndUpdate(ride.driverId, { isOnRide: false }) : Promise.resolve(),
   ]);
+
+  await releaseEscrowAfterCancel(ride, { reason: 'cancelled_by_admin' });
+  emitCustomerFeedEvent(ride, 'feed:customer:removed', { reason: 'CANCELLED' });
 
   emitToRoom(getUserRoom(ride.userId), 'rideCancelled', {
     rideId: String(ride._id),
@@ -887,6 +940,9 @@ export const cancelRideByUser = async ({ rideId, userId }) => {
   } finally {
     session.endSession();
   }
+
+  await releaseEscrowAfterCancel(ride, { reason: 'cancelled_by_user' });
+  emitCustomerFeedEvent(ride, 'feed:customer:removed', { reason: 'CANCELLED' });
 
   emitToRoom(getUserRoom(ride.userId), 'rideCancelled', {
     rideId: String(ride._id),
@@ -1009,6 +1065,13 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
     session.endSession();
   }
 
+  // The driver walked away from a ride they had accepted, so any configured
+  // penalty is charged to them and paid to the publisher.
+  await releaseEscrowAfterCancel(ride, {
+    reason: 'cancelled_by_driver',
+    penaltyFrom: 'acceptor',
+  });
+
   const cancelReason = 'Your scheduled ride was cancelled by the driver.';
 
   emitToRoom(getUserRoom(ride.userId), 'rideCancelled', {
@@ -1116,6 +1179,10 @@ const dispatchAttempt = async (rideId, attemptIndex = 0) => {
       vehicleTypeId: ride.vehicleTypeId,
       vehicleTypeIds: dispatchVehicleTypeIds,
       rideModuleCode: getRideModuleCode(ride),
+      paymentMethod: ride.paymentMethod,
+      // Route-mode drivers only take trips that run along their corridor, so
+      // matching needs the destination, not just the pickup.
+      dropCoords: ride.dropLocation?.coordinates || null,
     });
     const effectiveRadius = Number.isFinite(searchRadiusMeters) && searchRadiusMeters > 0
       ? searchRadiusMeters
@@ -1189,8 +1256,30 @@ const dispatchAttempt = async (rideId, attemptIndex = 0) => {
   }
 };
 
+/**
+ * Mirrors a customer booking onto the network feed's Customer tab.
+ *
+ * The feed query is time-boxed anyway, but pushing the event means a driver
+ * watching the tab sees the lead immediately instead of on their next refresh.
+ */
+export const emitCustomerFeedEvent = (ride, event, extra = {}) => {
+  if (!ride?.service_location_id) return;
+  if (String(ride.origin || 'customer_app') !== 'customer_app') return;
+
+  emitToRoom(getFeedRoom(ride.service_location_id), event, {
+    rideId: String(ride._id),
+    pickup: ride.pickupAddress || '',
+    drop: ride.dropAddress || '',
+    fare: ride.fare,
+    scheduledAt: ride.scheduledAt || null,
+    ...extra,
+  });
+};
+
 export const startDispatchFlow = async (ride) => {
   stopDispatchFlow(ride._id);
+
+  emitCustomerFeedEvent(ride, 'feed:customer:new');
 
   const scheduledAt = ride?.scheduledAt ? new Date(ride.scheduledAt) : null;
   const delayMs = scheduledAt ? scheduledAt.getTime() - Date.now() : 0;
@@ -1268,6 +1357,10 @@ export const notifyLateAvailableDriver = async (driverId) => {
       vehicleTypeId: ride.vehicleTypeId,
       vehicleTypeIds: dispatchVehicleTypeIds,
       rideModuleCode: getRideModuleCode(ride),
+      paymentMethod: ride.paymentMethod,
+      // Route-mode drivers only take trips that run along their corridor, so
+      // matching needs the destination, not just the pickup.
+      dropCoords: ride.dropLocation?.coordinates || null,
     });
 
     const matchedDriver = drivers.find((item) => String(item._id) === driverKey);
@@ -1306,6 +1399,9 @@ export const notifyLateAvailableDriver = async (driverId) => {
 export const notifyRideAccepted = async (ride) => {
   const state = getDispatchState(ride._id);
   stopDispatchFlow(ride._id);
+
+  // The lead is gone from the Customer tab the moment somebody takes it.
+  emitCustomerFeedEvent(ride, 'feed:customer:removed', { reason: 'TAKEN' });
 
   // Once one driver wins the race, the rider is updated and the rest are told to stop.
   const populatedRide = await Ride.findById(ride._id).populate(

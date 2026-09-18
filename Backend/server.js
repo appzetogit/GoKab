@@ -5,6 +5,7 @@ import { env } from './src/config/env.js';
 import { configureTaxiSocketServer } from './src/modules/taxi/socket/index.js';
 import { restoreScheduledDispatches } from './src/modules/taxi/services/dispatchService.js';
 import { startSubscriptionCronJob } from './src/modules/taxi/services/subscriptionCronService.js';
+import { startNetworkCronJob } from './src/modules/taxi/services/networkCronService.js';
 
 // Live dispatch state (`activeDispatches`, `scheduledDispatchTimers`) and the
 // Socket.IO server instance both live in this process's memory, and Socket.IO is
@@ -61,6 +62,9 @@ const bootstrap = async () => {
 
   if (roles.scheduler) {
     await restoreScheduledDispatches();
+    // Published leads expire on the minute, so this shares the scheduler's
+    // single-owner guarantee rather than running once per cluster worker.
+    startNetworkCronJob(1);
   }
 
   if (roles.subscriptionCron) {

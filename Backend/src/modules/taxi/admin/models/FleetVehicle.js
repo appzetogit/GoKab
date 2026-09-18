@@ -48,6 +48,20 @@ const fleetVehicleSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    // Commercial (yellow plate / permit) vs private. Prime and Middle drivers
+    // must hold at least one of each, so this drives category eligibility.
+    usage_type: {
+      type: String,
+      enum: ['commercial', 'private'],
+      default: 'private',
+      required: true,
+      index: true,
+    },
+    // Set by admin once the commercial permit document has actually been seen.
+    usage_type_verified: {
+      type: Boolean,
+      default: false,
+    },
     documents: {
       type: mongoose.Schema.Types.Mixed,
       default: {},

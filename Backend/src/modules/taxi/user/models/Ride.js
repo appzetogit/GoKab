@@ -29,9 +29,14 @@ const rideMessageSchema = new mongoose.Schema(
 const rideSchema = new mongoose.Schema(
   {
     userId: {
+      // A ride a driver books for a walk-in customer has no app account behind
+      // it, so the rider is carried in `offline_customer` instead.
       type: mongoose.Schema.Types.ObjectId,
       ref: 'TaxiUser',
-      required: true,
+      required() {
+        return this.origin !== 'driver_created';
+      },
+      default: null,
     },
     driverId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -660,11 +665,205 @@ const rideSchema = new mongoose.Schema(
         default: [],
       },
     },
+
+    // ---------------------------------------------------------------------
+    // Driver network
+    // ---------------------------------------------------------------------
+    // Driver-created rides stay in this same collection so that OTP, lifecycle,
+    // sockets, history, ratings and admin reporting keep working unchanged;
+    // `origin` is what separates them from app bookings.
+    origin: {
+      type: String,
+      enum: ['customer_app', 'driver_created'],
+      default: 'customer_app',
+      index: true,
+    },
+    offline_customer: {
+      name: {
+        type: String,
+        default: '',
+        trim: true,
+      },
+      phone: {
+        type: String,
+        default: '',
+        trim: true,
+      },
+    },
+    created_by_driver_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'TaxiDriver',
+      default: null,
+      index: true,
+    },
+    organization_owner_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'TaxiOwner',
+      default: null,
+      index: true,
+    },
+    network_notes: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    assignment: {
+      mode: {
+        type: String,
+        enum: ['dispatch', 'direct_assign', 'published', 'feed_accept'],
+        default: 'dispatch',
+      },
+      assigned_by_driver_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'TaxiDriver',
+        default: null,
+      },
+      assigned_at: {
+        type: Date,
+        default: null,
+      },
+      history: {
+        type: [
+          {
+            driver_id: { type: mongoose.Schema.Types.ObjectId, ref: 'TaxiDriver' },
+            action: { type: String, enum: ['assigned', 'unassigned', 'reassigned'] },
+            by_driver_id: { type: mongoose.Schema.Types.ObjectId, ref: 'TaxiDriver' },
+            at: { type: Date, default: Date.now },
+            reason: { type: String, default: '', trim: true },
+          },
+        ],
+        default: [],
+      },
+    },
+    publish: {
+      is_published: {
+        type: Boolean,
+        default: false,
+        index: true,
+      },
+      published_at: {
+        type: Date,
+        default: null,
+      },
+      expires_at: {
+        type: Date,
+        default: null,
+        index: true,
+      },
+      total_fare: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      owner_commission: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      driver_payout: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      status: {
+        type: String,
+        enum: ['none', 'open', 'taken', 'closed', 'cancelled', 'expired'],
+        default: 'none',
+        index: true,
+      },
+      taken_by_driver_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'TaxiDriver',
+        default: null,
+      },
+      taken_at: {
+        type: Date,
+        default: null,
+      },
+    },
+    escrow: {
+      state: {
+        type: String,
+        enum: ['none', 'held', 'settled', 'released', 'disputed'],
+        default: 'none',
+      },
+      publisher_driver_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'TaxiDriver',
+        default: null,
+      },
+      acceptor_driver_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'TaxiDriver',
+        default: null,
+      },
+      // Publisher freezes the driver's payout; acceptor freezes the publisher's
+      // commission. Whoever ends up holding the cash pays the other one out.
+      publisher_hold: {
+        type: Number,
+        default: 0,
+      },
+      acceptor_hold: {
+        type: Number,
+        default: 0,
+      },
+      collected_by: {
+        type: String,
+        enum: ['publisher', 'driver', 'platform', null],
+        default: null,
+      },
+      collected_confirmed_by: {
+        type: String,
+        enum: ['driver', 'publisher', 'admin', 'system', null],
+        default: null,
+      },
+      dispute_until: {
+        type: Date,
+        default: null,
+      },
+      settled_at: {
+        type: Date,
+        default: null,
+      },
+      released_at: {
+        type: Date,
+        default: null,
+      },
+      hold_txn_ids: {
+        type: [mongoose.Schema.Types.ObjectId],
+        default: [],
+      },
+      settle_txn_ids: {
+        type: [mongoose.Schema.Types.ObjectId],
+        default: [],
+      },
+    },
+    // Charged when a driver whose tier has a fee takes a customer lead straight
+    // from the feed.
+    feed_fee: {
+      amount: {
+        type: Number,
+        default: 0,
+      },
+      charged_driver_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'TaxiDriver',
+        default: null,
+      },
+      txn_id: {
+        type: mongoose.Schema.Types.ObjectId,
+        default: null,
+      },
+    },
   },
   { timestamps: true },
 );
 
 rideSchema.index({ userId: 1, createdAt: -1 });
 rideSchema.index({ driverId: 1, createdAt: -1 });
+rideSchema.index({ origin: 1, 'publish.status': 1, service_location_id: 1, createdAt: -1 });
+rideSchema.index({ status: 1, driverId: 1, service_location_id: 1, createdAt: -1 });
+rideSchema.index({ organization_owner_id: 1, status: 1 });
+rideSchema.index({ created_by_driver_id: 1, status: 1, createdAt: -1 });
 
 export const Ride = mongoose.models.TaxiRide || mongoose.model('TaxiRide', rideSchema);
