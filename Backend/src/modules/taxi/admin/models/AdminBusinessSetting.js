@@ -13,6 +13,10 @@ const adminBusinessSettingSchema = new mongoose.Schema(
     transport_ride: { type: mongoose.Schema.Types.Mixed, default: {} },
     bid_ride: { type: mongoose.Schema.Types.Mixed, default: {} },
     subscription: { type: mongoose.Schema.Types.Mixed, default: { mode: 'commissionOnly' } },
+    // Driver network (Prime / Middle / Lower) knobs. Stored as one Mixed blob
+    // like the other setting groups here; read it through
+    // `getDriverNetworkSettings()` so missing keys fall back to the defaults.
+    driver_network: { type: mongoose.Schema.Types.Mixed, default: {} },
     referral: {
       type: mongoose.Schema.Types.Mixed,
       default: {

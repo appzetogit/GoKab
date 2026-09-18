@@ -406,6 +406,9 @@ export const updateRideStatus = async (req, res) => {
     nextStatus,
     paymentMethod: req.body.paymentMethod,
     riderRating: req.body.riderRating,
+    // Who physically took the fare, for published rides settled between two
+    // drivers rather than against platform commission.
+    collectedBy: req.body.collectedBy ?? req.body.collected_by,
   });
 
   res.json({

@@ -11,4 +11,11 @@ export const SOCKET_EVENTS = Object.freeze({
   RIDE_DRIVER_ROUTE_UPDATED: 'ride:driver-route:updated',
   RIDE_MESSAGE_SEND: 'ride:message:send',
   RIDE_MESSAGE_NEW: 'ride:message:new',
+  // Driver-network lead chat (pre-acceptance).
+  LEAD_JOIN: 'lead:join',
+  LEAD_JOINED: 'lead:joined',
+  LEAD_MESSAGE_SEND: 'lead:message:send',
+  LEAD_MESSAGE_NEW: 'lead:message:new',
+  LEAD_READ: 'lead:read',
+  LEAD_CLOSED: 'lead:closed',
 });

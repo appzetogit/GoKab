@@ -5,6 +5,7 @@ import { Vehicle } from '../admin/models/Vehicle.js';
 import { Driver } from '../driver/models/Driver.js';
 import { Zone } from '../driver/models/Zone.js';
 import { getDriverIdsBlockedByUpcomingScheduledRides } from './rideService.js';
+import { driverAcceptsTrip, findDriversWhoseActiveRouteMatches } from './routeMatchService.js';
 import { subscriptionTierService } from './subscriptionTierService.js';
 
 const EARTH_RADIUS_METERS = 6371000;
@@ -220,8 +221,11 @@ const findDriversForZone = async ({
     vehicleTypeIds: normalizedVehicleTypeIds,
     vehicleTypeKeys,
   });
+  // `wallet` has to be selected for the cash-debt check downstream to see a real
+  // balance — without it every driver reads as balance 0 and the tier's debt
+  // limit silently never applies.
   const selectedFields =
-    'name phone socketId vehicleTypeId vehicleType vehicleIconType vehicleNumber vehicleColor vehicleMake vehicleModel rating location zoneId service_location_id isOnline isOnRide routeBooking owner_id assignedFleetVehicleId';
+    'name phone socketId vehicleTypeId vehicleType vehicleIconType vehicleNumber vehicleColor vehicleMake vehicleModel rating location zoneId service_location_id isOnline isOnRide routeBooking owner_id assignedFleetVehicleId wallet route_mode active_route_id driver_category';
 
   const [liveLocationDrivers, routeBookingDrivers] = await Promise.all([
     Driver.find({
@@ -260,6 +264,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
     serviceLocationId = null,
     rideModuleCode = null, // e.g. 'outstation', 'airport', 'parcel', 'carpool'
     paymentMethod = 'cash',
+    dropCoords = null,
   } = options;
   const normalizedVehicleTypeIds = normalizeVehicleTypeIds(vehicleTypeIds, vehicleTypeId);
   const allowedVehicles = normalizedVehicleTypeIds.length
@@ -305,9 +310,47 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
     rawDrivers = rawDrivers.filter((driver) => !fallbackBlockedDriverIds.has(String(driver?._id || '')));
   }
 
+  // A driver working a fixed corridor can be far outside the pickup radius and
+  // still be the right match (parked in Indore, pickup in Ujjain on their
+  // route). Radius search can never surface them, so pull them in separately
+  // and de-duplicate.
+  if (dropCoords) {
+    const routeMatched = await findDriversWhoseActiveRouteMatches({
+      pickup: coordinates,
+      drop: dropCoords,
+      serviceLocationId,
+      limit: limit * 2,
+    });
+
+    if (routeMatched.length) {
+      const seen = new Set(rawDrivers.map((driver) => String(driver._id)));
+      const eligibleRouteMatched = routeMatched.filter(
+        (driver) =>
+          !seen.has(String(driver._id)) &&
+          driver.isOnline === true &&
+          driver.isOnRide !== true &&
+          !blockedDriverIds.has(String(driver._id)),
+      );
+      rawDrivers = [...rawDrivers, ...eligibleRouteMatched];
+    }
+  }
+
   // Filter candidates by Subscription Tier rules (Module permissions, Cash Debt limits, and Priority score sort)
+  const routeCache = new Map();
   const qualifiedDrivers = [];
   for (const driver of rawDrivers) {
+    // Honour the corridor the driver selected: in `route` mode they only want
+    // trips that run along it, in the right direction.
+    if (dropCoords && driver.route_mode === 'route') {
+      const routeResult = await driverAcceptsTrip({
+        driver,
+        pickup: coordinates,
+        drop: dropCoords,
+        routeCache,
+      });
+      if (!routeResult.match) continue;
+    }
+
     try {
       const tier = await subscriptionTierService.getEffectiveDriverTier(driver._id);
       if (!tier) continue; // Blocked if no subscription and no fallback default tier

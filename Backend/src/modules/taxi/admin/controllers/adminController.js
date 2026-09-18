@@ -576,13 +576,13 @@ export const getSubscriptionPlans = asyncHandler(async (_req, res) =>
   ok(res, { results: await subscriptionTierService.getAllTiers(true) }),
 );
 export const createSubscriptionPlan = asyncHandler(async (req, res) =>
-  ok(res, await subscriptionTierService.createTier(req.body, { admin_id: req.user?._id, admin_email: req.user?.email, ip_address: req.ip })),
+  ok(res, await subscriptionTierService.createTier(req.body, { admin_id: req.auth?.admin?.id || null, admin_email: req.auth?.admin?.email || 'admin', ip_address: req.ip })),
 );
 export const updateSubscriptionPlan = asyncHandler(async (req, res) =>
-  ok(res, await subscriptionTierService.updateTier(req.params.id, req.body, { admin_id: req.user?._id, admin_email: req.user?.email, ip_address: req.ip })),
+  ok(res, await subscriptionTierService.updateTier(req.params.id, req.body, { admin_id: req.auth?.admin?.id || null, admin_email: req.auth?.admin?.email || 'admin', ip_address: req.ip })),
 );
 export const deleteSubscriptionPlan = asyncHandler(async (req, res) =>
-  ok(res, await subscriptionTierService.deleteTier(req.params.id, { admin_id: req.user?._id, admin_email: req.user?.email, ip_address: req.ip })),
+  ok(res, await subscriptionTierService.deleteTier(req.params.id, { admin_id: req.auth?.admin?.id || null, admin_email: req.auth?.admin?.email || 'admin', ip_address: req.ip })),
 );
 
 export const getRideModulesController = asyncHandler(async (_req, res) =>
@@ -638,7 +638,7 @@ export const overrideDriverAccountTypeController = asyncHandler(async (req, res)
     driver,
     newAccountType,
     reason,
-    performedBy: req.user?.email || 'admin',
+    performedBy: req.auth?.admin?.email || 'admin',
     details: `Admin manually reclassified account to ${newAccountType}`,
   });
 

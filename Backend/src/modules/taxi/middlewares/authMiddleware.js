@@ -157,5 +157,34 @@ export const authenticate = (allowedRoles = [], options = {}) => async (req, _re
   }
 };
 
+/**
+ * Attaches `req.auth` when a valid token is present and otherwise continues
+ * anonymously. For endpoints that are public but return richer, caller-specific
+ * data when the caller happens to be signed in.
+ */
+export const optionalAuthenticate = (allowedRoles = []) => async (req, _res, next) => {
+  const authorization = req.headers.authorization || '';
+  const [, token] = authorization.split(' ');
+
+  if (!token) {
+    next();
+    return;
+  }
+
+  try {
+    const payload = verifyAccessToken(token);
+    const normalizedRole = normalizeRole(payload.role);
+    const normalizedAllowedRoles = allowedRoles.map(normalizeRole);
+
+    if (normalizedAllowedRoles.length === 0 || normalizedAllowedRoles.includes(normalizedRole)) {
+      attachResolvedAuth(req, payload);
+    }
+  } catch {
+    // An expired or malformed token simply means "anonymous" here.
+  }
+
+  next();
+};
+
 export const authenticateOrResolveUser = (allowedRoles = ['user'], options = {}) =>
   authenticate(allowedRoles, options);

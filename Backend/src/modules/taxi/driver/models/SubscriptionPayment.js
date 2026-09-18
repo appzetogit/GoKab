@@ -14,7 +14,8 @@ const subscriptionPaymentSchema = new mongoose.Schema(
     razorpay_signature: { type: String, default: '' },
     status: {
       type: String,
-      enum: ['created', 'paid', 'failed', 'refunded'],
+      // `refund_due`: captured, but the plan could not be granted.
+      enum: ['created', 'paid', 'failed', 'refunded', 'refund_due'],
       default: 'created',
       index: true,
     },

@@ -28,6 +28,8 @@ export const ADMIN_PERMISSIONS = [
   'deliveries.view',
   'ongoing.view',
   'settings.view',
+  // Prime/Middle/Lower driver network: slots, categories, escrow, lead fees.
+  'driver_network.view',
 ];
 
 export const normalizeAdminType = (value = '') =>

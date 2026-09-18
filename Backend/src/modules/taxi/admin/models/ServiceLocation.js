@@ -96,6 +96,13 @@ const serviceLocationSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // Per-city override for how many Prime drivers may hold a slot at once.
+    // `null` falls back to the global `driver_network_settings.prime_per_city`.
+    prime_limit: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
   },
   { 
     timestamps: true,

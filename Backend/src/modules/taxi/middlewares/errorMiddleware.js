@@ -48,6 +48,7 @@ export const errorHandler = (error, _req, res, _next) => {
   return res.status(statusCode).json({
     success: false,
     message: error.message || 'Internal server error',
+    code: error instanceof ApiError ? error.code || undefined : undefined,
     details: error instanceof ApiError ? error.details : undefined,
   });
 };

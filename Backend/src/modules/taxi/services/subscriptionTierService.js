@@ -15,6 +15,33 @@ const getRazorpayInstance = () => {
   return new Razorpay({ key_id, key_secret });
 };
 
+/**
+ * A captured payment that could not be turned into a plan needs a human. The
+ * admin socket reaches whoever is online; the console line is what survives if
+ * nobody is.
+ */
+const notifyAdminsOfRefundDue = async ({ driverId, payment, subscription, reason }) => {
+  console.error(
+    `[subscriptionTierService] REFUND DUE: driver ${driverId} paid ₹${payment.amount} ` +
+      `(order ${payment.razorpay_order_id}) but activation failed with ${reason}. ` +
+      `Subscription ${subscription._id} marked pending_refund.`,
+  );
+
+  try {
+    const { emitToRoom, getAdminRoom } = await import('./dispatchService.js');
+    emitToRoom(getAdminRoom(), 'subscription:refund-due', {
+      driverId: String(driverId),
+      subscriptionId: String(subscription._id),
+      paymentId: String(payment._id),
+      amount: payment.amount,
+      order_id: payment.razorpay_order_id,
+      reason,
+    });
+  } catch (error) {
+    console.error('[subscriptionTierService] refund alert failed:', error.message);
+  }
+};
+
 export const subscriptionTierService = {
   // --- Admin CRUD for Tiers ---
   async getAllTiers(adminView = false) {
@@ -24,6 +51,35 @@ export const subscriptionTierService = {
       .populate('support_channel_type_id')
       .populate('ride_module_ids')
       .lean();
+  },
+
+  /**
+   * The tier catalogue annotated for one driver: whether they can actually buy
+   * each plan today and, for Prime, how many seats their city has left. Without
+   * this the app can only show a price list and discover the refusal at
+   * checkout.
+   */
+  async listTiersForDriver(driverId) {
+    const tiers = await this.getAllTiers(false);
+    if (!driverId) return tiers;
+
+    const { checkTierEligibility } = await import('./driverCategoryService.js');
+
+    return Promise.all(
+      tiers.map(async (tier) => {
+        try {
+          const eligibility = await checkTierEligibility({ driverId, tierId: tier._id });
+          return {
+            ...tier,
+            eligible: eligibility.eligible,
+            ineligible_reasons: eligibility.reasons,
+            ...(tier.driver_category === 'prime' ? { prime_slots_left: eligibility.slots_left } : {}),
+          };
+        } catch (error) {
+          return { ...tier, eligible: false, ineligible_reasons: ['ELIGIBILITY_CHECK_FAILED'] };
+        }
+      }),
+    );
   },
 
   async getTierById(tierId) {
@@ -261,6 +317,28 @@ export const subscriptionTierService = {
     const tier = await SubscriptionTier.findById(tierId);
     if (!tier || !tier.is_active) throw new ApiError(404, 'Selected subscription tier is unavailable');
 
+    // Driver-network tiers carry entry rules (vehicle mix, Prime seat in the
+    // city). Check them *before* taking money — refunding a driver who paid for
+    // a Prime seat that was already gone is far worse than refusing up front.
+    // Imported lazily because driverCategoryService imports this module back.
+    const { checkTierEligibility, reservePrimeSlot } = await import('./driverCategoryService.js');
+    const eligibility = await checkTierEligibility({ driverId, tierId });
+
+    if (!eligibility.eligible) {
+      throw new ApiError(
+        eligibility.reasons.includes('PRIME_SLOTS_FULL') ? 409 : 422,
+        'You are not eligible for this plan yet',
+        { reasons: eligibility.reasons, slots_left: eligibility.slots_left },
+        eligibility.reasons[0],
+      );
+    }
+
+    if (tier.driver_category === 'prime') {
+      const { Driver } = await import('../driver/models/Driver.js');
+      const driver = await Driver.findById(driverId).select('service_location_id').lean();
+      await reservePrimeSlot({ driverId, serviceLocationId: driver?.service_location_id });
+    }
+
     const rawPrice = billingCycle === 'yearly' ? tier.price_yearly : tier.price_monthly;
     let finalAmount = Math.max(0, Number(rawPrice || 0));
     let proratedCredit = 0;
@@ -395,6 +473,33 @@ export const subscriptionTierService = {
 
       payment.driver_subscription_id = newSub._id;
       await payment.save();
+
+      const { applyCategoryFromSubscription } = await import('./driverCategoryService.js');
+
+      try {
+        await applyCategoryFromSubscription({ subscription: newSub });
+      } catch (error) {
+        // The commonest cause is a Prime seat that expired mid-payment and was
+        // claimed by someone else. The driver has been charged, so the money
+        // must be flagged for refund rather than silently kept, and the
+        // subscription must not sit there looking active.
+        if (error?.code === 'PRIME_SLOTS_FULL' || error?.code === 'CITY_REQUIRED') {
+          newSub.status = 'pending_refund';
+          await newSub.save();
+          payment.status = 'refund_due';
+          await payment.save();
+
+          await notifyAdminsOfRefundDue({ driverId, payment, subscription: newSub, reason: error.code });
+
+          throw new ApiError(
+            409,
+            'Your payment went through but the plan could not be activated. Support has been notified and a refund is being arranged.',
+            { subscriptionId: String(newSub._id), paymentId: String(payment._id) },
+            'SUBSCRIPTION_REFUND_DUE',
+          );
+        }
+        throw error;
+      }
 
       return { success: true, activeSubscription: newSub, action: 'activated_immediately' };
     }

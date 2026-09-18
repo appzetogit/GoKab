@@ -25,6 +25,7 @@ import {
 import { findZoneByPickup } from '../services/matchingService.js';
 import { acceptRideAssignment, createRideRecord, getRideRoom, submitRideBid } from '../services/rideService.js';
 import { SOCKET_EVENTS } from './events.js';
+import { registerLeadSocketHandlers } from './handlers/leadSocketHandler.js';
 import { registerRideSocketHandlers } from './handlers/rideSocketHandler.js';
 import { authorizeRideRoomAccess } from './middleware/rideRoomAuth.js';
 import { attachSocketAuth } from './middleware/socketAuth.js';
@@ -60,13 +61,6 @@ export const configureTaxiSocketServer = (httpServer) => {
 
     socket.join(getSupportParticipantRoom(identity.role, identity.sub));
     socket.join(getSupportRoleRoom(identity.role));
-
-    if (identity.role === 'driver') {
-      await Driver.findByIdAndUpdate(identity.sub, { socketId: socket.id });
-      notifyLateAvailableDriver(identity.sub).catch((error) => {
-        console.error('Failed to notify late-available driver on socket connect', error);
-      });
-    }
 
     socket.on('chat:join', ({ conversationKey }) => {
       if (conversationKey) {
@@ -136,6 +130,7 @@ export const configureTaxiSocketServer = (httpServer) => {
     );
 
     registerRideSocketHandlers({ io, socket, onAsync });
+    registerLeadSocketHandlers({ socket, onAsync });
 
     socket.on(
       'locationUpdate',
@@ -266,6 +261,19 @@ export const configureTaxiSocketServer = (httpServer) => {
         await Driver.findByIdAndUpdate(identity.sub, { socketId: null });
       }
     });
+
+    // Deliberately the last thing in this handler, and deliberately not awaited
+    // before the listeners above are attached: Socket.IO does not buffer events
+    // that arrive while no listener exists, so awaiting a database write first
+    // silently dropped anything a client emitted the instant it connected
+    // (a `lead:join` or `joinRide` sent from an `on('connect')` callback).
+    if (identity.role === 'driver') {
+      Driver.findByIdAndUpdate(identity.sub, { socketId: socket.id })
+        .then(() => notifyLateAvailableDriver(identity.sub))
+        .catch((error) => {
+          console.error('Failed to finish driver socket connect setup', error);
+        });
+    }
   });
 
   return io;
