@@ -139,7 +139,10 @@ certs/
 Thumbs.db
 Desktop.ini
 ehthumbs.db
-Icon?
+# NOTE: do not add "Icon?" here. It is meant for the macOS Finder "Icon"
+# file, but the "?" wildcard also matches src/assets/icons/ on
+# case-insensitive filesystems, which silently excluded every vehicle icon
+# from the repo and broke production builds.
 $RECYCLE.BIN/
 
 # ==========================================================
