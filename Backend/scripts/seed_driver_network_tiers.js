@@ -48,8 +48,13 @@ const buildTiers = (moduleIds) => [
     can_publish_rides: false,
     can_manage_fleet: false,
     requires_commercial_and_private: false,
+    requires_commercial_at_purchase: false,
     max_routes: 2,
     max_fleet_drivers: 0,
+    // Any approved driver may add a second vehicle to become eligible for
+    // Middle/Prime; this caps how many Lower may hold so that path doesn't
+    // become a way to build a free fleet.
+    max_vehicles: 2,
     // Lower pays to contact a customer lead; driver-published leads are free.
     customer_lead_contact_fee: 20,
     driver_lead_contact_fee: 0,
@@ -69,9 +74,15 @@ const buildTiers = (moduleIds) => [
     can_create_rides: true,
     can_publish_rides: true,
     can_manage_fleet: false,
+    // Ongoing rule (grace-enforced): must hold both types to stay Middle.
     requires_commercial_and_private: true,
+    // Purchase-time rule: commercial only. A driver only has their onboarding
+    // vehicle at checkout, so demanding both up front is a bar a one-vehicle
+    // driver could never clear.
+    requires_commercial_at_purchase: true,
     max_routes: 5,
     max_fleet_drivers: 0,
+    max_vehicles: 0, // unlimited — already Middle, no fleet-size reason to cap it
     customer_lead_contact_fee: 0,
     driver_lead_contact_fee: 0,
     customer_ride_accept_fee: 0,
@@ -91,8 +102,10 @@ const buildTiers = (moduleIds) => [
     can_publish_rides: true,
     can_manage_fleet: true,
     requires_commercial_and_private: true,
+    requires_commercial_at_purchase: true,
     max_routes: 10,
     max_fleet_drivers: 50,
+    max_vehicles: 0, // unlimited — fleet size is governed by max_fleet_drivers instead
     customer_lead_contact_fee: 0,
     driver_lead_contact_fee: 0,
     customer_ride_accept_fee: 0,
@@ -172,8 +185,10 @@ const run = async () => {
           can_publish_rides: false,
           can_manage_fleet: false,
           requires_commercial_and_private: false,
+          requires_commercial_at_purchase: false,
           max_routes: 2,
           max_fleet_drivers: 0,
+          max_vehicles: 2,
           customer_lead_contact_fee: 20,
           driver_lead_contact_fee: 0,
           customer_ride_accept_fee: 0,

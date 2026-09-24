@@ -239,3 +239,7 @@ config/development.*
 !pnpm-lock.yaml
 !yarn.lock
 !tsconfig.json
+
+# Per-run reports written by scripts/backfill_driver_vehicle_usage_type.js —
+# admin's review artifact, not something to commit.
+scripts/backfill_vehicle_usage_type_report_*.json

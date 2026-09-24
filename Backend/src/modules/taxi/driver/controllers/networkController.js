@@ -75,6 +75,8 @@ export const getDriverCategoryController = asyncHandler(async (req, res) => {
         max_routes: permissions.max_routes,
         routes_used: permissions.routes_used,
         max_fleet_drivers: permissions.max_fleet_drivers,
+        max_vehicles: permissions.max_vehicles,
+        requires_commercial_at_purchase: permissions.requires_commercial_at_purchase,
         customer_lead_contact_fee: permissions.customer_lead_contact_fee,
         driver_lead_contact_fee: permissions.driver_lead_contact_fee,
         customer_ride_accept_fee: permissions.customer_ride_accept_fee,

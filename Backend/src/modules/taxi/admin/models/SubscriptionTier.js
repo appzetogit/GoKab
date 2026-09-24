@@ -33,10 +33,25 @@ const subscriptionTierSchema = new mongoose.Schema(
     can_create_rides: { type: Boolean, default: false },
     can_manage_fleet: { type: Boolean, default: false },
     can_publish_rides: { type: Boolean, default: false },
-    // Prime/Middle must own at least one commercial *and* one private vehicle.
+    // The *ongoing* rule: once on Middle/Prime, a lapse into only one vehicle
+    // type starts the grace window (driverCategoryService.recheckCategoryVehicleRule).
     requires_commercial_and_private: { type: Boolean, default: false },
+    // The *purchase-time* rule, checked once at checkout. Deliberately looser
+    // than the ongoing rule above: a driver only has their onboarding vehicle
+    // at that point, so demanding both types up front is a rule a one-vehicle
+    // driver could never satisfy (they can't add a second vehicle before
+    // buying a plan that unlocks fleet ownership). Requiring commercial only
+    // here, with private required afterwards under the ongoing rule's grace
+    // period, is what makes Middle/Prime reachable at all.
+    requires_commercial_at_purchase: { type: Boolean, default: false },
     max_routes: { type: Number, default: 2, min: 0 },
     max_fleet_drivers: { type: Number, default: 0, min: 0 },
+    // How many vehicles this tier may hold under its own organisation, once
+    // one exists (0 = unlimited). Only meaningful for a tier that does not
+    // already cap fleet size via `can_manage_fleet`/`max_fleet_drivers` — set
+    // on Lower so that being allowed to add a second vehicle at all (needed to
+    // ever qualify for Middle/Prime) doesn't become a way to build a free fleet.
+    max_vehicles: { type: Number, default: 0, min: 0 },
     // Contacting a lead costs the driver this much, once per ride. Driver-published
     // leads are free for everyone by default; customer leads are charged to Lower.
     customer_lead_contact_fee: { type: Number, default: 0, min: 0 },

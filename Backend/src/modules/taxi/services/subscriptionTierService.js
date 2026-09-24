@@ -74,6 +74,20 @@ export const subscriptionTierService = {
             eligible: eligibility.eligible,
             ineligible_reasons: eligibility.reasons,
             ...(tier.driver_category === 'prime' ? { prime_slots_left: eligibility.slots_left } : {}),
+            // Lets the app explain *why* a tier is (in)eligible and what
+            // changes after purchase, rather than just a pass/fail flag:
+            // purchase needs less than the tier demands afterwards.
+            vehicle_rule: {
+              required_at_purchase: {
+                commercial: tier.requires_commercial_at_purchase || tier.requires_commercial_and_private ? 1 : 0,
+                private: !tier.requires_commercial_at_purchase && tier.requires_commercial_and_private ? 1 : 0,
+              },
+              ongoing: {
+                commercial: tier.requires_commercial_and_private ? 1 : 0,
+                private: tier.requires_commercial_and_private ? 1 : 0,
+              },
+              current: eligibility.vehicle_usage || { commercial: 0, private: 0 },
+            },
           };
         } catch (error) {
           return { ...tier, eligible: false, ineligible_reasons: ['ELIGIBILITY_CHECK_FAILED'] };

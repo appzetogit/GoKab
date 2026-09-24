@@ -54,6 +54,11 @@ export const vehicleUsageSummary = async (driverOrId, { session = null } = {}) =
 
   let commercial = 0;
   let privateCount = 0;
+  // How many of the commercial vehicles above are actually verified, rather
+  // than self-declared. The driver's own onboarding vehicle is never verified
+  // here (C4: no permit check runs against it), only a fleet vehicle admin has
+  // reviewed and flagged `usage_type_verified`.
+  let commercialVerified = 0;
 
   if (driver.vehicle_usage_type === 'commercial') commercial += 1;
   if (driver.vehicle_usage_type === 'private') privateCount += 1;
@@ -64,19 +69,24 @@ export const vehicleUsageSummary = async (driverOrId, { session = null } = {}) =
       active: true,
       status: 'approved',
     })
-      .select('usage_type')
+      .select('usage_type usage_type_verified')
       .session(session)
       .lean();
 
     for (const vehicle of fleetVehicles) {
-      if (vehicle.usage_type === 'commercial') commercial += 1;
-      else privateCount += 1;
+      if (vehicle.usage_type === 'commercial') {
+        commercial += 1;
+        if (vehicle.usage_type_verified) commercialVerified += 1;
+      } else {
+        privateCount += 1;
+      }
     }
   }
 
   return {
     commercial,
     private: privateCount,
+    commercialVerified,
     ok: commercial >= 1 && privateCount >= 1,
   };
 };
@@ -216,7 +226,9 @@ export const resolveTierPermissions = (tier) => ({
   can_publish_rides: Boolean(tier?.can_publish_rides),
   can_manage_fleet: Boolean(tier?.can_manage_fleet),
   requires_commercial_and_private: Boolean(tier?.requires_commercial_and_private),
+  requires_commercial_at_purchase: Boolean(tier?.requires_commercial_at_purchase),
   max_routes: Math.max(0, Number(tier?.max_routes ?? 0)),
+  max_vehicles: Math.max(0, Number(tier?.max_vehicles ?? 0)),
   max_fleet_drivers: Math.max(0, Number(tier?.max_fleet_drivers ?? 0)),
   customer_lead_contact_fee: Math.max(0, Number(tier?.customer_lead_contact_fee ?? 0)),
   driver_lead_contact_fee: Math.max(0, Number(tier?.driver_lead_contact_fee ?? 0)),
@@ -276,11 +288,21 @@ export const checkTierEligibility = async ({ driverId, tierId }) => {
   }
 
   const reasons = [];
+  let vehicleUsage = null;
 
-  if (tier.requires_commercial_and_private) {
-    const usage = await vehicleUsageSummary(driver);
-    if (usage.commercial < 1) reasons.push('NEED_COMMERCIAL_VEHICLE');
-    if (usage.private < 1) reasons.push('NEED_PRIVATE_VEHICLE');
+  // Purchase-time is deliberately looser than the ongoing rule: a driver only
+  // has their onboarding vehicle at checkout, so demanding both types up front
+  // is a bar a one-vehicle driver could never clear (they can't add a second
+  // vehicle before a plan that unlocks fleet ownership). Commercial only here;
+  // `applyCategoryFromSubscription` starts a grace window for the private
+  // vehicle once the plan is actually granted.
+  if (tier.requires_commercial_at_purchase) {
+    vehicleUsage = await vehicleUsageSummary(driver);
+    if (vehicleUsage.commercial < 1) reasons.push('NEED_COMMERCIAL_VEHICLE');
+  } else if (tier.requires_commercial_and_private) {
+    vehicleUsage = await vehicleUsageSummary(driver);
+    if (vehicleUsage.commercial < 1) reasons.push('NEED_COMMERCIAL_VEHICLE');
+    if (vehicleUsage.private < 1) reasons.push('NEED_PRIVATE_VEHICLE');
   }
 
   let slotsLeft = null;
@@ -289,9 +311,9 @@ export const checkTierEligibility = async ({ driverId, tierId }) => {
       reasons.push('CITY_REQUIRED');
     } else {
       const holdsSlot = await PrimeCitySlot.exists({ driver_id: driver._id });
-      const usage = await getPrimeSlotUsage(driver.service_location_id);
-      slotsLeft = holdsSlot ? Math.max(usage.left, 1) : usage.left;
-      if (!holdsSlot && usage.left <= 0) reasons.push('PRIME_SLOTS_FULL');
+      const slotUsage = await getPrimeSlotUsage(driver.service_location_id);
+      slotsLeft = holdsSlot ? Math.max(slotUsage.left, 1) : slotUsage.left;
+      if (!holdsSlot && slotUsage.left <= 0) reasons.push('PRIME_SLOTS_FULL');
     }
   }
 
@@ -301,6 +323,7 @@ export const checkTierEligibility = async ({ driverId, tierId }) => {
     eligible: reasons.length === 0,
     reasons,
     slots_left: slotsLeft,
+    vehicle_usage: vehicleUsage ? { commercial: vehicleUsage.commercial, private: vehicleUsage.private } : null,
     tier,
   };
 };
@@ -383,6 +406,40 @@ export const applyCategoryFromSubscription = async ({ subscription, session = nu
 
   await notifyCategory({ driverId: driver._id, category, previousCategory, reason: 'subscription_activated' });
 
+  // A commercial-only purchase (requires_commercial_at_purchase) leaves the
+  // private vehicle for later. Starting the grace window here — rather than
+  // waiting for a vehicle to be removed, the only other place this ran before —
+  // is what actually gives the driver a deadline to add it, instead of leaving
+  // them out of compliance with the ongoing rule indefinitely.
+  if (tier.requires_commercial_and_private) {
+    const settings = await getDriverNetworkSettings();
+    await recheckCategoryVehicleRule(driver._id, { session, graceDays: settings.purchase_grace_days });
+  }
+
+  // P3: commercial eligibility stays self-declared by design (no permit
+  // verification is enforced at purchase) — but unlocking a paid category on
+  // an unverified claim is worth a permanent, auditable record rather than a
+  // silent pass, so admin can review it after the fact.
+  if (tier.requires_commercial_at_purchase || tier.requires_commercial_and_private) {
+    const usage = await vehicleUsageSummary(driver, { session });
+    if (usage.commercial >= 1 && usage.commercialVerified < 1) {
+      await writeCategoryAudit({
+        driverId: driver._id,
+        tierId: tier._id,
+        action: 'unverified_commercial_claim',
+        changes: [
+          { field: 'tier', old_value: null, new_value: tier.name },
+          { field: 'commercial_verified', old_value: null, new_value: 'false' },
+        ],
+        session,
+      });
+      console.warn(
+        `[driverCategoryService] Driver ${driver._id} unlocked ${tier.name} on a self-declared ` +
+          'commercial vehicle claim — no permit has been verified.',
+      );
+    }
+  }
+
   return { category, previousCategory };
 };
 
@@ -430,22 +487,28 @@ export const downgradeToLower = async ({ driverId, reason = 'subscription_expire
 
 /**
  * Re-checks the commercial+private rule after a vehicle is removed, rejected or
- * deactivated. A broken rule does not downgrade on the spot — the driver gets a
- * grace window to add a vehicle back, and `categoryGraceCheck` finishes the job.
+ * deactivated — or right after a purchase that only required commercial (see
+ * `applyCategoryFromSubscription`). A broken rule does not downgrade on the
+ * spot — the driver gets a grace window to add a vehicle back, and
+ * `enforceCategoryGrace` finishes the job.
+ *
+ * `graceDays` lets the purchase path use a longer window (`purchase_grace_days`)
+ * than a vehicle later being removed does (`category_grace_days`); omitted, it
+ * falls back to the latter.
  */
-export const recheckCategoryVehicleRule = async (driverId) => {
-  const permissions = await getDriverPermissions(driverId);
+export const recheckCategoryVehicleRule = async (driverId, { session = null, graceDays: graceDaysOverride } = {}) => {
+  const permissions = await getDriverPermissions(driverId, { session });
 
   if (!permissions.requires_commercial_and_private) {
     if (permissions.driver.category_grace_ends_at) {
-      await Driver.updateOne({ _id: driverId }, { $set: { category_grace_ends_at: null } });
+      await Driver.updateOne({ _id: driverId }, { $set: { category_grace_ends_at: null } }, { session });
     }
     return { ok: true, graceStarted: false };
   }
 
   if (permissions.vehicle_rule.ok) {
     if (permissions.driver.category_grace_ends_at) {
-      await Driver.updateOne({ _id: driverId }, { $set: { category_grace_ends_at: null } });
+      await Driver.updateOne({ _id: driverId }, { $set: { category_grace_ends_at: null } }, { session });
     }
     return { ok: true, graceStarted: false };
   }
@@ -455,9 +518,9 @@ export const recheckCategoryVehicleRule = async (driverId) => {
   }
 
   const settings = await getDriverNetworkSettings();
-  const graceDays = Math.max(0, Number(settings.category_grace_days ?? 7));
+  const graceDays = Math.max(0, Number(graceDaysOverride ?? settings.category_grace_days ?? 7));
   const graceEndsAt = new Date(Date.now() + graceDays * 24 * 60 * 60 * 1000);
-  await Driver.updateOne({ _id: driverId }, { $set: { category_grace_ends_at: graceEndsAt } });
+  await Driver.updateOne({ _id: driverId }, { $set: { category_grace_ends_at: graceEndsAt } }, { session });
 
   // The driver cannot act on a deadline they were never told about.
   try {

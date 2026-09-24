@@ -7396,18 +7396,30 @@ const normalizeVehicleUsageType = (value, { required = true } = {}) => {
 
 export const addOwnerVehicle = async (req, res) => {
   let owner = await resolveAuthenticatedOwner(req);
+  let driverPermissions = null;
 
-  // A Middle driver has no organisation of their own, yet the commercial +
-  // private rule expects them to register a second vehicle. Create the
-  // organisation on first use rather than making them discover the
-  // enable-self-drive flow first.
-  if (!owner?._id && req.auth?.role === "driver") {
+  if (req.auth?.role === "driver") {
     const { getDriverPermissions } = await import(
       "../../services/driverCategoryService.js"
     );
-    const permissions = await getDriverPermissions(req.auth.sub);
+    driverPermissions = await getDriverPermissions(req.auth.sub);
 
-    if (permissions.can_create_rides) {
+    // Any approved driver may register a second vehicle under their own
+    // organisation — not only Middle/Prime. Buying Middle/Prime requires a
+    // vehicle mix a single onboarding vehicle can never satisfy, so without
+    // this a Lower driver could never become eligible in the first place.
+    // This does not hand Lower a free fleet: `max_vehicles` below still caps
+    // how many they may hold before actually upgrading.
+    if (!owner?._id) {
+      if (driverPermissions.driver.approve !== true) {
+        throw new ApiError(
+          403,
+          "Your account is not approved yet",
+          null,
+          "DRIVER_NOT_APPROVED",
+        );
+      }
+
       const { ensureOrganizationForPrime } = await import(
         "../services/networkRideService.js"
       );
@@ -7420,6 +7432,24 @@ export const addOwnerVehicle = async (req, res) => {
       403,
       "Vehicle addition is only available for owner accounts",
     );
+  }
+
+  if (driverPermissions) {
+    const maxVehicles = Math.max(0, Number(driverPermissions.tier?.max_vehicles ?? 0));
+    if (maxVehicles > 0) {
+      const usedVehicles = await FleetVehicle.countDocuments({
+        owner_id: owner._id,
+        active: true,
+      });
+      if (usedVehicles >= maxVehicles) {
+        throw new ApiError(
+          403,
+          `Your plan allows up to ${maxVehicles} vehicle(s)`,
+          { limit: maxVehicles, used: usedVehicles },
+          "VEHICLE_LIMIT_REACHED",
+        );
+      }
+    }
   }
 
   const { vehicleTypeId, make, model, number, color, rcFile, documents, usage_type: usageType } =
