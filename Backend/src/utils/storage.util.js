@@ -2,6 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { env } from '../config/env.js';
 
+// One warning per process, not per upload: the condition is a misconfiguration
+// that stays true for the process's whole life, so repeating it buries the logs.
+let warnedAboutLoopbackFallback = false;
+
 // Resolve base directory dynamically based on OS or environment settings
 const getBaseStorageDir = () => {
   if (process.env.STORAGE_BASE_DIR) {
@@ -80,6 +84,19 @@ export const getPublicUrl = (relativePath, filename, req) => {
     // API actually listens on — hardcoding one bakes a dead origin into every
     // asset URL persisted from that context.
     host = `http://localhost:${env.port}`;
+
+    // This URL gets stored on the document, so in production it is a silent
+    // data bug: every client outside the server sees an unreachable origin and
+    // a broken image. Say so loudly once per process rather than never.
+    if (env.nodeEnv === 'production' && !warnedAboutLoopbackFallback) {
+      warnedAboutLoopbackFallback = true;
+      console.warn(
+        `[storage] STORAGE_BASE_URL is not set and no request context was available, so asset ` +
+        `URLs are being written as ${host}/... . These are stored on the document and will not ` +
+        `load for any client. Set STORAGE_BASE_URL to the public origin, then run ` +
+        `scripts/fix_localhost_asset_urls.js to repair rows already written.`,
+      );
+    }
   }
 
   return `${host}/images/${relativePath}/${filename}`;
