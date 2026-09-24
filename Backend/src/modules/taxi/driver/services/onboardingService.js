@@ -714,14 +714,27 @@ export const saveDriverVehicle = async ({
 
   const selectedServiceLocation = serviceLocation || (locationId ? await ServiceLocation.findById(locationId).lean() : null);
   const selectedLocation = getServiceLocationName(selectedServiceLocation) || String(locationName || city || '').trim();
-  const normalizedServiceCategories = normalizeServiceCategories(serviceCategories, registerFor || session.role || 'taxi');
-  const normalizedRegisterFor = getPrimaryRegisterFor(normalizedServiceCategories, registerFor || session.role || 'taxi');
+  const isOwner = isOwnerRole(session.role);
+  // Whoever registers through the driver app is a taxi driver, always — there
+  // is no separate Delivery/Pooling/Outstation product for this app, and a
+  // driver never chooses a category. Anything the client sent here is
+  // ignored; 'both' (taxi+outstation) is never produced, since "taxi" already
+  // covers local and intercity rides (the module list on their subscription
+  // tier is what actually gates ride types, not this field — see
+  // matchingService.js). Owner/vendor/super-fleet-owner sessions are a
+  // separate onboarding flow with their own meaning for these fields and are
+  // left exactly as before.
+  const normalizedServiceCategories = isOwner
+    ? normalizeServiceCategories(serviceCategories, registerFor || session.role || 'taxi')
+    : ['taxi'];
+  const normalizedRegisterFor = isOwner
+    ? getPrimaryRegisterFor(normalizedServiceCategories, registerFor || session.role || 'taxi')
+    : 'taxi';
 
   if (!selectedLocation) {
     throw new ApiError(400, 'A valid service location is required');
   }
 
-  const isOwner = isOwnerRole(session.role);
   const requiredFieldMap = await getRequiredVehicleFieldMap(session.role);
   const normalizedYear = String(year || '').trim();
   const normalizedNumber = String(number || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
@@ -774,7 +787,8 @@ export const saveDriverVehicle = async ({
     const vehicleYear = Number(normalizedYear);
     const currentYear = new Date().getFullYear();
 
-    requireField('serviceCategories', normalizedServiceCategories, 'Service category');
+    // No requireField('serviceCategories', ...) here: it is forced to
+    // ['taxi'] above and can never fail this check.
     requireField('vehicleTypeId', vehicleTypeId, 'Vehicle type');
     requireField('make', make, 'Brand / Make');
     requireField('model', model, 'Model');

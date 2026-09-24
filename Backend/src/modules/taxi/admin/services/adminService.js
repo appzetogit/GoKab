@@ -76,10 +76,10 @@ import {
 } from './adminAccessService.js';
 
 const PUBLIC_VEHICLE_CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
-let publicVehicleCatalogCache = {
-  expiresAt: 0,
-  value: null,
-};
+// Keyed by the filter signature (see listPublicVehicleCatalog) so the
+// unfiltered catalog (rider app) and a filtered one (driver registration,
+// `?transport_type=taxi&active=true`) don't serve each other's results.
+const publicVehicleCatalogCache = new Map();
 
 const deepMerge = (target, source) => {
   const result = { ...target };
@@ -341,7 +341,14 @@ const normalizeDriverVehicleFieldType = (value) => {
 
 const DRIVER_VEHICLE_FIELD_DEFINITIONS = {
   locationId: { label: 'Operating City', field_type: 'location_select', field_group: 'common', account_type: 'both', sort_order: 10 },
-  serviceCategories: { label: 'Service Category', field_type: 'multi_select', field_group: 'driver', account_type: 'individual', sort_order: 20, options: ['taxi', 'outstation', 'delivery', 'pooling'] },
+  // Hidden by default: a driver never chooses a service category (this app is
+  // taxi-only — local and intercity rides both count as "Taxi"), so the value
+  // is forced server-side and ignored regardless of what is sent
+  // (onboardingService.js, saveVehicleDetails). Kept in the map, rather than
+  // removed, only so `active:false` continues to suppress it in the seed
+  // default for a fresh install; an existing database's already-seeded row
+  // needs the migration script to pick this up too.
+  serviceCategories: { label: 'Service Category', field_type: 'multi_select', field_group: 'driver', account_type: 'individual', sort_order: 20, options: ['taxi'], is_required: false, active: false },
   vehicleTypeId: { label: 'Vehicle Type', field_type: 'vehicle_type_select', field_group: 'driver', account_type: 'individual', sort_order: 30 },
   make: { label: 'Brand / Make', field_type: 'text', field_group: 'driver', account_type: 'individual', sort_order: 40, placeholder: 'e.g. Maruti Suzuki' },
   model: { label: 'Model', field_type: 'text', field_group: 'driver', account_type: 'individual', sort_order: 50, placeholder: 'Swift, Bolt' },
@@ -376,8 +383,8 @@ const buildDefaultDriverVehicleFieldConfigs = () =>
     sort_order: Number(meta.sort_order || 0) / 10 || 0,
     options: Array.isArray(meta.options) ? meta.options : [],
     is_editable: true,
-    is_required: true,
-    active: true,
+    is_required: meta.is_required ?? true,
+    active: meta.active ?? true,
   }));
 
 const toDocumentKey = (value = '') => {
@@ -6206,12 +6213,31 @@ export const listVehicleCatalog = async () => {
   };
 };
 
-export const listPublicVehicleCatalog = async () => {
-  if (publicVehicleCatalogCache.value && publicVehicleCatalogCache.expiresAt > Date.now()) {
-    return publicVehicleCatalogCache.value;
+export const listPublicVehicleCatalog = async (queryParams = {}) => {
+  // No params ⇒ the same full list this always returned (rider app is
+  // unaffected). `transport_type=taxi` also matches `both`, matching
+  // `listVehicleTypes` (the admin equivalent) below. `active=true` excludes
+  // anything an admin turned off — deactivating a vehicle type previously had
+  // no effect on what registration offered.
+  const filter = {};
+  if (queryParams.transport_type) {
+    const normalizedTransportType = normalizeVehicleTransportType(queryParams.transport_type);
+    filter.transport_type = normalizedTransportType === 'both'
+      ? 'both'
+      : { $in: [normalizedTransportType, 'both'] };
+  }
+  if (String(queryParams.active).toLowerCase() === 'true') {
+    filter.active = { $ne: false };
+    filter.status = { $ne: 0 };
   }
 
-  const items = await Vehicle.find()
+  const cacheKey = JSON.stringify({ transport_type: queryParams.transport_type || '', active: queryParams.active || '' });
+  const cached = publicVehicleCatalogCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value;
+  }
+
+  const items = await Vehicle.find(filter)
     .select('name short_description description transport_type dispatch_type icon_types delivery_category delivery_distance_pricing capacity image icon map_icon status active airport')
     .sort({ createdAt: -1 })
     .lean();
@@ -6248,10 +6274,10 @@ export const listPublicVehicleCatalog = async () => {
     },
   };
 
-  publicVehicleCatalogCache = {
+  publicVehicleCatalogCache.set(cacheKey, {
     value: payload,
     expiresAt: Date.now() + PUBLIC_VEHICLE_CATALOG_CACHE_TTL_MS,
-  };
+  });
 
   return payload;
 };
@@ -6314,7 +6340,7 @@ export const createVehicleType = async (payload) => {
       : [],
   });
 
-  publicVehicleCatalogCache = { value: null, expiresAt: 0 };
+  publicVehicleCatalogCache.clear();
 
   return vehicle.toObject();
 };
@@ -6392,17 +6418,38 @@ export const updateVehicleType = async (id, payload) => {
   }
 
   await vehicle.save();
-  publicVehicleCatalogCache = { value: null, expiresAt: 0 };
+  publicVehicleCatalogCache.clear();
   return vehicle.toObject();
 };
 
 export const deleteVehicleType = async (id) => {
-  const deleted = await Vehicle.findByIdAndDelete(id);
-  if (!deleted) {
+  const vehicle = await Vehicle.findById(id);
+  if (!vehicle) {
     throw new ApiError(404, 'Vehicle type not found');
   }
-  publicVehicleCatalogCache = { value: null, expiresAt: 0 };
-  return true;
+
+  // A hard delete here orphans whatever still points at this vehicle type —
+  // a driver's own vehicle, a fleet vehicle, or a past ride — with no way to
+  // resolve its name afterwards. If anything references it, deactivate
+  // instead: same effect on new registrations and matching (it drops out of
+  // every "active" filter) without breaking existing records that display it.
+  const [referencingDriver, referencingFleetVehicle, referencingRide] = await Promise.all([
+    Driver.exists({ vehicleTypeId: id }),
+    FleetVehicle.exists({ vehicle_type_id: id }),
+    Ride.exists({ vehicleTypeId: id }),
+  ]);
+
+  if (referencingDriver || referencingFleetVehicle || referencingRide) {
+    vehicle.active = false;
+    vehicle.status = 0;
+    await vehicle.save();
+    publicVehicleCatalogCache.clear();
+    return { deleted: false, deactivated: true, id: String(vehicle._id) };
+  }
+
+  await Vehicle.findByIdAndDelete(id);
+  publicVehicleCatalogCache.clear();
+  return { deleted: true, deactivated: false, id: String(id) };
 };
 
 export const listSetPrices = async (queryArgs = {}, currentAdmin = null) => {

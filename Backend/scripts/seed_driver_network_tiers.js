@@ -32,6 +32,12 @@ if (process.env.SEED_DNS_SERVERS) {
   dns.setServers(process.env.SEED_DNS_SERVERS.split(',').map((entry) => entry.trim()));
 }
 
+// Bug fixed here: `ride_module_ids` used to be spread onto only the last
+// object below (Prime) — Lower and Middle got no module list at all, which
+// means "every module allowed" (matchingService.js), not the taxi-only
+// modules this was meant to attach to every tier. Applying it once via
+// `.map()` after the array, instead of duplicating a spread inside each
+// object, is what should have prevented that.
 const buildTiers = (moduleIds) => [
   {
     name: 'Lower',
@@ -111,9 +117,8 @@ const buildTiers = (moduleIds) => [
     customer_ride_accept_fee: 0,
     badge_color_hex: '#8B5CF6',
     is_active: true,
-    ...(moduleIds.length ? { ride_module_ids: moduleIds } : {}),
   },
-];
+].map((tier) => (moduleIds.length ? { ...tier, ride_module_ids: moduleIds } : tier));
 
 const run = async () => {
   if (!URI) {
@@ -127,8 +132,35 @@ const run = async () => {
   });
   console.log(`Connected to "${mongoose.connection.name}"`);
 
-  const modules = await RideModule.find().select('_id code').lean();
-  const moduleIds = modules.map((module) => module._id);
+  // This app is taxi-only: "Taxi" covers local and intercity rides alike, and
+  // there is no delivery/pooling product for drivers of this app. Attaching
+  // *every* ride module (as this used to do) put `parcel`/`carpool` requests
+  // in front of taxi drivers too, and an ONLY-city-here tier — see
+  // seed_tier_system.js's "Basic" — never received an intercity request at
+  // all (matchingService.js skips a driver when their tier's module list is
+  // non-empty and does not contain the ride's module). city + outstation
+  // covers both; airport rides are matched as `city` regardless of module
+  // list, so no module is needed for those.
+  //
+  // Ensured here, not just looked up: an empty `ride_module_ids` means "every
+  // module allowed" (matchingService.js), so if this script runs before
+  // seed_tier_system.js has ever created these two modules, silently getting
+  // zero ids back and skipping the field would be a worse outcome than the
+  // bug being fixed — it would open the door to parcel/carpool instead of
+  // closing it.
+  const REQUIRED_MODULES = [
+    { code: 'city', display_name: 'City Taxi', description: 'Standard local city rides' },
+    { code: 'outstation', display_name: 'Outstation Intercity', description: 'Long-distance intercity trips' },
+  ];
+  const moduleIds = [];
+  for (const moduleData of REQUIRED_MODULES) {
+    const module = await RideModule.findOneAndUpdate(
+      { code: moduleData.code },
+      { $setOnInsert: moduleData },
+      { upsert: true, returnDocument: 'after' },
+    );
+    moduleIds.push(module._id);
+  }
 
   // Proof that a vehicle may operate commercially. Required whenever a fleet
   // vehicle is registered as commercial, which is what the Prime/Middle

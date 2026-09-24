@@ -907,8 +907,8 @@ export const getVehicleTypes = asyncHandler(async (req, res) =>
 export const getVehicleTypeCatalog = asyncHandler(async (_req, res) =>
   ok(res, await adminService.listVehicleCatalog()),
 );
-export const getPublicVehicleTypeCatalog = asyncHandler(async (_req, res) =>
-  ok(res, await adminService.listPublicVehicleCatalog()),
+export const getPublicVehicleTypeCatalog = asyncHandler(async (req, res) =>
+  ok(res, await adminService.listPublicVehicleCatalog(req.query)),
 );
 export const getPublicRentalVehicleCatalog = asyncHandler(async (_req, res) =>
   ok(res, { results: await adminService.listPublicRentalVehicleCatalog() }),
@@ -923,8 +923,11 @@ export const updateVehicleType = asyncHandler(async (req, res) =>
   ok(res, await adminService.updateVehicleType(req.params.id, req.body)),
 );
 export const deleteVehicleType = asyncHandler(async (req, res) => {
-  await adminService.deleteVehicleType(req.params.id);
-  ok(res, { deleted: true });
+  // Deleting a type still referenced by a driver, fleet vehicle or ride
+  // deactivates it instead — the admin panel should say so, not claim a
+  // deletion that didn't happen.
+  const result = await adminService.deleteVehicleType(req.params.id);
+  ok(res, result);
 });
 
 export const getOwners = asyncHandler(async (req, res) =>

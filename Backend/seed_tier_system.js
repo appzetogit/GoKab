@@ -74,7 +74,13 @@ async function seedTierSystem() {
         free_cancellations_per_day: 0,
         cancellation_penalty_waived: false,
         support_channel_type_id: seededChannels['chat'],
-        ride_module_ids: [seededModules['city']],
+        // This app is taxi-only: "Taxi" covers local and intercity rides
+        // alike (there is no separate service category the driver picks),
+        // so every tier a taxi driver can hold needs city AND outstation —
+        // city alone meant this tier's drivers never received an intercity
+        // request. No parcel/carpool: there is no delivery/pooling product
+        // for drivers of this app.
+        ride_module_ids: [seededModules['city'], seededModules['outstation']],
         badge_color_hex: '#6B7280',
         is_active: true,
       },
@@ -91,7 +97,8 @@ async function seedTierSystem() {
         free_cancellations_per_day: 1,
         cancellation_penalty_waived: false,
         support_channel_type_id: seededChannels['fast_track'],
-        ride_module_ids: [seededModules['city'], seededModules['outstation'], seededModules['airport'], seededModules['parcel']],
+        // No parcel: see the note on Basic above.
+        ride_module_ids: [seededModules['city'], seededModules['outstation'], seededModules['airport']],
         badge_color_hex: '#3B82F6',
         is_active: true,
       },
@@ -108,7 +115,8 @@ async function seedTierSystem() {
         free_cancellations_per_day: 5,
         cancellation_penalty_waived: true,
         support_channel_type_id: seededChannels['phone_247'],
-        ride_module_ids: [seededModules['city'], seededModules['outstation'], seededModules['airport'], seededModules['parcel'], seededModules['carpool']],
+        // No parcel/carpool: see the note on Basic above.
+        ride_module_ids: [seededModules['city'], seededModules['outstation'], seededModules['airport']],
         badge_color_hex: '#10B981',
         is_active: true,
       },
