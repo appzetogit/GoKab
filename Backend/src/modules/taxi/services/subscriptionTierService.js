@@ -171,19 +171,30 @@ export const subscriptionTierService = {
     const existing = await SubscriptionTier.findById(tierId);
     if (!existing) throw new ApiError(404, 'Subscription tier not found');
 
+    // The edit form's "Select Support Channel Level..." placeholder option
+    // submits an empty string, not omitting the field — `$set`-ing that
+    // straight onto an ObjectId field throws a cast error and the whole save
+    // fails with a 500, for every field on the tier, not just this one.
+    // `createTier` already treats a falsy value here as "no channel" (`||
+    // null`); do the same on the way in for update.
+    const sanitizedPayload = { ...payload };
+    if ('support_channel_type_id' in sanitizedPayload && !sanitizedPayload.support_channel_type_id) {
+      sanitizedPayload.support_channel_type_id = null;
+    }
+
     const changes = [];
-    Object.keys(payload).forEach((field) => {
-      if (payload[field] !== undefined && String(existing[field]) !== String(payload[field])) {
-        changes.push({ field, old_value: existing[field], new_value: payload[field] });
+    Object.keys(sanitizedPayload).forEach((field) => {
+      if (sanitizedPayload[field] !== undefined && String(existing[field]) !== String(sanitizedPayload[field])) {
+        changes.push({ field, old_value: existing[field], new_value: sanitizedPayload[field] });
       }
     });
 
-    if (payload.commission_percent !== undefined) {
-      const comm = Number(payload.commission_percent);
+    if (sanitizedPayload.commission_percent !== undefined) {
+      const comm = Number(sanitizedPayload.commission_percent);
       if (comm < 0 || comm > 100) throw new ApiError(400, 'Commission percent must be between 0 and 100');
     }
 
-    const updated = await SubscriptionTier.findByIdAndUpdate(tierId, { $set: payload }, { new: true }).lean();
+    const updated = await SubscriptionTier.findByIdAndUpdate(tierId, { $set: sanitizedPayload }, { new: true }).lean();
 
     // Enforce Singleton Default Tier
     if (updated.is_default) {

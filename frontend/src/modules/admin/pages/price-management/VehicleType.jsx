@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate, useParams } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import api from '../../../../shared/api/axiosInstance';
 import { useTaxiTransportTypes } from '../../../../shared/hooks/useTaxiTransportTypes';
 
@@ -487,8 +488,22 @@ const VehicleType = ({ mode: propMode }) => {
     }
 
     try {
-      await api.delete(`/admin/types/vehicle-types/${vehicleId}`);
-      setVehicles((prev) => prev.filter((item) => String(item.id) !== String(vehicleId)));
+      const response = await api.delete(`/admin/types/vehicle-types/${vehicleId}`);
+      // A type still referenced by a driver, fleet vehicle or ride is
+      // deactivated instead of removed (it would otherwise orphan whatever
+      // points at it) — the row must stay visible, just marked inactive, or
+      // an admin has no way to tell it wasn't actually deleted.
+      if (unwrap(response)?.deactivated) {
+        setVehicles((prev) =>
+          prev.map((item) =>
+            String(item.id) === String(vehicleId) ? { ...item, active: false, status: 0 } : item,
+          ),
+        );
+        toast('This type is still in use, so it was deactivated instead of deleted.', { icon: 'ℹ️' });
+      } else {
+        setVehicles((prev) => prev.filter((item) => String(item.id) !== String(vehicleId)));
+        toast.success('Vehicle type deleted.');
+      }
     } catch (error) {
       setErrorMessage(error.message || 'Could not delete vehicle type.');
     }
