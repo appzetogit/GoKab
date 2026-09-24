@@ -25,7 +25,15 @@ export const errorHandler = (error, _req, res, _next) => {
     });
   }
 
-  if (statusCode === 500) {
+  // ApiError's statusCode is one we chose on purpose, so only the 500 case is
+  // worth logging. Any other thrown error is not: a third-party SDK error can
+  // carry its own `.statusCode` that just mirrors an upstream HTTP response
+  // (Razorpay's client does this — an unauthorized order-create call throws
+  // with `.statusCode: 401`), and that must not be treated as an intentional,
+  // silent 401 the way one of ours would be. It reached here because
+  // something is actually broken (bad credentials, a misconfigured client),
+  // and previously it never appeared in the logs at all.
+  if (statusCode === 500 || !(error instanceof ApiError)) {
     console.error('[errorHandler]', error);
   }
 
