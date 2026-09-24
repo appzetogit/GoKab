@@ -156,9 +156,20 @@ const normalizeStops = (stops) => {
   });
 };
 
+// Mongo's 2dsphere index rejects a LineString whose coordinates collapse to a
+// single point as "at least 2 vertices" — but that error only fires on
+// insert, deep inside a driver call stack, as an unhandled 500. Stops that all
+// share one location (a map picker that never moved between "add stop" taps)
+// produce exactly this, so it is checked here and turned into a normal
+// validation error before anything reaches the database.
+const hasDistinctVertices = (coordinates) =>
+  coordinates.some(
+    ([lng, lat]) => lng !== coordinates[0][0] || lat !== coordinates[0][1],
+  );
+
 const buildPath = async (stops) => {
   const google = await buildGooglePath(stops);
-  if (google?.coordinates?.length >= 2) {
+  if (google?.coordinates?.length >= 2 && hasDistinctVertices(google.coordinates)) {
     return {
       coordinates: simplifyPath(google.coordinates),
       source: 'google',
@@ -167,6 +178,15 @@ const buildPath = async (stops) => {
   }
 
   const coordinates = buildStraightPath(stops);
+  if (!hasDistinctVertices(coordinates)) {
+    throw new ApiError(
+      422,
+      'Route stops must not all be at the same location',
+      null,
+      'INVALID_STOPS',
+    );
+  }
+
   return {
     coordinates: simplifyPath(coordinates),
     source: 'straight',
