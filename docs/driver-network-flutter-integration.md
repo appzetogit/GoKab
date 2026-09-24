@@ -252,6 +252,11 @@ You don't join these yourself. The only room you join manually is a lead convers
 
 ## 5. Screen 1 — Plan / category
 
+> **Updated by a later change** — `driver-network-vehicle-rule-and-taxi-only-flutter-guide.md` §A.2–A.3
+> adds `max_vehicles`, `requires_commercial_at_purchase` and a per-tier `vehicle_rule` breakdown, and
+> changes when Middle/Prime purchase actually requires a private vehicle. Read that doc's Part A
+> before building against the two endpoints below.
+
 ### `GET /drivers/category`
 
 This is the screen's single source of truth, and you should also call it on app start and
@@ -933,6 +938,11 @@ owner, driver and OTP. That's the requirement.
 ---
 
 ## 17. Vehicle registration changes
+
+> **Updated by a later change** — `driver-network-vehicle-rule-and-taxi-only-flutter-guide.md`:
+> §A.5 opens `POST /drivers/fleet/vehicles` to every approved driver (not only Middle/Prime) with
+> a `max_vehicles` cap, and §B.2 removes the Service Category step from registration entirely.
+> The `vehicle_usage_type` / commercial-permit behaviour described just below is unchanged.
 
 Two extra fields, both on existing screens.
 
