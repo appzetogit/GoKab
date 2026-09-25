@@ -13,6 +13,12 @@ This covers two backend changes, delivered together:
 
 ## Part A — Vehicle rule & plan purchase
 
+> **Updated by a later change** — `driver-network-final-flow-flutter-guide.md` §2 changes what happens
+> after A.4's purchase **if and once** the backend runs its plan-consolidation script: Prime/Elite lose
+> the ongoing private-vehicle requirement entirely (no grace period, ever, on those plans). That doc
+> also covers organisation-on-purchase, real Add Vehicle document handling, and vehicle
+> approval/rejection notifications — all new. Read it before building against this section.
+
 ### A.1 The product flow, as built
 
 1. A driver registers with **one** vehicle — `commercial` or `private` — same as before.
