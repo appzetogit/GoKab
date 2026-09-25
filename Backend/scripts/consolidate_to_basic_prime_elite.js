@@ -11,29 +11,48 @@
  * goes live with real pricing.
  *
  * What this script does, idempotently:
- *   - Reuses the existing `lower`/`middle`/`prime` driver-network tiers as
+ *   - Reuses an existing `lower`/`middle`/`prime` driver-network tier as
  *     Basic/Prime/Elite (same _id, same category) if present, so any
- *     DriverSubscription already pointing at them keeps resolving — only
- *     their name and network fields change. Creates them if missing.
+ *     DriverSubscription already pointing at it keeps resolving — only its
+ *     name and network fields change. Creates one if missing.
+ *   - If MORE THAN ONE tier already shares that category — this happens on a
+ *     database that ran both the older seed_tier_system.js set
+ *     (Basic/Premium/Super Premium, all defaulting to driver_category:'lower'
+ *     or later mapped onto middle/prime) and the driver-network seed
+ *     (Lower/Middle/Prime) — the one with active subscribers on it is kept
+ *     and renamed; every other same-category tier is treated exactly like
+ *     any other leftover duplicate below. An earlier version of this script
+ *     picked whichever tier a plain `findOne` happened to return first,
+ *     which could rename the wrong one and leave its sibling active and
+ *     un-deactivated, silently keeping more than three tiers live and
+ *     risking two tiers marked `is_default` at once.
  *   - Sets exactly the table from the spec: Basic is the only default,
  *     requires_commercial_and_private is now FALSE on Prime/Elite (no
  *     grace period, no post-purchase private-vehicle requirement — the
  *     spec's "no private vehicle needed after purchase"),
  *     requires_commercial_at_purchase TRUE on both.
- *   - Deactivates every other tier (the older seed_tier_system.js set:
- *     Basic ₹99, Premium, Super Premium, and anything else), refusing to
- *     touch the default tier or one with active subscriptions on it — same
- *     safety rule as scripts/map_tiers_to_categories.js.
+ *   - Deactivates every other tier — the older seed_tier_system.js set, any
+ *     stray duplicate not chosen above, and anything else — refusing to
+ *     touch one with active subscriptions on it. `is_default` is cleared on
+ *     every tier except the chosen Basic by _id, not by category, so a
+ *     leftover default flag on a duplicate can never coexist with it.
  *
- * Running this changes what scripts/smoke_vehicle_rule_purchase.mjs expects:
- * that suite tests the *previous* change request's grace-period behaviour on
- * the Middle/Prime tiers this script reuses, and 3 of its checks fail once
- * requires_commercial_and_private is false on them — correctly, since that
- * behaviour no longer applies to these tiers. That is not a regression; it
- * is two different product configurations of the same two tier records. A
- * fresh environment that runs seed_driver_network_tiers.js WITHOUT also
- * running this script keeps the grace-period behaviour and that suite in
- * sync with it.
+ * Running this changes what three other smoke suites expect, all for the same
+ * reason: they test the *previous* change request's grace-period behaviour
+ * (start a countdown when the vehicle-mix rule breaks, downgrade if it's
+ * still broken when it expires) on the Middle/Prime tiers this script
+ * reuses, and requires_commercial_and_private is false on them now, so that
+ * behaviour no longer applies to these tiers at all:
+ *   - scripts/smoke_vehicle_rule_purchase.mjs — 3 checks (grace starting at
+ *     purchase)
+ *   - scripts/smoke_network_notifications.mjs — 2 checks ("Vehicle-rule
+ *     grace warns the driver")
+ *   - scripts/smoke_network_qa_checklist.mjs — 3 checks (grace start /
+ *     downgrade / seat release)
+ * None of this is a regression; it is two different product configurations
+ * of the same tier records. A fresh environment that runs
+ * seed_driver_network_tiers.js WITHOUT also running this script keeps the
+ * grace-period behaviour and all three suites in sync with it.
  *
  * Usage:
  *   node scripts/consolidate_to_basic_prime_elite.js            # apply
@@ -156,38 +175,78 @@ const run = async () => {
     requiredModules.push(module._id);
   }
 
+  const chosenIds = [];
+  let basicTierId = null;
+
   for (const plan of PLANS) {
     const { category, ...fields } = plan;
-    let tier = await SubscriptionTier.findOne({ driver_category: category });
+    const candidates = await SubscriptionTier.find({ driver_category: category });
 
-    if (!tier) {
+    if (candidates.length === 0) {
       console.log(`${DRY_RUN ? 'Would create' : 'Creating'} "${fields.name}" (${category}) — none exists yet`);
       if (!DRY_RUN) {
-        tier = await SubscriptionTier.create({ ...fields, driver_category: category, ride_module_ids: requiredModules, is_active: true });
+        const created = await SubscriptionTier.create({ ...fields, driver_category: category, ride_module_ids: requiredModules, is_active: true });
+        chosenIds.push(String(created._id));
+        if (category === 'lower') basicTierId = String(created._id);
       }
       continue;
     }
 
+    // Rank by active subscribers — whichever tier real drivers are actually
+    // on is the one that must be kept and renamed; deactivating it would
+    // silently change what they're subscribed to. With no subscribers on
+    // either (the common case before this goes live), the first one Mongo
+    // returns is used — harmless, since nothing yet distinguishes them.
+    const ranked = await Promise.all(
+      candidates.map(async (candidate) => ({
+        candidate,
+        inUse: await DriverSubscription.countDocuments({ tier_id: candidate._id, status: 'active' }),
+      })),
+    );
+    ranked.sort((a, b) => b.inUse - a.inUse);
+    const primary = ranked[0].candidate;
+    const duplicates = ranked.slice(1);
+
     console.log(
-      `${DRY_RUN ? 'Would rename' : 'Renaming '} "${tier.name}" -> "${fields.name}" ` +
-        `(₹${tier.price_monthly} -> ₹${fields.price_monthly}, ${category})`,
+      `${DRY_RUN ? 'Would rename' : 'Renaming '} "${primary.name}" -> "${fields.name}" ` +
+        `(₹${primary.price_monthly} -> ₹${fields.price_monthly}, ${category})` +
+        (candidates.length > 1
+          ? ` [chosen from ${candidates.length} tiers sharing this category, ${ranked[0].inUse} active subscriber(s)]`
+          : ''),
     );
     if (!DRY_RUN) {
       await SubscriptionTier.updateOne(
-        { _id: tier._id },
+        { _id: primary._id },
         { $set: { ...fields, ride_module_ids: requiredModules, is_active: true } },
       );
     }
+    chosenIds.push(String(primary._id));
+    if (category === 'lower') basicTierId = String(primary._id);
+
+    for (const { candidate: duplicate, inUse } of duplicates) {
+      if (inUse > 0) {
+        console.log(`  REFUSE "${duplicate.name}" — ${inUse} driver(s) are on it right now (duplicate ${category}-category tier)`);
+        continue;
+      }
+      console.log(`  ${DRY_RUN ? 'would hide' : 'hiding  '} "${duplicate.name}" (duplicate ${category}-category tier, folded into "${fields.name}")`);
+      if (!DRY_RUN) {
+        await SubscriptionTier.updateOne({ _id: duplicate._id }, { $set: { is_active: false, is_default: false } });
+      }
+    }
   }
 
-  // Enforce Basic as the only default.
-  if (!DRY_RUN) {
-    await SubscriptionTier.updateMany({ driver_category: { $ne: 'lower' } }, { $set: { is_default: false } });
+  // Enforce the chosen Basic as the only default — by _id, never by
+  // category, so a leftover default flag on a duplicate handled above (or on
+  // any other tier entirely) can never coexist with it.
+  if (!DRY_RUN && basicTierId) {
+    await SubscriptionTier.updateMany({ _id: { $ne: basicTierId } }, { $set: { is_default: false } });
   }
 
-  // Deactivate every other tier — the older seed_tier_system.js set and any
-  // stray duplicates. Never the default, never one with active subscribers.
-  const others = await SubscriptionTier.find({ driver_category: { $nin: ['lower', 'middle', 'prime'] } });
+  // Deactivate everything that isn't one of the three chosen tiers — the
+  // older seed_tier_system.js set and anything else. Never one with active
+  // subscribers (duplicates sharing lower/middle/prime were already handled
+  // above; this catches tiers with any other category value).
+  const others = await SubscriptionTier.find({ _id: { $nin: chosenIds } });
   for (const tier of others) {
     if (tier.is_default) {
       console.log(`  REFUSE "${tier.name}" — it is the default fallback tier`);
