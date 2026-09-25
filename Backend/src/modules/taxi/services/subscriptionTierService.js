@@ -123,6 +123,24 @@ export const subscriptionTierService = {
       map_icon_asset_url,
       badge_color_hex,
       is_active,
+      // Driver-network fields: previously silently dropped here (they were
+      // never destructured from payload), so a tier created from the admin
+      // panel always landed on the schema's plain defaults — lower category,
+      // no permissions, no vehicle rule — no matter what the admin picked in
+      // the form. `updateTier` had to be used afterwards to actually turn a
+      // new tier into a working Middle/Prime-equivalent plan.
+      driver_category,
+      can_create_rides,
+      can_publish_rides,
+      can_manage_fleet,
+      requires_commercial_and_private,
+      requires_commercial_at_purchase,
+      max_routes,
+      max_fleet_drivers,
+      max_vehicles,
+      customer_lead_contact_fee,
+      driver_lead_contact_fee,
+      customer_ride_accept_fee,
     } = payload;
 
     if (!String(name || '').trim()) throw new ApiError(400, 'Tier name is required');
@@ -147,6 +165,18 @@ export const subscriptionTierService = {
       map_icon_asset_url: String(map_icon_asset_url || '').trim(),
       badge_color_hex: String(badge_color_hex || '#10B981').trim(),
       is_active: is_active !== undefined ? Boolean(is_active) : true,
+      ...(driver_category !== undefined ? { driver_category } : {}),
+      can_create_rides: Boolean(can_create_rides),
+      can_publish_rides: Boolean(can_publish_rides),
+      can_manage_fleet: Boolean(can_manage_fleet),
+      requires_commercial_and_private: Boolean(requires_commercial_and_private),
+      requires_commercial_at_purchase: Boolean(requires_commercial_at_purchase),
+      ...(max_routes !== undefined ? { max_routes: Math.max(0, Number(max_routes)) } : {}),
+      max_fleet_drivers: Math.max(0, Number(max_fleet_drivers || 0)),
+      max_vehicles: Math.max(0, Number(max_vehicles || 0)),
+      customer_lead_contact_fee: Math.max(0, Number(customer_lead_contact_fee || 0)),
+      driver_lead_contact_fee: Math.max(0, Number(driver_lead_contact_fee || 0)),
+      customer_ride_accept_fee: Math.max(0, Number(customer_ride_accept_fee || 0)),
     });
 
     // Enforce Singleton Default Tier
@@ -180,6 +210,27 @@ export const subscriptionTierService = {
     const sanitizedPayload = { ...payload };
     if ('support_channel_type_id' in sanitizedPayload && !sanitizedPayload.support_channel_type_id) {
       sanitizedPayload.support_channel_type_id = null;
+    }
+
+    // With no default and no active subscription, getEffectiveDriverTier
+    // returns null and the driver is skipped in matching entirely — every
+    // Basic-plan driver with no active recharge would simply stop receiving
+    // rides. Unsetting or deactivating the *only* default is how that
+    // happens, so it's blocked here rather than only caught by a startup
+    // check after the fact. Making a *different* tier the default (which
+    // clears this one's flag via "Enforce Singleton Default Tier" below) is
+    // unaffected — this only stops the default from disappearing outright.
+    if (existing.is_default) {
+      const unsettingDefault = sanitizedPayload.is_default === false;
+      const deactivatingDefault = sanitizedPayload.is_active === false;
+      if (unsettingDefault || deactivatingDefault) {
+        throw new ApiError(
+          400,
+          'Set a different tier as the default before unsetting or deactivating this one',
+          null,
+          'DEFAULT_TIER_REQUIRED',
+        );
+      }
     }
 
     const changes = [];
@@ -218,6 +269,15 @@ export const subscriptionTierService = {
   async deleteTier(tierId, adminContext = {}) {
     const existing = await SubscriptionTier.findById(tierId);
     if (!existing) throw new ApiError(404, 'Subscription tier not found');
+
+    if (existing.is_default) {
+      throw new ApiError(
+        400,
+        'Set a different tier as the default before deleting this one',
+        null,
+        'DEFAULT_TIER_REQUIRED',
+      );
+    }
 
     await SubscriptionTier.findByIdAndDelete(tierId);
 

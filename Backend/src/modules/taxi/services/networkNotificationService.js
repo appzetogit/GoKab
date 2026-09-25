@@ -370,3 +370,35 @@ export const notifyVehicleRuleGraceStarted = async ({ driverId, graceEndsAt, day
     data: { type: 'category_grace_started', grace_ends_at: String(graceEndsAt) },
   }).catch(() => {});
 };
+
+/**
+ * A fleet vehicle being approved or rejected had no driver-facing signal at
+ * all (updateFleetVehicle only ever saved the fields) — a driver who added a
+ * vehicle to unlock Prime/Elite had no way to know it was reviewed short of
+ * refreshing the vehicle list and noticing the status changed on its own.
+ */
+export const notifyVehicleStatusChanged = async ({ driverId, vehicleId, status, reason = '' }) => {
+  if (!driverId || !vehicleId) return;
+
+  const normalizedStatus = safe(status, 'pending').toLowerCase();
+  const approved = normalizedStatus === 'approved';
+  const rejected = normalizedStatus === 'rejected';
+  if (!approved && !rejected) return;
+
+  emitToRoom(getDriverRoom(driverId), 'driver:vehicle:status', {
+    vehicle_id: String(vehicleId),
+    status: normalizedStatus,
+    reason,
+  });
+
+  await sendPushNotificationToEntities({
+    driverIds: [String(driverId)],
+    title: approved ? 'Vehicle approved' : 'Vehicle rejected',
+    body: approved
+      ? 'Your added vehicle has been approved and now counts toward your plan.'
+      : reason
+        ? `Your added vehicle was rejected: ${reason}`
+        : 'Your added vehicle was rejected. Check the app for details.',
+    data: { type: 'vehicle_status_changed', vehicle_id: String(vehicleId), status: normalizedStatus, reason },
+  }).catch(() => {});
+};

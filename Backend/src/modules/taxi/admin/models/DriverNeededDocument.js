@@ -27,6 +27,30 @@ const driverNeededDocumentSchema = new mongoose.Schema(
       default: 'individual',
       trim: true,
     },
+    // What this document is *about*, not who uploads it (that's account_type
+    // above — a fleet-hired driver vs an individual). A `document`-type
+    // template with no `applies_to` was being treated as required on every
+    // POST /drivers/fleet/vehicles call, meaning adding a vehicle demanded
+    // the driver's own licence/ID/photo all over again — documents already
+    // collected at registration and unrelated to the vehicle. Only templates
+    // explicitly marked `vehicle` (RC, insurance, ...) apply there now.
+    applies_to: {
+      type: String,
+      enum: ['driver', 'vehicle'],
+      default: 'driver',
+      trim: true,
+    },
+    // '' (default) = required regardless. 'commercial' | 'private' = only
+    // when the driver's chosen vehicle_usage_type matches — e.g. the
+    // Commercial Permit template, which used to be asked of every driver at
+    // registration even though it's meaningless for someone registering a
+    // private vehicle.
+    applies_when_usage_type: {
+      type: String,
+      enum: ['', 'commercial', 'private'],
+      default: '',
+      trim: true,
+    },
     image_type: {
       type: String,
       enum: ['front_back', 'front', 'back', 'image'],

@@ -1994,6 +1994,8 @@ const serializeDriverNeededDocument = (item) => ({
   template_type: normalizeDriverTemplateType(item.template_type),
   name: item.name || '',
   account_type: item.account_type || 'individual',
+  applies_to: item.applies_to === 'vehicle' ? 'vehicle' : 'driver',
+  applies_when_usage_type: ['commercial', 'private'].includes(item.applies_when_usage_type) ? item.applies_when_usage_type : '',
   image_type: item.image_type || 'front_back',
   has_expiry_date: Boolean(item.has_expiry_date),
   has_identify_number: Boolean(item.has_identify_number),
@@ -7178,6 +7180,13 @@ export const updateFleetVehicle = async (id, payload = {}) => {
   const item = await FleetVehicle.findById(id);
   if (!item) throw new ApiError(404, 'Fleet vehicle not found');
 
+  const previousStatus = String(item.status || '').trim().toLowerCase();
+  const nextStatus = payload.status !== undefined ? String(payload.status || 'pending').trim().toLowerCase() : previousStatus;
+
+  if (nextStatus === 'rejected' && !String(payload.reason ?? item.reason ?? '').trim()) {
+    throw new ApiError(400, 'A reason is required to reject a fleet vehicle', null, 'REJECTION_REASON_REQUIRED');
+  }
+
   if (payload.owner_id !== undefined) {
     if (payload.owner_id && !mongoose.isValidObjectId(payload.owner_id)) {
       throw new ApiError(400, 'Invalid owner id');
@@ -7203,7 +7212,41 @@ export const updateFleetVehicle = async (id, payload = {}) => {
   if (payload.reason !== undefined) item.reason = String(payload.reason || '').trim();
   if (payload.active !== undefined) item.active = normalizeBoolean(payload.active);
 
+  // Approving a commercial vehicle that already has its permit on file is the
+  // one moment admin has actually looked at the document — record that as
+  // verified rather than leaving it to a separate, easy-to-forget call to
+  // PATCH /driver-network/vehicles/:vehicleId/usage-type.
+  if (nextStatus === 'approved' && previousStatus !== 'approved' && item.usage_type === 'commercial' && item.documents?.commercial_permit) {
+    item.usage_type_verified = true;
+  }
+
   await item.save();
+
+  if (nextStatus !== previousStatus && (nextStatus === 'approved' || nextStatus === 'rejected')) {
+    const owner = await Owner.findById(item.owner_id).select('_id').lean();
+    const ownerDrivers = owner
+      ? await Driver.find({ owner_id: owner._id, deletedAt: null }).select('_id').lean()
+      : [];
+
+    for (const ownerDriver of ownerDrivers) {
+      const { notifyVehicleStatusChanged } = await import('../../services/networkNotificationService.js');
+      await notifyVehicleStatusChanged({
+        driverId: ownerDriver._id,
+        vehicleId: item._id,
+        status: nextStatus,
+        reason: item.reason || '',
+      }).catch((error) => console.error('[updateFleetVehicle] notification failed:', error.message));
+
+      // Only meaningful while an *ongoing* vehicle-mix rule applies to this
+      // driver (requires_commercial_and_private) — a no-op otherwise. Runs
+      // regardless of approve/reject: a rejection can just as easily be what
+      // breaks the rule as an approval is what fixes it.
+      const { recheckCategoryVehicleRule } = await import('../../services/driverCategoryService.js');
+      await recheckCategoryVehicleRule(ownerDriver._id).catch((error) =>
+        console.error('[updateFleetVehicle] grace recheck failed:', error.message),
+      );
+    }
+  }
 
   const populated = await FleetVehicle.findById(item._id)
     .populate('owner_id', 'company_name owner_name name email mobile')
@@ -9047,6 +9090,7 @@ export const listDriverDocumentUploadFields = async ({ activeOnly = true } = {})
       image_type: item.image_type,
       has_expiry_date: item.has_expiry_date,
       has_identify_number: item.has_identify_number,
+      applies_when_usage_type: item.applies_when_usage_type || '',
     })),
   );
 };
@@ -9135,6 +9179,8 @@ export const listOwnerDocumentUploadFields = async ({ activeOnly = true } = {}) 
       name,
       slug,
       account_type: normalizeDriverAccountType(payload.account_type),
+      applies_to: payload.applies_to === 'vehicle' ? 'vehicle' : 'driver',
+      applies_when_usage_type: ['commercial', 'private'].includes(payload.applies_when_usage_type) ? payload.applies_when_usage_type : '',
       image_type: String(payload.image_type || 'front_back').trim(),
       has_expiry_date: normalizeBoolean(payload.has_expiry_date),
       has_identify_number: normalizeBoolean(payload.has_identify_number),
@@ -9211,6 +9257,14 @@ export const listOwnerDocumentUploadFields = async ({ activeOnly = true } = {}) 
     }
     if (payload.account_type !== undefined) {
       item.account_type = normalizeDriverAccountType(payload.account_type);
+    }
+    if (payload.applies_to !== undefined) {
+      item.applies_to = payload.applies_to === 'vehicle' ? 'vehicle' : 'driver';
+    }
+    if (payload.applies_when_usage_type !== undefined) {
+      item.applies_when_usage_type = ['commercial', 'private'].includes(payload.applies_when_usage_type)
+        ? payload.applies_when_usage_type
+        : '';
     }
     if (payload.image_type !== undefined) {
       item.image_type = String(payload.image_type || 'front_back').trim();

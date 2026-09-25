@@ -339,6 +339,23 @@ const getValidatedServiceLocationCoordinates = (serviceLocation = {}) => {
   }
 };
 
+// Same review-status baseline `updateCurrentDriverDocument` (the re-upload
+// path, driverController.js) has always set — a document from registration
+// had none of this at all, so "My Documents" saw a consistent pending/
+// verified/rejected state only for a document re-uploaded after the fact,
+// never for the one uploaded at signup.
+const PENDING_DOCUMENT_REVIEW_STATE = {
+  status: 'pending',
+  verificationStatus: 'pending',
+  reviewStatus: 'pending',
+  comment: '',
+  remarks: '',
+  reason: '',
+  admin_comment: '',
+  rejection_reason: '',
+  reviewedAt: null,
+};
+
 const normalizeStoredDocument = (value) => {
   if (!value) {
     return null;
@@ -353,6 +370,7 @@ const normalizeStoredDocument = (value) => {
       identify_number: '',
       expiryDate: '',
       expiry_date: '',
+      ...PENDING_DOCUMENT_REVIEW_STATE,
     };
   }
 
@@ -372,6 +390,7 @@ const normalizeStoredDocument = (value) => {
   ).trim();
 
   return {
+    ...PENDING_DOCUMENT_REVIEW_STATE,
     ...value,
     previewUrl: value.previewUrl || value.secureUrl || '',
     uploaded: value.uploaded ?? Boolean(value.secureUrl || value.previewUrl),
@@ -956,14 +975,30 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
     String(session.role || '').toLowerCase() === 'owner'
       ? (await listOwnerNeededDocuments()).filter((item) => item.active !== false)
       : await listDriverNeededDocuments({ activeOnly: true, includeFields: true });
+  // A template scoped to one usage type (e.g. Commercial Permit) must not be
+  // demanded of a driver who registered the other type — asking a
+  // private-vehicle driver for a commercial permit is meaningless, and was
+  // required of everyone before this field existed.
+  const chosenUsageType = String(session.vehicle?.vehicleUsageType || '').trim().toLowerCase();
+  const appliesToChosenUsageType = (appliesWhen) => !appliesWhen || appliesWhen === chosenUsageType;
+
   const requiredDocuments = configuredUploadFields
-    .filter((field) => Boolean(field.required) && matchesDocumentRole(field.account_type, session.role))
+    .filter(
+      (field) =>
+        Boolean(field.required) &&
+        matchesDocumentRole(field.account_type, session.role) &&
+        appliesToChosenUsageType(field.applies_when_usage_type),
+    )
     .map((field) => field.key);
   const missingDocuments = requiredDocuments.filter((key) => !normalizedDocuments?.[key]);
   const missingDocumentDetails = [];
 
   for (const template of configuredTemplates) {
-    if (!matchesDocumentRole(template.account_type, session.role) || !template.is_required) {
+    if (
+      !matchesDocumentRole(template.account_type, session.role) ||
+      !template.is_required ||
+      !appliesToChosenUsageType(template.applies_when_usage_type)
+    ) {
       continue;
     }
 

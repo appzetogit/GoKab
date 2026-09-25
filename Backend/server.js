@@ -53,6 +53,30 @@ if (ownsSingletonRole && Number.isFinite(instanceId) && instanceId > 0) {
 const bootstrap = async () => {
   await connectDatabase();
 
+  // With no default tier, every driver with no active recharge (which is
+  // most of them, most of the time) resolves to `null` in
+  // getEffectiveDriverTier and is silently skipped in matching — not an
+  // error anywhere, just no rides. Nothing enforces a default existing at
+  // write time except updateTier/deleteTier refusing to remove the last one;
+  // this catches the case where it never existed in the first place (a fresh
+  // environment before seeding, or one seeded incorrectly).
+  if (roles.scheduler || roles.subscriptionCron) {
+    try {
+      const { SubscriptionTier } = await import('./src/modules/taxi/admin/models/SubscriptionTier.js');
+      const defaultTier = await SubscriptionTier.findOne({ is_default: true, is_active: true }).select('_id').lean();
+      if (!defaultTier) {
+        console.error(
+          '[server] No active default SubscriptionTier found. Every driver with no active ' +
+          'subscription will be skipped by matching entirely until one tier has ' +
+          'is_default:true and is_active:true. Run scripts/seed_driver_network_tiers.js or set ' +
+          'a default from the admin panel.',
+        );
+      }
+    } catch (error) {
+      console.error('[server] Default-tier check failed:', error.message);
+    }
+  }
+
   const app = createApp();
   const httpServer = createServer(app);
 

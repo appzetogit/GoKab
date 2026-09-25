@@ -172,6 +172,11 @@ const run = async () => {
       name: 'Commercial Permit',
       slug: 'commercial_permit',
       account_type: 'both',
+      applies_to: 'vehicle',
+      // Meaningless for a driver registering a private vehicle — without
+      // this it showed up (and, before is_required was set false, was
+      // demanded) at every registration regardless of what was chosen.
+      applies_when_usage_type: 'commercial',
       image_type: 'image',
       has_expiry_date: true,
       key: 'commercial_permit',
@@ -182,6 +187,12 @@ const run = async () => {
       sort_order: 50,
     });
     console.log('+ Created document template: Commercial Permit');
+  } else if (permitExists.applies_when_usage_type !== 'commercial') {
+    await DriverNeededDocument.updateOne(
+      { _id: permitExists._id },
+      { $set: { applies_when_usage_type: 'commercial', applies_to: 'vehicle' } },
+    );
+    console.log('= Updated document template: Commercial Permit (scoped to commercial vehicles)');
   } else {
     console.log('= Existing document template: Commercial Permit');
   }

@@ -59,6 +59,10 @@ export const vehicleUsageSummary = async (driverOrId, { session = null } = {}) =
   // here (C4: no permit check runs against it), only a fleet vehicle admin has
   // reviewed and flagged `usage_type_verified`.
   let commercialVerified = 0;
+  // A commercial vehicle sitting in `pending` doesn't count toward
+  // eligibility yet (only `approved` does, C3/C6) — but it changes what the
+  // driver should be told: "add a vehicle" is wrong once they already have.
+  let commercialPending = 0;
 
   if (driver.vehicle_usage_type === 'commercial') commercial += 1;
   if (driver.vehicle_usage_type === 'private') privateCount += 1;
@@ -67,13 +71,16 @@ export const vehicleUsageSummary = async (driverOrId, { session = null } = {}) =
     const fleetVehicles = await FleetVehicle.find({
       owner_id: driver.owner_id,
       active: true,
-      status: 'approved',
     })
-      .select('usage_type usage_type_verified')
+      .select('usage_type usage_type_verified status')
       .session(session)
       .lean();
 
     for (const vehicle of fleetVehicles) {
+      if (vehicle.status !== 'approved') {
+        if (vehicle.usage_type === 'commercial' && vehicle.status === 'pending') commercialPending += 1;
+        continue;
+      }
       if (vehicle.usage_type === 'commercial') {
         commercial += 1;
         if (vehicle.usage_type_verified) commercialVerified += 1;
@@ -87,6 +94,7 @@ export const vehicleUsageSummary = async (driverOrId, { session = null } = {}) =
     commercial,
     private: privateCount,
     commercialVerified,
+    commercialPending,
     ok: commercial >= 1 && privateCount >= 1,
   };
 };
@@ -298,10 +306,20 @@ export const checkTierEligibility = async ({ driverId, tierId }) => {
   // vehicle once the plan is actually granted.
   if (tier.requires_commercial_at_purchase) {
     vehicleUsage = await vehicleUsageSummary(driver);
-    if (vehicleUsage.commercial < 1) reasons.push('NEED_COMMERCIAL_VEHICLE');
+    if (vehicleUsage.commercial < 1) {
+      reasons.push('NEED_COMMERCIAL_VEHICLE');
+      // "Add a vehicle" is the wrong instruction once they already have —
+      // this tells the app to say "waiting for admin approval" instead.
+      // Kept alongside NEED_COMMERCIAL_VEHICLE, not in place of it, so a
+      // client that only knows the older code still behaves correctly.
+      if (vehicleUsage.commercialPending > 0) reasons.push('COMMERCIAL_VEHICLE_PENDING_APPROVAL');
+    }
   } else if (tier.requires_commercial_and_private) {
     vehicleUsage = await vehicleUsageSummary(driver);
-    if (vehicleUsage.commercial < 1) reasons.push('NEED_COMMERCIAL_VEHICLE');
+    if (vehicleUsage.commercial < 1) {
+      reasons.push('NEED_COMMERCIAL_VEHICLE');
+      if (vehicleUsage.commercialPending > 0) reasons.push('COMMERCIAL_VEHICLE_PENDING_APPROVAL');
+    }
     if (vehicleUsage.private < 1) reasons.push('NEED_PRIVATE_VEHICLE');
   }
 
@@ -405,6 +423,23 @@ export const applyCategoryFromSubscription = async ({ subscription, session = nu
   });
 
   await notifyCategory({ driverId: driver._id, category, previousCategory, reason: 'subscription_activated' });
+
+  // A plan that grants ride creation or fleet management is useless without
+  // an organisation behind it — POST /fleet/drivers and the fleet list
+  // endpoints all 403 for a driver with no owner_id. This used to only get
+  // created lazily, the first time the driver happened to add a vehicle or
+  // create a network ride; a driver who bought Prime and immediately tried
+  // to add a fleet driver hit a 403 for a reason nothing on screen explained.
+  if (tier.can_manage_fleet || tier.can_create_rides) {
+    try {
+      const { ensureOrganizationForPrime } = await import('../driver/services/networkRideService.js');
+      await ensureOrganizationForPrime(driver);
+    } catch (error) {
+      // Never fail the purchase over this — the lazy-creation fallback still
+      // covers it on the driver's next fleet action.
+      console.error('[driverCategoryService] Failed to create organisation on purchase:', error.message);
+    }
+  }
 
   // A commercial-only purchase (requires_commercial_at_purchase) leaves the
   // private vehicle for later. Starting the grace window here — rather than

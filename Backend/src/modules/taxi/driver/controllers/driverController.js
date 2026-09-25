@@ -170,9 +170,24 @@ const normalizeBusPassengerPhone = (value = "") =>
 const normalizeEmail = (value = "") => String(value || "").trim().toLowerCase();
 const BUS_DRIVER_NAME_REGEX = /^[A-Za-z]+(?:[ .'-][A-Za-z]+)*$/;
 
-const normalizeFleetVehicleDocumentValue = (value) => {
+const DATA_URL_PATTERN = /^data:[^;]+;base64,/i;
+
+const normalizeFleetVehicleDocumentValue = async (documentKey, value) => {
   if (!value) {
     return null;
+  }
+
+  // A data URL (what the registration screen's image picker sends) was
+  // stored as-is — the field ended up holding a multi-megabyte base64 string
+  // instead of a hosted image URL, unlike every registration document, which
+  // goes through Cloudinary via uploadRegistrationDocument. Route the same
+  // way here; an already-hosted URL or {secureUrl} object (what most fleet
+  // vehicle documents actually send today, including every existing test
+  // fixture) is left exactly as before.
+  const dataUrl = typeof value === "string" ? value : value?.dataUrl;
+  if (typeof dataUrl === "string" && DATA_URL_PATTERN.test(dataUrl)) {
+    const uploaded = await uploadRegistrationDocument(documentKey, value);
+    return uploaded ? { ...uploaded, uploaded: true } : null;
   }
 
   if (typeof value === "string") {
@@ -216,12 +231,12 @@ const normalizeFleetVehicleDocumentValue = (value) => {
   };
 };
 
-const normalizeFleetVehicleDocuments = (documents = {}, rcFile = "") => {
+const normalizeFleetVehicleDocuments = async (documents = {}, rcFile = "") => {
   const normalizedDocuments = {};
 
   if (documents && typeof documents === "object" && !Array.isArray(documents)) {
     for (const [key, value] of Object.entries(documents)) {
-      const normalizedValue = normalizeFleetVehicleDocumentValue(value);
+      const normalizedValue = await normalizeFleetVehicleDocumentValue(String(key).trim(), value);
       if (normalizedValue) {
         normalizedDocuments[String(key).trim()] = normalizedValue;
       }
@@ -230,7 +245,7 @@ const normalizeFleetVehicleDocuments = (documents = {}, rcFile = "") => {
 
   const normalizedRcFile = String(rcFile || "").trim();
   if (normalizedRcFile && !normalizedDocuments.rc) {
-    normalizedDocuments.rc = normalizeFleetVehicleDocumentValue(normalizedRcFile);
+    normalizedDocuments.rc = await normalizeFleetVehicleDocumentValue("rc", normalizedRcFile);
   }
 
   return normalizedDocuments;
@@ -7205,7 +7220,8 @@ export const getDriverDocumentTemplates = async (_req, res) => {
     requestedRole === "fleet" ||
     requestedRole === "owner_vehicle" ||
     requestedRole === "owner-vehicle";
-  const results = isFleetRequest
+  const requestedUsageType = String(_req.query?.usage_type || "").trim().toLowerCase();
+  let results = isFleetRequest
     ? await listDriverNeededDocuments({
         activeOnly: true,
         includeFields: true,
@@ -7216,6 +7232,18 @@ export const getDriverDocumentTemplates = async (_req, res) => {
         activeOnly: true,
         includeFields: true,
       });
+
+  // The Commercial Permit template (and any other document scoped the same
+  // way) previously showed up for every driver at registration regardless of
+  // which vehicle type they picked — meaningless, and confusing, for someone
+  // registering a private vehicle. `?usage_type=commercial|private` filters
+  // it; omitted, nothing changes (every template still shows, same as
+  // before) so existing callers that don't send it are unaffected.
+  if (!isOwnerRequest && (requestedUsageType === "commercial" || requestedUsageType === "private")) {
+    results = results.filter(
+      (item) => !item.applies_when_usage_type || item.applies_when_usage_type === requestedUsageType,
+    );
+  }
 
   res.json({
     success: true,
@@ -7475,17 +7503,25 @@ export const addOwnerVehicle = async (req, res) => {
 
   const normalizedPlate = String(number).trim().toUpperCase();
 
-  const normalizedDocuments = normalizeFleetVehicleDocuments(documents, rcFile);
+  const normalizedDocuments = await normalizeFleetVehicleDocuments(documents, rcFile);
   const configuredFleetDocuments = await listDriverNeededDocuments({
     activeOnly: true,
     includeFields: true,
   });
-  const requiredFleetDocumentKeys = configuredFleetDocuments.flatMap((template) =>
-    (Array.isArray(template.fields) ? template.fields : [])
-      .filter((field) => (field.required ?? template.is_required ?? false))
-      .map((field) => String(field.key || "").trim())
-      .filter(Boolean),
-  );
+  // Only templates explicitly scoped to the vehicle (RC, insurance, ...) —
+  // this used to be every active *driver* document template (licence, ID,
+  // photo), which the driver already supplied at registration and has
+  // nothing to do with the vehicle being added. That made "Add Vehicle"
+  // unusable for any driver whose deployment requires even one driver
+  // document, independent of the commercial-permit check below.
+  const requiredFleetDocumentKeys = configuredFleetDocuments
+    .filter((template) => template.applies_to === "vehicle")
+    .flatMap((template) =>
+      (Array.isArray(template.fields) ? template.fields : [])
+        .filter((field) => (field.required ?? template.is_required ?? false))
+        .map((field) => String(field.key || "").trim())
+        .filter(Boolean),
+    );
   const missingFleetDocuments = requiredFleetDocumentKeys.filter(
     (key) => !normalizedDocuments[key],
   );
@@ -7594,11 +7630,13 @@ export const addOwnerVehicle = async (req, res) => {
 export const getOwnerFleetVehicles = async (req, res) => {
   const owner = await resolveAuthenticatedOwner(req);
 
+  // Any approved driver can open an organisation now (addOwnerVehicle no
+  // longer gates on Middle/Prime), so "no organisation yet" is a normal,
+  // reachable state for a driver who simply hasn't added a vehicle yet — not
+  // an access-control failure. An empty list is the correct answer; a 403
+  // here reads as "you're not allowed", which stopped being true.
   if (!owner?._id) {
-    throw new ApiError(
-      403,
-      "Fleet vehicle access is only available for owner accounts",
-    );
+    return res.json({ success: true, data: { results: [] } });
   }
 
   const vehicles = await FleetVehicle.find({
@@ -7728,7 +7766,7 @@ export const updateOwnerFleetVehicle = async (req, res) => {
     req.body?.vehicleColor || req.body?.color || req.body?.car_color || "",
   ).trim();
   const rcFile = String(req.body?.rcFile || "").trim();
-  const nextDocuments = normalizeFleetVehicleDocuments(
+  const nextDocuments = await normalizeFleetVehicleDocuments(
     req.body?.documents || {},
     rcFile ||
       req.body?.documents?.rc ||
@@ -7874,11 +7912,10 @@ export const deleteOwnerFleetVehicle = async (req, res) => {
 export const getOwnerFleetDrivers = async (req, res) => {
   const owner = await resolveAuthenticatedOwner(req);
 
+  // See getOwnerFleetVehicles just above: no organisation yet is a normal
+  // state for any approved driver now, not an access-control failure.
   if (!owner?._id) {
-    throw new ApiError(
-      403,
-      "Fleet driver access is only available for owner accounts",
-    );
+    return res.json({ success: true, data: { results: [] } });
   }
 
   const drivers = await Driver.find({ owner_id: owner._id, deletedAt: null })

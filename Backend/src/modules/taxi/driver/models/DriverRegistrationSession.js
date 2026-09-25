@@ -68,6 +68,14 @@ const driverRegistrationSessionSchema = new mongoose.Schema(
       serviceCategories: { type: [String], default: [] },
       locationId: { type: String, default: '' },
       locationName: { type: String, default: '' },
+      // Both of these were being assigned onto `session.vehicle` in
+      // onboardingService.js without ever being declared here. Mongoose's
+      // default strict mode drops any key a schema doesn't declare on save —
+      // silently, no error — so every driver's `vehicle_usage_type` came out
+      // as '' regardless of what they chose at registration, and the full
+      // service-location snapshot (currency, timezone, coordinates) never
+      // reached the session either.
+      serviceLocation: { type: mongoose.Schema.Types.Mixed, default: null },
       vehicleTypeId: { type: String, default: '' },
       make: { type: String, default: '' },
       model: { type: String, default: '' },
@@ -79,6 +87,7 @@ const driverRegistrationSessionSchema = new mongoose.Schema(
       city: { type: String, default: '' },
       postalCode: { type: String, default: '' },
       taxNumber: { type: String, default: '' },
+      vehicleUsageType: { type: String, enum: ['commercial', 'private', ''], default: '' },
       customFields: {
         type: mongoose.Schema.Types.Mixed,
         default: {},
