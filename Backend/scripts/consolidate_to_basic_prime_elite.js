@@ -176,6 +176,21 @@ const run = async () => {
   }
 
   const chosenIds = [];
+  // Every tier this loop has already made a decision about — the 3 chosen
+  // primaries AND every same-category duplicate folded into one of them.
+  // The later "others" pass must skip all of these, not just the primaries:
+  // a duplicate is a decided case (fold into its primary), not an unrelated
+  // tier for that pass to independently re-judge. Missing this was a second
+  // bug from the same root cause as the first — a duplicate that happened to
+  // be the current default got a "would hide" here and a contradictory
+  // "REFUSE ... it is the default fallback tier" from the other pass, purely
+  // because dry-run mode can't see its own hypothetical write when the next
+  // pass re-reads the database. The intended effect (default moves from the
+  // old tier to the newly chosen one) is genuinely safe here — it's the
+  // *replacement* is_default assignment below that makes it so, not a
+  // coincidence — but the double-handling made that impossible to see in
+  // the output.
+  const handledIds = [];
   let basicTierId = null;
 
   for (const plan of PLANS) {
@@ -187,6 +202,7 @@ const run = async () => {
       if (!DRY_RUN) {
         const created = await SubscriptionTier.create({ ...fields, driver_category: category, ride_module_ids: requiredModules, is_active: true });
         chosenIds.push(String(created._id));
+        handledIds.push(String(created._id));
         if (category === 'lower') basicTierId = String(created._id);
       }
       continue;
@@ -221,14 +237,25 @@ const run = async () => {
       );
     }
     chosenIds.push(String(primary._id));
+    handledIds.push(String(primary._id));
     if (category === 'lower') basicTierId = String(primary._id);
 
     for (const { candidate: duplicate, inUse } of duplicates) {
+      handledIds.push(String(duplicate._id));
       if (inUse > 0) {
         console.log(`  REFUSE "${duplicate.name}" — ${inUse} driver(s) are on it right now (duplicate ${category}-category tier)`);
         continue;
       }
-      console.log(`  ${DRY_RUN ? 'would hide' : 'hiding  '} "${duplicate.name}" (duplicate ${category}-category tier, folded into "${fields.name}")`);
+      // A duplicate that happens to be the current default is fine to
+      // demote here specifically — this same pass is establishing a new
+      // default for this exact category (the chosen primary above), so the
+      // old flag isn't being dropped, it's being handed off. The generic
+      // "refuse to touch the default" rule below is for a tier this script
+      // has no replacement default lined up for.
+      console.log(
+        `  ${DRY_RUN ? 'would hide' : 'hiding  '} "${duplicate.name}" (duplicate ${category}-category tier, folded into "${fields.name}")` +
+          (duplicate.is_default ? ' — was the default, replaced by the tier above' : ''),
+      );
       if (!DRY_RUN) {
         await SubscriptionTier.updateOne({ _id: duplicate._id }, { $set: { is_active: false, is_default: false } });
       }
@@ -242,11 +269,15 @@ const run = async () => {
     await SubscriptionTier.updateMany({ _id: { $ne: basicTierId } }, { $set: { is_default: false } });
   }
 
-  // Deactivate everything that isn't one of the three chosen tiers — the
-  // older seed_tier_system.js set and anything else. Never one with active
-  // subscribers (duplicates sharing lower/middle/prime were already handled
-  // above; this catches tiers with any other category value).
-  const others = await SubscriptionTier.find({ _id: { $nin: chosenIds } });
+  // Deactivate everything not already decided above — genuinely unrelated
+  // tiers only (some other category value entirely). Every duplicate that
+  // shared lower/middle/prime with a chosen tier was already handled in the
+  // loop above; excluding only `chosenIds` here (instead of `handledIds`)
+  // used to let this pass re-examine those same duplicates with no memory of
+  // why they were already being hidden, producing a second, contradictory
+  // "REFUSE ... it is the default fallback tier" for a duplicate the loop
+  // above had already decided to fold in.
+  const others = await SubscriptionTier.find({ _id: { $nin: handledIds } });
   for (const tier of others) {
     if (tier.is_default) {
       console.log(`  REFUSE "${tier.name}" — it is the default fallback tier`);
