@@ -141,6 +141,7 @@ const run = async () => {
     method: 'POST',
     token: rameshToken,
     body: {
+      vehicleTypeId: new mongoose.Types.ObjectId(),
       make: 'Maruti',
       model: 'Ertiga',
       number: 'MP09TEST01',
@@ -159,6 +160,7 @@ const run = async () => {
     method: 'POST',
     token: rameshToken,
     body: {
+      vehicleTypeId: new mongoose.Types.ObjectId(),
       make: 'Maruti',
       model: 'Ertiga',
       number: 'MP09TEST01',
@@ -173,6 +175,7 @@ const run = async () => {
     method: 'POST',
     token: rameshToken,
     body: {
+      vehicleTypeId: new mongoose.Types.ObjectId(),
       make: 'Maruti',
       model: 'Alto',
       number: 'MP09TEST02',

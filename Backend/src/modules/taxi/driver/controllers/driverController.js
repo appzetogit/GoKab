@@ -1851,6 +1851,7 @@ const serializeOwnerFleetAssignedDriver = (driver = null) =>
         name: String(driver.name || "").trim(),
         phone: String(driver.phone || "").trim(),
         vehicleNumber: String(driver.vehicleNumber || "").trim(),
+        isOnRide: Boolean(driver.isOnRide),
         zone: serializeDriverZone(driver.zoneId),
       }
     : null;
@@ -7461,6 +7462,73 @@ const findMissingDocuments = (templates, documents = {}) =>
     )
     .filter((key) => !documents?.[key]);
 
+// Same rule as listFleetDriverDocumentTemplates, but for the vehicle side,
+// and additionally scoped to the vehicle's own usage type — a template
+// flagged applies_when_usage_type: 'commercial' has no business being
+// demanded from a private vehicle (the app never even shows that upload
+// slot for one).
+const listVehicleDocumentTemplates = async (usageType) => {
+  const templates = await listDriverNeededDocuments({
+    activeOnly: true,
+    includeFields: true,
+  });
+
+  return templates
+    .filter((template) => template.applies_to === "vehicle")
+    .filter(
+      (template) =>
+        !template.applies_when_usage_type || template.applies_when_usage_type === usageType,
+    );
+};
+
+// A vehicle's number plate must be unique across every owner's active fleet,
+// not just this one — two different organisations claiming the same plate is
+// always a mistake, never a coincidence worth allowing.
+const assertPlateAvailable = async ({ plate, excludeId = null }) => {
+  const clash = await FleetVehicle.findOne({
+    license_plate_number: plate,
+    active: true,
+    ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+  })
+    .select("owner_id")
+    .lean();
+
+  if (clash) {
+    throw new ApiError(
+      409,
+      "This number plate is already registered",
+      null,
+      "PLATE_ALREADY_REGISTERED",
+    );
+  }
+};
+
+// The same mapping createOwnerFleetDriver/updateOwnerFleetDriver already use
+// when assigning a vehicle to a driver — reused here so editing the vehicle
+// (a new plate, a different type) doesn't leave the driver's copy stale.
+const syncAssignedDriverVehicle = async (vehicle) => {
+  const kind = normalizeOwnerFleetVehicleKind(vehicle.vehicle_type_id);
+  await Driver.updateMany(
+    { assignedFleetVehicleId: vehicle._id, deletedAt: null },
+    {
+      $set: {
+        vehicleTypeId: vehicle.vehicle_type_id?._id || null,
+        vehicleType: kind,
+        vehicleIconType: vehicle.vehicle_type_id?.icon_types || kind,
+        vehicleMake: vehicle.car_brand,
+        vehicleModel: vehicle.car_model,
+        vehicleNumber: vehicle.license_plate_number,
+        vehicleColor: vehicle.car_color,
+      },
+    },
+  );
+};
+
+const findAssignedDriver = (ownerId, vehicleId) =>
+  Driver.findOne({ owner_id: ownerId, assignedFleetVehicleId: vehicleId, deletedAt: null })
+    .select("name phone isOnRide")
+    .lean();
+
 export const addOwnerVehicle = async (req, res) => {
   let owner = await resolveAuthenticatedOwner(req);
   let driverPermissions = null;
@@ -7522,56 +7590,51 @@ export const addOwnerVehicle = async (req, res) => {
   const { vehicleTypeId, make, model, number, color, rcFile, documents, usage_type: usageType } =
     req.body;
 
+  if (!vehicleTypeId || !mongoose.isValidObjectId(vehicleTypeId)) {
+    throw new ApiError(400, "A valid vehicle type is required", null, "FIELD_REQUIRED");
+  }
+
   if (!make?.trim()) {
-    throw new ApiError(400, "Car brand/make is required");
+    throw new ApiError(400, "Car brand/make is required", null, "FIELD_REQUIRED");
   }
 
   const normalizedUsageType = normalizeVehicleUsageType(usageType);
 
   if (!model?.trim()) {
-    throw new ApiError(400, "Car model is required");
+    throw new ApiError(400, "Car model is required", null, "FIELD_REQUIRED");
   }
 
   if (!number?.trim()) {
-    throw new ApiError(400, "License plate number is required");
+    throw new ApiError(400, "License plate number is required", null, "FIELD_REQUIRED");
   }
 
   if (!color?.trim()) {
-    throw new ApiError(400, "Car color is required");
+    throw new ApiError(400, "Car color is required", null, "FIELD_REQUIRED");
   }
 
   const normalizedPlate = String(number).trim().toUpperCase();
 
-  const normalizedDocuments = await normalizeFleetVehicleDocuments(documents, rcFile);
-  const configuredFleetDocuments = await listDriverNeededDocuments({
-    activeOnly: true,
-    includeFields: true,
-  });
-  // Only templates explicitly scoped to the vehicle (RC, insurance, ...) —
-  // this used to be every active *driver* document template (licence, ID,
-  // photo), which the driver already supplied at registration and has
-  // nothing to do with the vehicle being added. That made "Add Vehicle"
-  // unusable for any driver whose deployment requires even one driver
-  // document, independent of the commercial-permit check below.
-  const requiredFleetVehicleTemplates = configuredFleetDocuments.filter(
-    (template) => template.applies_to === "vehicle",
-  );
-  const missingFleetDocuments = findMissingDocuments(
-    requiredFleetVehicleTemplates,
-    normalizedDocuments,
-  );
+  await assertPlateAvailable({ plate: normalizedPlate });
+
+  // Checked against the raw, not-yet-uploaded documents map — a request
+  // that's missing a required document must fail before anything reaches
+  // Cloudinary, not after leaving an orphaned upload behind.
+  const requiredVehicleTemplates = await listVehicleDocumentTemplates(normalizedUsageType);
+  const missingFleetDocuments = findMissingDocuments(requiredVehicleTemplates, documents);
 
   if (missingFleetDocuments.length > 0) {
     throw new ApiError(
       400,
-      `Missing required fleet documents: ${missingFleetDocuments.join(", ")}`,
+      `Missing required documents: ${missingFleetDocuments.join(", ")}`,
+      { missing: missingFleetDocuments },
+      "DOCUMENTS_REQUIRED",
     );
   }
 
   // A commercial vehicle is what unlocks the Prime/Middle categories, so the
   // permit that proves it is commercial has to be supplied up front — admin
   // still verifies it before `usage_type_verified` is set.
-  if (normalizedUsageType === "commercial" && !normalizedDocuments[COMMERCIAL_PERMIT_KEY]) {
+  if (normalizedUsageType === "commercial" && !documents?.[COMMERCIAL_PERMIT_KEY]) {
     throw new ApiError(
       400,
       "A commercial permit document is required for a commercial vehicle",
@@ -7580,18 +7643,7 @@ export const addOwnerVehicle = async (req, res) => {
     );
   }
 
-  // Check for duplicate license plate for this owner
-  const existing = await FleetVehicle.findOne({
-    owner_id: owner._id,
-    license_plate_number: normalizedPlate,
-  }).lean();
-
-  if (existing) {
-    throw new ApiError(
-      409,
-      "Fleet vehicle with this license plate already exists for this owner",
-    );
-  }
+  const normalizedDocuments = await normalizeFleetVehicleDocuments(documents, rcFile);
 
   // Get service location from owner or use first available
   let serviceLocationId = owner.service_location_id;
@@ -7686,7 +7738,7 @@ export const getOwnerFleetVehicles = async (req, res) => {
     assignedFleetVehicleId: { $ne: null },
     deletedAt: null,
   })
-    .select("name phone vehicleNumber assignedFleetVehicleId zoneId")
+    .select("name phone vehicleNumber assignedFleetVehicleId zoneId isOnRide")
     .populate("zoneId", "name")
     .lean();
   const assignedDriverMap = new Map(
@@ -7716,6 +7768,11 @@ export const getOwnerFleetVehicles = async (req, res) => {
         status: vehicle.status || "pending",
         reason: vehicle.reason || "",
         documents: vehicle.documents || {},
+        documents_summary: Object.entries(vehicle.documents || {}).map(([key, value]) => ({
+          key,
+          uploaded: Boolean(value?.uploaded ?? true),
+          previewUrl: value?.previewUrl || value?.secureUrl || "",
+        })),
         rc_document:
           vehicle.documents?.rc ||
           vehicle.documents?.document ||
@@ -7781,6 +7838,19 @@ export const updateOwnerFleetVehicle = async (req, res) => {
     throw new ApiError(404, "Fleet vehicle not found");
   }
 
+  // Editing the vehicle a driver is mid-trip in (a plate correction, a type
+  // change) is exactly the kind of change that shouldn't land while they're
+  // out on the road with it.
+  const assignedDriver = await findAssignedDriver(owner._id, vehicle._id);
+  if (assignedDriver?.isOnRide) {
+    throw new ApiError(
+      409,
+      "This vehicle is on a trip right now. Edit it after the trip ends.",
+      null,
+      "VEHICLE_ON_TRIP",
+    );
+  }
+
   const vehicleTypeId =
     req.body?.vehicleTypeId || req.body?.vehicle_type_id || null;
   const make = String(
@@ -7801,58 +7871,72 @@ export const updateOwnerFleetVehicle = async (req, res) => {
     req.body?.vehicleColor || req.body?.color || req.body?.car_color || "",
   ).trim();
   const rcFile = String(req.body?.rcFile || "").trim();
-  const nextDocuments = await normalizeFleetVehicleDocuments(
-    req.body?.documents || {},
-    rcFile ||
-      req.body?.documents?.rc ||
-      req.body?.document ||
-      req.body?.file ||
-      "",
-  );
+  const rawDocuments = req.body?.documents || {};
 
   if (!vehicleTypeId || !mongoose.isValidObjectId(vehicleTypeId)) {
-    throw new ApiError(400, "A valid vehicle type is required");
+    throw new ApiError(400, "A valid vehicle type is required", null, "FIELD_REQUIRED");
   }
 
   if (!make) {
-    throw new ApiError(400, "Car brand/make is required");
+    throw new ApiError(400, "Car brand/make is required", null, "FIELD_REQUIRED");
   }
 
   if (!model) {
-    throw new ApiError(400, "Car model is required");
+    throw new ApiError(400, "Car model is required", null, "FIELD_REQUIRED");
   }
 
   if (!number) {
-    throw new ApiError(400, "License plate number is required");
+    throw new ApiError(400, "License plate number is required", null, "FIELD_REQUIRED");
   }
 
   if (!color) {
-    throw new ApiError(400, "Car color is required");
+    throw new ApiError(400, "Car color is required", null, "FIELD_REQUIRED");
   }
 
-  const duplicate = await FleetVehicle.findOne({
-    owner_id: owner._id,
-    license_plate_number: number,
-    _id: { $ne: vehicle._id },
-  }).lean();
+  await assertPlateAvailable({ plate: number, excludeId: vehicle._id });
 
-  if (duplicate) {
+  // Optional on update so existing clients that don't send it keep working;
+  // changing it re-opens verification because the permit has to be re-checked.
+  const nextUsageType = normalizeVehicleUsageType(req.body?.usage_type, {
+    required: false,
+  });
+
+  // Checked against the raw documents map (and what's already stored) before
+  // anything new gets uploaded — same reasoning as addOwnerVehicle.
+  const switchingToCommercial = nextUsageType === "commercial" && nextUsageType !== vehicle.usage_type;
+  const hasCommercialPermit = Boolean(
+    vehicle.documents?.[COMMERCIAL_PERMIT_KEY] || rawDocuments?.[COMMERCIAL_PERMIT_KEY],
+  );
+  if (switchingToCommercial && !hasCommercialPermit) {
     throw new ApiError(
-      409,
-      "Fleet vehicle with this license plate already exists for this owner",
+      400,
+      "A commercial permit document is required for a commercial vehicle",
+      { required_document: COMMERCIAL_PERMIT_KEY },
+      "COMMERCIAL_PERMIT_REQUIRED",
     );
   }
+
+  const nextDocuments = await normalizeFleetVehicleDocuments(
+    rawDocuments,
+    rcFile || rawDocuments?.rc || req.body?.document || req.body?.file || "",
+  );
+
+  // Snapshot before mutating: a plate/type/usage/document change on an
+  // already-approved vehicle means admin approved something that no longer
+  // describes this vehicle, so it has to go back through verification. Make,
+  // model and colour are cosmetic and don't trigger this.
+  const wasApproved = String(vehicle.status || "").toLowerCase() === "approved";
+  const materialChange =
+    String(vehicle.vehicle_type_id || "") !== String(vehicleTypeId) ||
+    vehicle.license_plate_number !== number ||
+    (nextUsageType && nextUsageType !== vehicle.usage_type) ||
+    Object.keys(nextDocuments).length > 0;
 
   vehicle.vehicle_type_id = vehicleTypeId;
   vehicle.car_brand = make;
   vehicle.car_model = model;
   vehicle.license_plate_number = number;
   vehicle.car_color = color;
-  // Optional on update so existing clients that don't send it keep working;
-  // changing it re-opens verification because the permit has to be re-checked.
-  const nextUsageType = normalizeVehicleUsageType(req.body?.usage_type, {
-    required: false,
-  });
   if (nextUsageType && nextUsageType !== vehicle.usage_type) {
     vehicle.usage_type = nextUsageType;
     vehicle.usage_type_verified = false;
@@ -7867,14 +7951,25 @@ export const updateOwnerFleetVehicle = async (req, res) => {
   if (String(vehicle.status || "").toLowerCase() === "rejected") {
     vehicle.status = "pending";
     vehicle.reason = "";
+  } else if (wasApproved && materialChange) {
+    vehicle.status = "pending";
+    vehicle.reason = "";
   }
 
   await vehicle.save();
-  await recheckOwnerFleetCategoryRule(owner._id);
 
   const populated = await FleetVehicle.findById(vehicle._id)
     .populate("vehicle_type_id", "name type_name transport_type icon_types")
     .lean();
+
+  // The driver's own copy of the vehicle (make/model/plate/colour) mustn't go
+  // stale the moment the owner edits it here.
+  await syncAssignedDriverVehicle(populated);
+  // A material change can be exactly what breaks the Prime/Middle
+  // commercial+private rule for this fleet (e.g. the vehicle that used to
+  // satisfy it just went back to pending) — this starts the grace window
+  // rather than downgrading on the spot, same as add/delete.
+  await recheckOwnerFleetCategoryRule(owner._id);
 
   res.json({
     success: true,
@@ -7922,8 +8017,13 @@ export const deleteOwnerFleetVehicle = async (req, res) => {
     );
   }
 
+  const vehicleId = String(req.params?.vehicleId || "").trim();
+  if (!mongoose.isValidObjectId(vehicleId)) {
+    throw new ApiError(400, "A valid vehicle id is required", null, "FIELD_REQUIRED");
+  }
+
   const vehicle = await FleetVehicle.findOne({
-    _id: req.params.vehicleId,
+    _id: vehicleId,
     owner_id: owner._id,
   });
 
@@ -7932,20 +8032,16 @@ export const deleteOwnerFleetVehicle = async (req, res) => {
   }
 
   // A driver pointing at a vehicle that no longer exists is worse than
-  // refusing the delete — reassign or remove the driver first.
-  const assignedDriver = await Driver.findOne({
-    owner_id: owner._id,
-    assignedFleetVehicleId: vehicle._id,
-    deletedAt: null,
-  })
-    .select("name phone")
-    .lean();
+  // refusing the delete — reassign or remove the driver first. This also
+  // covers a driver currently on a trip in it, since they're still assigned.
+  const assignedDriver = await findAssignedDriver(owner._id, vehicle._id);
 
   if (assignedDriver) {
+    const driverName = assignedDriver.name || assignedDriver.phone || "a driver";
     throw new ApiError(
       409,
-      `Vehicle is assigned to ${assignedDriver.name || assignedDriver.phone || "a driver"}. Reassign or remove the driver first.`,
-      null,
+      `Vehicle is assigned to ${driverName}. Assign ${driverName} another vehicle or remove the driver first.`,
+      { driver_id: String(assignedDriver._id), driver_name: driverName },
       "VEHICLE_ASSIGNED",
     );
   }

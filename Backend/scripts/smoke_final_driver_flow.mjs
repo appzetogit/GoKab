@@ -162,7 +162,7 @@ const run = async () => {
   const addVehicleResult = await api('/drivers/fleet/vehicles', {
     method: 'POST',
     token: kavitaToken,
-    body: { make: 'Maruti', model: 'Alto', number: 'MP09FF0003', color: 'White', usage_type: 'private', documents: {} },
+    body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Maruti', model: 'Alto', number: 'MP09FF0003', color: 'White', usage_type: 'private', documents: {} },
   });
   check(
     'Adding a private vehicle with no documents succeeds (no driver-identity documents demanded)',
@@ -215,6 +215,7 @@ const run = async () => {
     method: 'POST',
     token: privateOnlyToken,
     body: {
+      vehicleTypeId: new mongoose.Types.ObjectId(),
       make: 'Tata', model: 'Ace', number: 'MP09FF0005', color: 'Blue', usage_type: 'commercial',
       documents: { rc: 'https://example.test/rc.jpg', commercial_permit: 'https://example.test/permit.jpg' },
     },

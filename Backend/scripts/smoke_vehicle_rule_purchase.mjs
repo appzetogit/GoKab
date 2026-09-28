@@ -152,6 +152,7 @@ const run = async () => {
       method: 'POST',
       token,
       body: {
+        vehicleTypeId: new mongoose.Types.ObjectId(),
         make: 'Maruti',
         model: 'Ertiga',
         number: plate,

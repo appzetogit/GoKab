@@ -173,7 +173,7 @@ const run = async () => {
     method: 'POST',
     token: primeToken,
     body: {
-      vehicleTypeId: null,
+      vehicleTypeId: new mongoose.Types.ObjectId(),
       make: 'Maruti',
       model: 'Dzire',
       number: 'MP09AB1111',
@@ -265,7 +265,7 @@ const run = async () => {
   const secondVehicle = await api('/drivers/fleet/vehicles', {
     method: 'POST',
     token: primeToken,
-    body: { vehicleTypeId: null, make: 'Hyundai', model: 'Aura', number: 'MP09EF3333', color: 'Red', usage_type: 'private', documents: {} },
+    body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Hyundai', model: 'Aura', number: 'MP09EF3333', color: 'Red', usage_type: 'private', documents: {} },
   });
   const secondVehicleId = secondVehicle.json?.data?.id;
   const conflictPhone = await api('/drivers/fleet/drivers', {
@@ -283,7 +283,7 @@ const run = async () => {
   const lowerVehicle = await api('/drivers/fleet/vehicles', {
     method: 'POST',
     token: lowerToken,
-    body: { vehicleTypeId: null, make: 'Maruti', model: 'Alto', number: 'MP09GH4444', color: 'Grey', usage_type: 'private', documents: {} },
+    body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Maruti', model: 'Alto', number: 'MP09GH4444', color: 'Grey', usage_type: 'private', documents: {} },
   });
   const lowerVehicleId = lowerVehicle.json?.data?.id;
   const notAllowed = await api('/drivers/fleet/drivers', {
