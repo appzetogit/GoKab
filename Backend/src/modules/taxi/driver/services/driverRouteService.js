@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import simplify from 'simplify-js';
 import { ApiError } from '../../../../utils/ApiError.js';
 import { normalizePoint, polylineLengthMeters } from '../../../../utils/geo.js';
@@ -136,6 +137,50 @@ const simplifyPath = (coordinates) => {
   return simplified.length > MAX_PATH_POINTS ? simplified.slice(0, MAX_PATH_POINTS) : simplified;
 };
 
+// Malformed or malicious ids must not reach a Mongoose cast and become an
+// unhandled 500 — the caller only ever sees "not found" either way.
+const assertRouteId = (routeId) => {
+  if (!mongoose.isValidObjectId(String(routeId || ''))) {
+    throw new ApiError(404, 'Route not found', null, 'ROUTE_NOT_FOUND');
+  }
+};
+
+const normalizeCorridorKm = (value, fallback) => {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+
+  const km = Number(value);
+  if (!Number.isFinite(km) || km < 1 || km > 50) {
+    throw new ApiError(422, 'Corridor width must be between 1 and 50 km', null, 'INVALID_CORRIDOR');
+  }
+
+  return Math.round(km);
+};
+
+// `max_routes: 0` means "not included in this plan" (unlike vehicles, where 0
+// means unlimited) — distinct from ROUTE_LIMIT_REACHED, which is for a plan
+// that allows routes but the driver has used them all up.
+const assertRoutesInPlan = (permissions) => {
+  if (!permissions.max_routes) {
+    throw new ApiError(403, 'Routes are not included in your current plan', null, 'ROUTES_NOT_IN_PLAN');
+  }
+};
+
+// True when the new stops differ from the saved ones (names or coordinates,
+// in order) — used to skip a paid Directions call when the app resaves a
+// route with nothing about its stops actually changed (e.g. renaming it, or
+// only moving the corridor-width slider), since it sends every field on
+// every save.
+const stopsChanged = (current, next) =>
+  (current || []).length !== next.length ||
+  (current || []).some(
+    (stop, index) =>
+      stop.name !== next[index].name ||
+      stop.location.coordinates[0] !== next[index].location.coordinates[0] ||
+      stop.location.coordinates[1] !== next[index].location.coordinates[1],
+  );
+
 const normalizeStops = (stops) => {
   if (!Array.isArray(stops) || stops.length < 2 || stops.length > 10) {
     throw new ApiError(422, 'A route needs between 2 and 10 stops', null, 'INVALID_STOPS');
@@ -228,6 +273,8 @@ export const listDriverRoutes = async (driverId) => {
 
 export const createDriverRoute = async ({ driverId, name, stops, corridorKm, bidirectional }) => {
   const permissions = await getDriverPermissions(driverId);
+  assertRoutesInPlan(permissions);
+
   const used = await DriverRoute.countDocuments({ driver_id: driverId, deletedAt: null });
 
   if (used >= permissions.max_routes) {
@@ -241,11 +288,12 @@ export const createDriverRoute = async ({ driverId, name, stops, corridorKm, bid
 
   const routeName = String(name || '').trim();
   if (!routeName) {
-    throw new ApiError(422, 'Route name is required', null, 'INVALID_STOPS');
+    throw new ApiError(422, 'Route name is required', null, 'INVALID_NAME');
   }
 
   const normalizedStops = normalizeStops(stops);
   const settings = await getDriverNetworkSettings();
+  const corridor = normalizeCorridorKm(corridorKm, settings.default_corridor_km ?? 10);
   const path = await buildPath(normalizedStops);
 
   const route = await DriverRoute.create({
@@ -255,10 +303,7 @@ export const createDriverRoute = async ({ driverId, name, stops, corridorKm, bid
     path: { type: 'LineString', coordinates: path.coordinates },
     path_source: path.source,
     distance_meters: path.distanceMeters,
-    corridor_km: Math.min(
-      50,
-      Math.max(1, Number(corridorKm ?? settings.default_corridor_km ?? 10)),
-    ),
+    corridor_km: corridor,
     bidirectional: Boolean(bidirectional),
   });
 
@@ -266,6 +311,8 @@ export const createDriverRoute = async ({ driverId, name, stops, corridorKm, bid
 };
 
 export const updateDriverRoute = async ({ driverId, routeId, name, stops, corridorKm, bidirectional }) => {
+  assertRouteId(routeId);
+
   const route = await DriverRoute.findOne({ _id: routeId, driver_id: driverId, deletedAt: null });
   if (!route) {
     throw new ApiError(404, 'Route not found', null, 'ROUTE_NOT_FOUND');
@@ -273,21 +320,27 @@ export const updateDriverRoute = async ({ driverId, routeId, name, stops, corrid
 
   if (name !== undefined) {
     const routeName = String(name || '').trim();
-    if (!routeName) throw new ApiError(422, 'Route name cannot be empty', null, 'INVALID_STOPS');
+    if (!routeName) throw new ApiError(422, 'Route name cannot be empty', null, 'INVALID_NAME');
     route.name = routeName;
   }
 
   if (stops !== undefined) {
     const normalizedStops = normalizeStops(stops);
-    const path = await buildPath(normalizedStops);
-    route.stops = normalizedStops;
-    route.path = { type: 'LineString', coordinates: path.coordinates };
-    route.path_source = path.source;
-    route.distance_meters = path.distanceMeters;
+    // The app resends every field on every save, so a rename or a
+    // corridor-width tweak used to trigger a paid Directions call (and could
+    // flip path_source from google to straight if that call happened to
+    // fail) even though the stops themselves never moved.
+    if (stopsChanged(route.stops, normalizedStops)) {
+      const path = await buildPath(normalizedStops);
+      route.stops = normalizedStops;
+      route.path = { type: 'LineString', coordinates: path.coordinates };
+      route.path_source = path.source;
+      route.distance_meters = path.distanceMeters;
+    }
   }
 
   if (corridorKm !== undefined) {
-    route.corridor_km = Math.min(50, Math.max(1, Number(corridorKm)));
+    route.corridor_km = normalizeCorridorKm(corridorKm, route.corridor_km);
   }
 
   if (bidirectional !== undefined) {
@@ -295,10 +348,24 @@ export const updateDriverRoute = async ({ driverId, routeId, name, stops, corrid
   }
 
   await route.save();
+
+  // Other devices signed in on this driver's account need to know their
+  // corridor just changed — same event listDriverRoutes' consumers already
+  // handle for a mode switch.
+  const driver = await Driver.findById(driverId).select('route_mode active_route_id').lean();
+  if (driver && driver.route_mode === 'route' && String(driver.active_route_id || '') === String(route._id)) {
+    emitToRoom(getDriverRoom(driverId), 'driver:route-mode:updated', {
+      route_mode: 'route',
+      active_route_id: String(route._id),
+    });
+  }
+
   return serializeDriverRoute(route.toObject());
 };
 
 export const deleteDriverRoute = async ({ driverId, routeId }) => {
+  assertRouteId(routeId);
+
   const route = await DriverRoute.findOne({ _id: routeId, driver_id: driverId, deletedAt: null });
   if (!route) {
     throw new ApiError(404, 'Route not found', null, 'ROUTE_NOT_FOUND');
@@ -311,13 +378,20 @@ export const deleteDriverRoute = async ({ driverId, routeId }) => {
   // Leaving a driver pointed at a deleted route would silently narrow their
   // dispatch to nothing, so fall back to taking work from everywhere.
   const driver = await Driver.findById(driverId);
-  if (driver && String(driver.active_route_id || '') === String(routeId)) {
+  const wasActive = Boolean(driver && String(driver.active_route_id || '') === String(routeId));
+
+  if (wasActive) {
     driver.active_route_id = null;
     driver.route_mode = 'all_locations';
     await driver.save();
+
+    emitToRoom(getDriverRoom(driverId), 'driver:route-mode:updated', {
+      route_mode: 'all_locations',
+      active_route_id: null,
+    });
   }
 
-  return { deleted: true, route_mode: driver?.route_mode || 'all_locations' };
+  return { deleted: true, was_active: wasActive, route_mode: driver?.route_mode || 'all_locations' };
 };
 
 export const setDriverRouteMode = async ({ driverId, mode, routeId }) => {
@@ -336,12 +410,17 @@ export const setDriverRouteMode = async ({ driverId, mode, routeId }) => {
       active_route_id: null,
     });
 
-    return { route_mode: 'all_locations', active_route: null };
+    return { route_mode: 'all_locations', active_route_id: null, active_route: null };
   }
 
   if (mode !== 'route') {
     throw new ApiError(422, "mode must be 'route' or 'all_locations'", null, 'INVALID_ROUTE_MODE');
   }
+
+  // Switching all_locations -> route is allowed on any plan above; this is
+  // the one that actually needs routes to be part of it.
+  assertRoutesInPlan(await getDriverPermissions(driverId));
+  assertRouteId(routeId);
 
   const route = await DriverRoute.findOne({
     _id: routeId,
@@ -363,5 +442,5 @@ export const setDriverRouteMode = async ({ driverId, mode, routeId }) => {
     active_route_id: String(route._id),
   });
 
-  return { route_mode: 'route', active_route: serializeDriverRoute(route) };
+  return { route_mode: 'route', active_route_id: String(route._id), active_route: serializeDriverRoute(route) };
 };

@@ -320,6 +320,9 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
       drop: dropCoords,
       serviceLocationId,
       limit: limit * 2,
+      // The driver's saved route, not their home city, is the geographic
+      // filter for these candidates — see routeMatchService.js.
+      ignoreServiceLocation: true,
     });
 
     if (routeMatched.length) {

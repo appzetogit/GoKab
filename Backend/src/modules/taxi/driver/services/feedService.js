@@ -190,6 +190,9 @@ const broadcastNewDriverLead = async (ride) => {
       drop: ride.dropLocation?.coordinates,
       serviceLocationId: ride.service_location_id,
       limit: MAX_LEAD_PUSHES,
+      // Same reasoning as matchingService.js's dispatch call — the corridor
+      // is the geographic filter for a route-matched driver, not their city.
+      ignoreServiceLocation: true,
     });
 
     const driverIds = matched
@@ -293,7 +296,10 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
           created_by_driver_id: { $ne: new mongoose.Types.ObjectId(String(driverId)) },
         };
 
-  if (driver.service_location_id) {
+  // A driver running a route corridor isn't limited to their home city — the
+  // corridor filter below (JS, using activeRoute) is the geographic limit for
+  // them instead, same reasoning as routeMatchService's ignoreServiceLocation.
+  if (driver.service_location_id && driver.route_mode !== 'route') {
     baseFilter.service_location_id = driver.service_location_id;
   }
 
@@ -306,7 +312,7 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
 
   const activeRoute =
     driver.route_mode === 'route' && driver.active_route_id
-      ? await DriverRoute.findOne({ _id: driver.active_route_id, deletedAt: null }).lean()
+      ? await DriverRoute.findOne({ _id: driver.active_route_id, deletedAt: null, is_active: true }).lean()
       : null;
 
   const myCoordinates =

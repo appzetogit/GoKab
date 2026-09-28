@@ -90,6 +90,10 @@ export const findDriversWhoseActiveRouteMatches = async ({
   drop,
   serviceLocationId = null,
   limit = 50,
+  // A route-matched driver's corridor is already the geographic limit — an
+  // Indore driver whose route runs to Bhopal should be offered a Bhopal-city
+  // ride on that corridor, which a same-city filter would otherwise hide.
+  ignoreServiceLocation = false,
 }) => {
   if (!pickup || !drop) return [];
 
@@ -115,7 +119,7 @@ export const findDriversWhoseActiveRouteMatches = async ({
     route_mode: 'route',
     deletedAt: null,
     approve: true,
-    ...(serviceLocationId ? { service_location_id: serviceLocationId } : {}),
+    ...(serviceLocationId && !ignoreServiceLocation ? { service_location_id: serviceLocationId } : {}),
   })
     .select(
       'name phone socketId vehicleTypeId vehicleType vehicleIconType vehicleNumber vehicleColor ' +

@@ -360,6 +360,37 @@ const notifyCategory = async ({ driverId, category, previousCategory, reason }) 
   }
 };
 
+/**
+ * A tier change (downgrade, or a new subscription applied) can leave a driver
+ * on `max_routes: 0` while they're still in `route` mode from a higher tier —
+ * silently narrowing their dispatch to nothing, since their corridor still
+ * points at a route their new plan doesn't grant. Falls back to
+ * `all_locations`, the same recovery deleteDriverRoute already does for a
+ * deleted active route. Saved routes are never deleted here — an upgrade
+ * later just makes them usable again.
+ */
+const resetRouteModeIfNotAllowed = async (driverId, { session = null } = {}) => {
+  const driver = await Driver.findById(driverId).session(session);
+  if (!driver || driver.route_mode !== 'route') return;
+
+  const permissions = await getDriverPermissions(driver, { session });
+  if (permissions.max_routes > 0) return;
+
+  driver.route_mode = 'all_locations';
+  driver.active_route_id = null;
+  await driver.save({ session });
+
+  try {
+    const { emitToRoom, getDriverRoom } = await import('./dispatchService.js');
+    emitToRoom(getDriverRoom(driver._id), 'driver:route-mode:updated', {
+      route_mode: 'all_locations',
+      active_route_id: null,
+    });
+  } catch (error) {
+    console.error('[driverCategoryService] route-mode reset notification failed:', error.message);
+  }
+};
+
 const writeCategoryAudit = async ({ driverId, tierId, action, changes = [], session = null }) => {
   await TierAuditLog.create(
     [
@@ -475,6 +506,8 @@ export const applyCategoryFromSubscription = async ({ subscription, session = nu
     }
   }
 
+  await resetRouteModeIfNotAllowed(driver._id, { session });
+
   return { category, previousCategory };
 };
 
@@ -482,6 +515,10 @@ export const downgradeToLower = async ({ driverId, reason = 'subscription_expire
   const driver = await toDriver(driverId, { session });
   if (driver.driver_category === 'lower') {
     await releasePrimeSlot({ driverId: driver._id, session });
+    // Already lower doesn't mean already reconciled — an admin can drop
+    // max_routes_override to 0 without the category itself changing, so this
+    // still needs checking even on the no-op path.
+    await resetRouteModeIfNotAllowed(driver._id, { session });
     return { changed: false, category: 'lower' };
   }
 
@@ -516,6 +553,8 @@ export const downgradeToLower = async ({ driverId, reason = 'subscription_expire
     previousCategory: driver.driver_category,
     reason,
   });
+
+  await resetRouteModeIfNotAllowed(driver._id, { session });
 
   return { changed: true, category: 'lower', previousCategory: driver.driver_category };
 };
