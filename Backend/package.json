@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js",
-    "seed:vehicles": "node scripts/seedVehicleTypes.js"
+    "seed:vehicles": "node scripts/seedVehicleTypes.js",
+    "sync:driver-indexes": "node scripts/syncDriverIndexes.js"
   },
   "dependencies": {
     "@phonepe-pg/pg-sdk-node": "^2.0.6",
