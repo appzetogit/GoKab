@@ -1762,18 +1762,6 @@ const serializeOwnerProfile = (owner = {}) => ({
   },
 });
 
-const parseOwnerFleetSalary = (payload = {}) => {
-  const rawValue =
-    payload?.salary ?? payload?.monthly_salary ?? payload?.monthlySalary ?? 0;
-  const numericValue = Number(rawValue);
-
-  if (!Number.isFinite(numericValue) || numericValue < 0) {
-    throw new ApiError(400, "A valid non-negative salary is required");
-  }
-
-  return Math.round(numericValue * 100) / 100;
-};
-
 const normalizeOwnerFleetVehicleKind = (vehicleType = {}) => {
   const rawValue = String(
     vehicleType?.icon_types || vehicleType?.vehicle_type || vehicleType?.name || "",
@@ -1822,6 +1810,39 @@ const serializeOwnerFleetAssignedVehicle = (vehicle = null) =>
       }
     : null;
 
+// `uploadRegistrationDocument` doesn't stamp a review-status baseline on a
+// freshly uploaded document (only re-normalizing an already-stored one does),
+// so a just-uploaded fleet-driver document has no `status` field yet here —
+// default it to 'pending', which is true of every document until admin acts.
+const serializeOwnerFleetDriverDocuments = (documents = {}) => {
+  const result = {};
+  for (const [key, value] of Object.entries(documents || {})) {
+    if (!value) continue;
+    result[key] = {
+      uploaded: Boolean(value.uploaded ?? true),
+      status: value.status || value.reviewStatus || value.verificationStatus || "pending",
+      previewUrl: value.previewUrl || value.secureUrl || "",
+    };
+  }
+  return result;
+};
+
+const serializeOwnerFleetDriver = (driver = {}, assignedVehicle = null) => ({
+  id: String(driver._id),
+  name: driver.name || "",
+  phone: driver.phone || "",
+  approve: driver.approve,
+  status: driver.status,
+  isOnline: Boolean(driver.isOnline),
+  isOnRide: Boolean(driver.isOnRide),
+  assignedFleetVehicleId: driver.assignedFleetVehicleId
+    ? String(driver.assignedFleetVehicleId)
+    : null,
+  assignedVehicle: serializeOwnerFleetAssignedVehicle(assignedVehicle),
+  documents: serializeOwnerFleetDriverDocuments(driver.documents),
+  createdAt: driver.createdAt,
+});
+
 const serializeOwnerFleetAssignedDriver = (driver = null) =>
   driver
     ? {
@@ -1860,28 +1881,6 @@ const listAvailableOwnerFleetZones = async (owner = {}) => {
   }
 
   return zones;
-};
-
-const resolveOwnerFleetZoneForPayload = async ({ owner, zoneId }) => {
-  const normalizedZoneId = String(zoneId || "").trim();
-  if (!normalizedZoneId) {
-    return null;
-  }
-
-  if (!mongoose.isValidObjectId(normalizedZoneId)) {
-    throw new ApiError(400, "A valid zone is required");
-  }
-
-  const availableZones = await listAvailableOwnerFleetZones(owner);
-  const zone = availableZones.find(
-    (item) => String(item._id || "") === normalizedZoneId,
-  );
-
-  if (!zone) {
-    throw new ApiError(400, "Selected zone is not available for this owner");
-  }
-
-  return zone;
 };
 
 const resolveOwnerFleetVehicleAssignment = async ({
@@ -7220,8 +7219,12 @@ export const getDriverDocumentTemplates = async (_req, res) => {
     requestedRole === "fleet" ||
     requestedRole === "owner_vehicle" ||
     requestedRole === "owner-vehicle";
+  const isFleetDriverRequest =
+    requestedRole === "fleet_driver" || requestedRole === "fleet-driver";
   const requestedUsageType = String(_req.query?.usage_type || "").trim().toLowerCase();
-  let results = isFleetRequest
+  let results = isFleetDriverRequest
+    ? await listFleetDriverDocumentTemplates()
+    : isFleetRequest
     ? await listDriverNeededDocuments({
         activeOnly: true,
         includeFields: true,
@@ -7422,6 +7425,42 @@ const normalizeVehicleUsageType = (value, { required = true } = {}) => {
   return normalized;
 };
 
+// Fleet-driver documents (Driving Licence, Aadhaar, PAN, ...) are admin-managed
+// templates, not a hard-coded list — the same reasoning as the vehicle
+// document rule just above, but scoped to the driver rather than the vehicle:
+// `applies_to: 'driver'` and `account_type` covering a fleet-hired driver.
+// Kept as one function so the required-document check (create) and the
+// `?role=fleet_driver` template listing can never drift from each other.
+const FLEET_DRIVER_ACCOUNT_TYPES = new Set(["fleet_drivers", "fleet drivers", "both"]);
+
+const listFleetDriverDocumentTemplates = async () => {
+  const templates = await listDriverNeededDocuments({
+    activeOnly: true,
+    includeFields: true,
+  });
+
+  return templates.filter(
+    (template) =>
+      template.applies_to === "driver" &&
+      FLEET_DRIVER_ACCOUNT_TYPES.has(
+        String(template.account_type || "").trim().toLowerCase(),
+      ),
+  );
+};
+
+// Shared by the vehicle-document check below and the fleet-driver-document
+// check in createOwnerFleetDriver: which required field keys across
+// `templates` are missing from the supplied `documents` map.
+const findMissingDocuments = (templates, documents = {}) =>
+  templates
+    .flatMap((template) =>
+      (Array.isArray(template.fields) ? template.fields : [])
+        .filter((field) => field.required ?? template.is_required ?? false)
+        .map((field) => String(field.key || "").trim())
+        .filter(Boolean),
+    )
+    .filter((key) => !documents?.[key]);
+
 export const addOwnerVehicle = async (req, res) => {
   let owner = await resolveAuthenticatedOwner(req);
   let driverPermissions = null;
@@ -7514,16 +7553,12 @@ export const addOwnerVehicle = async (req, res) => {
   // nothing to do with the vehicle being added. That made "Add Vehicle"
   // unusable for any driver whose deployment requires even one driver
   // document, independent of the commercial-permit check below.
-  const requiredFleetDocumentKeys = configuredFleetDocuments
-    .filter((template) => template.applies_to === "vehicle")
-    .flatMap((template) =>
-      (Array.isArray(template.fields) ? template.fields : [])
-        .filter((field) => (field.required ?? template.is_required ?? false))
-        .map((field) => String(field.key || "").trim())
-        .filter(Boolean),
-    );
-  const missingFleetDocuments = requiredFleetDocumentKeys.filter(
-    (key) => !normalizedDocuments[key],
+  const requiredFleetVehicleTemplates = configuredFleetDocuments.filter(
+    (template) => template.applies_to === "vehicle",
+  );
+  const missingFleetDocuments = findMissingDocuments(
+    requiredFleetVehicleTemplates,
+    normalizedDocuments,
   );
 
   if (missingFleetDocuments.length > 0) {
@@ -7896,6 +7931,25 @@ export const deleteOwnerFleetVehicle = async (req, res) => {
     throw new ApiError(404, "Fleet vehicle not found");
   }
 
+  // A driver pointing at a vehicle that no longer exists is worse than
+  // refusing the delete — reassign or remove the driver first.
+  const assignedDriver = await Driver.findOne({
+    owner_id: owner._id,
+    assignedFleetVehicleId: vehicle._id,
+    deletedAt: null,
+  })
+    .select("name phone")
+    .lean();
+
+  if (assignedDriver) {
+    throw new ApiError(
+      409,
+      `Vehicle is assigned to ${assignedDriver.name || assignedDriver.phone || "a driver"}. Reassign or remove the driver first.`,
+      null,
+      "VEHICLE_ASSIGNED",
+    );
+  }
+
   await FleetVehicle.deleteOne({ _id: vehicle._id });
   await recalculateOwnerVehicleCount(owner._id);
   // Losing the only commercial (or only private) vehicle breaks the Prime/Middle
@@ -7918,10 +7972,20 @@ export const getOwnerFleetDrivers = async (req, res) => {
     return res.json({ success: true, data: { results: [] } });
   }
 
-  const drivers = await Driver.find({ owner_id: owner._id, deletedAt: null })
-    .populate("zoneId", "name")
+  // `ensureOrganizationForPrime` sets a Pro/Elite driver's own `owner_id` to
+  // their organisation, so without this the requester shows up in their own
+  // fleet list. `assertFleetDriverCapacity` already excludes them from the
+  // count; the list has to agree with that.
+  const requesterId =
+    req.auth?.role === "driver" ? String(req.auth.sub || "") : null;
+
+  const drivers = await Driver.find({
+    owner_id: owner._id,
+    deletedAt: null,
+    ...(requesterId ? { _id: { $ne: requesterId } } : {}),
+  })
     .sort({ createdAt: -1 })
-    .select("name phone email city salary approve status isOnline isOnRide createdAt zoneId assignedFleetVehicleId vehicleTypeId vehicleIconType vehicleMake vehicleModel vehicleNumber vehicleColor")
+    .select("name phone documents approve status isOnline isOnRide createdAt assignedFleetVehicleId")
     .lean();
   const assignedVehicleIds = drivers
     .map((driver) => String(driver.assignedFleetVehicleId || "").trim())
@@ -7936,42 +8000,50 @@ export const getOwnerFleetDrivers = async (req, res) => {
         .lean()
     : [];
   const assignedVehicleMap = new Map(
-    assignedVehicles.map((vehicle) => [
-      String(vehicle._id || ""),
-      serializeOwnerFleetAssignedVehicle(vehicle),
-    ]),
+    assignedVehicles.map((vehicle) => [String(vehicle._id || ""), vehicle]),
   );
 
   res.json({
     success: true,
     data: {
-      results: drivers.map((driver) => ({
-        id: String(driver._id),
-        name: driver.name || "",
-        phone: driver.phone || "",
-        email: driver.email || "",
-        city: driver.city || "",
-        salary: Number(driver.salary || 0),
-        approve: driver.approve,
-        status: driver.status,
-        isOnline: Boolean(driver.isOnline),
-        isOnRide: Boolean(driver.isOnRide),
-        zoneId: driver.zoneId?._id || driver.zoneId || null,
-        zone: serializeDriverZone(driver.zoneId),
-        assignedFleetVehicleId: driver.assignedFleetVehicleId
-          ? String(driver.assignedFleetVehicleId)
-          : null,
-        assignedVehicle:
+      results: drivers.map((driver) =>
+        serializeOwnerFleetDriver(
+          driver,
           assignedVehicleMap.get(String(driver.assignedFleetVehicleId || "")) ||
-          null,
-        createdAt: driver.createdAt,
-      })),
+            null,
+        ),
+      ),
     },
   });
 };
 
 export const createOwnerFleetDriver = async (req, res) => {
-  const owner = await resolveAuthenticatedOwner(req);
+  let owner = await resolveAuthenticatedOwner(req);
+
+  // Mirrors addOwnerVehicle: any approved driver may open an organisation by
+  // adding their first fleet driver, not only once they've separately added a
+  // vehicle. Owner-portal logins already have one, so this only applies when
+  // it's a driver acting as their own fleet owner.
+  if (!owner?._id && req.auth?.role === "driver") {
+    const { getDriverPermissions } = await import(
+      "../../services/driverCategoryService.js"
+    );
+    const driverPermissions = await getDriverPermissions(req.auth.sub);
+
+    if (driverPermissions.driver.approve !== true) {
+      throw new ApiError(
+        403,
+        "Your account is not approved yet",
+        null,
+        "DRIVER_NOT_APPROVED",
+      );
+    }
+
+    const { ensureOrganizationForPrime } = await import(
+      "../services/networkRideService.js"
+    );
+    owner = await ensureOrganizationForPrime(req.auth.sub);
+  }
 
   if (!owner?._id) {
     throw new ApiError(
@@ -7980,21 +8052,10 @@ export const createOwnerFleetDriver = async (req, res) => {
     );
   }
 
+  await assertFleetDriverCapacity({ req, owner });
+
   const name = String(req.body?.name || "").trim();
   const phone = normalizePhone(req.body?.phone || req.body?.mobile);
-  const email = String(req.body?.email || "")
-    .trim()
-    .toLowerCase();
-  const salaryValue = parseOwnerFleetSalary(req.body || {});
-  const zone = await resolveOwnerFleetZoneForPayload({
-    owner,
-    zoneId: req.body?.zoneId ?? req.body?.zone_id,
-  });
-  const assignedFleetVehicle = await resolveOwnerFleetVehicleAssignment({
-    owner,
-    assignedFleetVehicleId:
-      req.body?.assignedFleetVehicleId ?? req.body?.assigned_fleet_vehicle_id,
-  });
 
   if (!name) {
     throw new ApiError(400, "name is required");
@@ -8004,78 +8065,138 @@ export const createOwnerFleetDriver = async (req, res) => {
     throw new ApiError(400, "A valid 10-digit mobile number is required");
   }
 
-  const existing = await Driver.findOne({ phone }).lean();
-  if (existing) {
-    throw new ApiError(409, "Phone number is already registered");
+  const existingByPhone = await Driver.findOne({ phone });
+  // A driver removed from a fleet keeps their phone on their old record
+  // (owner_id: null, status: 'inactive') — that used to make the number
+  // permanently unusable for any owner ("already registered", forever).
+  // Re-attach that record instead of creating a new one; anything else
+  // (self-registered, or attached to a different fleet) is a real conflict.
+  const isReattach =
+    Boolean(existingByPhone) &&
+    existingByPhone.owner_id == null &&
+    existingByPhone.status === "inactive";
+
+  if (existingByPhone && !isReattach) {
+    throw new ApiError(
+      409,
+      "This number is already registered with another account",
+      null,
+      "PHONE_ALREADY_REGISTERED",
+    );
   }
 
-  await assertFleetDriverCapacity({ req, owner });
+  const assignedFleetVehicleId =
+    req.body?.assignedFleetVehicleId ?? req.body?.assigned_fleet_vehicle_id;
 
-  const serviceLocation = owner.service_location_id
-    ? await ServiceLocation.findById(owner.service_location_id).lean()
-    : null;
-  const effectiveServiceLocationId =
-    zone?.service_location_id || owner.service_location_id || null;
-  const effectiveServiceLocation =
-    effectiveServiceLocationId && mongoose.isValidObjectId(effectiveServiceLocationId)
-      ? await ServiceLocation.findById(effectiveServiceLocationId).lean()
-      : serviceLocation;
-  const coordinates =
-    Array.isArray(effectiveServiceLocation?.location?.coordinates) &&
-    effectiveServiceLocation.location.coordinates.length === 2
-      ? effectiveServiceLocation.location.coordinates
-      : typeof effectiveServiceLocation?.longitude === "number" &&
-          typeof effectiveServiceLocation?.latitude === "number"
-        ? [effectiveServiceLocation.longitude, effectiveServiceLocation.latitude]
-        : [75.8577, 22.7196];
+  if (!String(assignedFleetVehicleId || "").trim()) {
+    throw new ApiError(
+      400,
+      "Assign a vehicle to this driver",
+      null,
+      "VEHICLE_REQUIRED",
+    );
+  }
 
-  const city =
-    String(req.body?.city || "").trim() ||
-    String(
-      effectiveServiceLocation?.service_location_name ||
-        effectiveServiceLocation?.name ||
-        "",
-    ).trim() ||
-    "";
+  const assignedFleetVehicle = await resolveOwnerFleetVehicleAssignment({
+    owner,
+    driverId: isReattach ? existingByPhone._id : null,
+    assignedFleetVehicleId,
+  });
 
-  const tempPassword = crypto.randomUUID().slice(0, 12);
-  const vehicleKind = normalizeOwnerFleetVehicleKind(
-    assignedFleetVehicle?.vehicle_type_id,
+  if (assignedFleetVehicle.status === "rejected") {
+    throw new ApiError(
+      409,
+      "This vehicle was rejected, fix it before assigning",
+      null,
+      "VEHICLE_REJECTED",
+    );
+  }
+
+  const requiredDocumentTemplates = await listFleetDriverDocumentTemplates();
+  const missingDocuments = findMissingDocuments(
+    requiredDocumentTemplates,
+    req.body?.documents,
   );
 
-  const uploadedDocuments = await uploadOwnerFleetDriverDocuments(req.body?.documents);
+  if (missingDocuments.length > 0) {
+    throw new ApiError(
+      400,
+      `Missing required documents: ${missingDocuments.join(", ")}`,
+      { missing: missingDocuments },
+      "DOCUMENTS_REQUIRED",
+    );
+  }
 
-  const driver = await Driver.create({
-    owner_id: owner._id,
-    service_location_id: effectiveServiceLocationId,
-    documents: uploadedDocuments,
-    name,
-    phone,
-    email,
-    salary: salaryValue,
-    gender: "",
-    password: await hashPassword(tempPassword),
+  const serviceLocationId = owner.service_location_id || null;
+  const serviceLocation = serviceLocationId
+    ? await ServiceLocation.findById(serviceLocationId).lean()
+    : null;
+  const coordinates =
+    Array.isArray(serviceLocation?.location?.coordinates) &&
+    serviceLocation.location.coordinates.length === 2
+      ? serviceLocation.location.coordinates
+      : typeof serviceLocation?.longitude === "number" &&
+          typeof serviceLocation?.latitude === "number"
+        ? [serviceLocation.longitude, serviceLocation.latitude]
+        : [75.8577, 22.7196];
+  const city = String(
+    serviceLocation?.service_location_name || serviceLocation?.name || "",
+  ).trim();
+
+  const vehicleKind = normalizeOwnerFleetVehicleKind(
+    assignedFleetVehicle.vehicle_type_id,
+  );
+  const uploadedDocuments = await uploadOwnerFleetDriverDocuments(req.body?.documents);
+  const vehicleFields = {
+    assignedFleetVehicleId: assignedFleetVehicle._id,
     vehicleType: vehicleKind,
-    vehicleTypeId: assignedFleetVehicle?.vehicle_type_id?._id || null,
-    vehicleIconType:
-      assignedFleetVehicle?.vehicle_type_id?.icon_types || vehicleKind,
-    vehicleMake: assignedFleetVehicle?.car_brand || "",
-    vehicleModel: assignedFleetVehicle?.car_model || "",
-    registerFor: "taxi",
-    vehicleNumber: assignedFleetVehicle?.license_plate_number || "",
-    vehicleColor: assignedFleetVehicle?.car_color || "",
-    city,
-    approve: false,
-    status: "pending",
-    zoneId: zone?._id || null,
-    assignedFleetVehicleId: assignedFleetVehicle?._id || null,
-    location: toPoint(coordinates, "location"),
-  });
+    vehicleTypeId: assignedFleetVehicle.vehicle_type_id?._id || null,
+    vehicleIconType: assignedFleetVehicle.vehicle_type_id?.icon_types || vehicleKind,
+    vehicleMake: assignedFleetVehicle.car_brand || "",
+    vehicleModel: assignedFleetVehicle.car_model || "",
+    vehicleNumber: assignedFleetVehicle.license_plate_number || "",
+    vehicleColor: assignedFleetVehicle.car_color || "",
+  };
+
+  let driver;
+  if (isReattach) {
+    Object.assign(existingByPhone, {
+      owner_id: owner._id,
+      service_location_id: serviceLocationId,
+      documents: uploadedDocuments,
+      name,
+      city,
+      approve: false,
+      status: "pending",
+      registerFor: "taxi",
+      ...vehicleFields,
+    });
+    existingByPhone.markModified("documents");
+    await existingByPhone.save();
+    driver = existingByPhone;
+  } else {
+    const tempPassword = crypto.randomUUID().slice(0, 12);
+    driver = await Driver.create({
+      owner_id: owner._id,
+      service_location_id: serviceLocationId,
+      documents: uploadedDocuments,
+      name,
+      phone,
+      gender: "",
+      password: await hashPassword(tempPassword),
+      registerFor: "taxi",
+      city,
+      approve: false,
+      status: "pending",
+      location: toPoint(coordinates, "location"),
+      ...vehicleFields,
+    });
+  }
 
   res.status(201).json({
     success: true,
     data: {
-      id: String(driver._id),
+      ...serializeOwnerFleetDriver(driver, assignedFleetVehicle),
       message: "Fleet driver request created",
     },
   });
@@ -9051,110 +9172,140 @@ export const updateOwnerFleetDriver = async (req, res) => {
     throw new ApiError(404, "Fleet driver not found");
   }
 
-  const name = String(req.body?.name || "").trim();
-  const phone = normalizePhone(req.body?.phone || req.body?.mobile);
-  const email = String(req.body?.email || "")
-    .trim()
-    .toLowerCase();
-  const salaryValue = parseOwnerFleetSalary(req.body || {});
-  const city = String(req.body?.city || req.body?.address || "").trim();
-  const zone = await resolveOwnerFleetZoneForPayload({
-    owner,
-    zoneId: req.body?.zoneId ?? req.body?.zone_id,
-  });
-  const assignedFleetVehicle = await resolveOwnerFleetVehicleAssignment({
-    owner,
-    driverId: driver._id,
-    assignedFleetVehicleId:
-      req.body?.assignedFleetVehicleId ?? req.body?.assigned_fleet_vehicle_id,
-  });
+  const body = req.body || {};
+  const wasApproved = driver.approve === true;
+  let phoneChanged = false;
+  let documentsUploaded = false;
 
-  if (!name) {
-    throw new ApiError(400, "name is required");
+  // Partial update: only fields present in the body are validated and
+  // written. This is a targeted edit (rename, swap vehicle, add a document),
+  // not a full-record replace.
+  if (Object.prototype.hasOwnProperty.call(body, "name")) {
+    const name = String(body.name || "").trim();
+    if (!name) {
+      throw new ApiError(400, "name is required");
+    }
+    driver.name = name;
   }
 
-  if (!/^\d{10}$/.test(phone)) {
-    throw new ApiError(400, "A valid 10-digit mobile number is required");
-  }
+  if (
+    Object.prototype.hasOwnProperty.call(body, "phone") ||
+    Object.prototype.hasOwnProperty.call(body, "mobile")
+  ) {
+    const phone = normalizePhone(body.phone || body.mobile);
+    if (!/^\d{10}$/.test(phone)) {
+      throw new ApiError(400, "A valid 10-digit mobile number is required");
+    }
 
-  const existing = await Driver.findOne({
-    phone,
-    _id: { $ne: driver._id },
-  }).lean();
-  if (existing) {
-    throw new ApiError(409, "Phone number is already registered");
-  }
-
-  driver.name = name;
-  driver.phone = phone;
-  driver.email = email;
-  driver.city = city || driver.city || "";
-  driver.salary = salaryValue;
-  if (Object.prototype.hasOwnProperty.call(req.body || {}, "zoneId")
-    || Object.prototype.hasOwnProperty.call(req.body || {}, "zone_id")) {
-    driver.zoneId = zone?._id || null;
-    if (zone?.service_location_id) {
-      driver.service_location_id = zone.service_location_id;
+    if (phone !== driver.phone) {
+      const existingPhone = await Driver.findOne({
+        phone,
+        _id: { $ne: driver._id },
+      }).lean();
+      if (existingPhone) {
+        throw new ApiError(
+          409,
+          "This number is already registered with another account",
+          null,
+          "PHONE_ALREADY_REGISTERED",
+        );
+      }
+      driver.phone = phone;
+      phoneChanged = true;
     }
   }
 
-  if (Object.prototype.hasOwnProperty.call(req.body || {}, "assignedFleetVehicleId")
-    || Object.prototype.hasOwnProperty.call(req.body || {}, "assigned_fleet_vehicle_id")) {
-    driver.assignedFleetVehicleId = assignedFleetVehicle?._id || null;
-    driver.vehicleTypeId = assignedFleetVehicle?.vehicle_type_id?._id || null;
-    driver.vehicleMake = assignedFleetVehicle?.car_brand || "";
-    driver.vehicleModel = assignedFleetVehicle?.car_model || "";
-    driver.vehicleNumber = assignedFleetVehicle?.license_plate_number || "";
-    driver.vehicleColor = assignedFleetVehicle?.car_color || "";
+  if (
+    Object.prototype.hasOwnProperty.call(body, "assignedFleetVehicleId") ||
+    Object.prototype.hasOwnProperty.call(body, "assigned_fleet_vehicle_id")
+  ) {
+    const assignedFleetVehicleId =
+      body.assignedFleetVehicleId ?? body.assigned_fleet_vehicle_id;
+
+    if (!String(assignedFleetVehicleId || "").trim()) {
+      throw new ApiError(
+        400,
+        "A fleet driver must always have a vehicle assigned",
+        null,
+        "VEHICLE_REQUIRED",
+      );
+    }
+
+    const assignedFleetVehicle = await resolveOwnerFleetVehicleAssignment({
+      owner,
+      driverId: driver._id,
+      assignedFleetVehicleId,
+    });
+
+    const vehicleChanged =
+      String(assignedFleetVehicle._id) !==
+      String(driver.assignedFleetVehicleId || "");
+
+    // The current vehicle stays assigned until the trip ends; only a change
+    // is blocked, so a no-op PATCH (re-sending the same vehicle) never fails.
+    if (vehicleChanged && driver.isOnRide) {
+      throw new ApiError(
+        409,
+        "Driver is on a trip, change the vehicle after it ends",
+        null,
+        "DRIVER_ON_TRIP",
+      );
+    }
+
+    if (assignedFleetVehicle.status === "rejected") {
+      throw new ApiError(
+        409,
+        "This vehicle was rejected, fix it before assigning",
+        null,
+        "VEHICLE_REJECTED",
+      );
+    }
+
+    const vehicleKind = normalizeOwnerFleetVehicleKind(
+      assignedFleetVehicle.vehicle_type_id,
+    );
+    driver.assignedFleetVehicleId = assignedFleetVehicle._id;
+    driver.vehicleType = vehicleKind;
+    driver.vehicleTypeId = assignedFleetVehicle.vehicle_type_id?._id || null;
     driver.vehicleIconType =
-      assignedFleetVehicle?.vehicle_type_id?.icon_types ||
-      (assignedFleetVehicle ? normalizeOwnerFleetVehicleKind(assignedFleetVehicle.vehicle_type_id) : driver.vehicleIconType || "car");
-    driver.vehicleType = assignedFleetVehicle
-      ? normalizeOwnerFleetVehicleKind(assignedFleetVehicle.vehicle_type_id)
-      : "car";
+      assignedFleetVehicle.vehicle_type_id?.icon_types || vehicleKind;
+    driver.vehicleMake = assignedFleetVehicle.car_brand || "";
+    driver.vehicleModel = assignedFleetVehicle.car_model || "";
+    driver.vehicleNumber = assignedFleetVehicle.license_plate_number || "";
+    driver.vehicleColor = assignedFleetVehicle.car_color || "";
   }
 
   // Merged rather than replaced so re-uploading one document does not wipe the other.
-  if (req.body?.documents && Object.keys(req.body.documents).length > 0) {
+  if (body.documents && Object.keys(body.documents).length > 0) {
     driver.documents = {
       ...(driver.documents || {}),
-      ...(await uploadOwnerFleetDriverDocuments(req.body.documents)),
+      ...(await uploadOwnerFleetDriverDocuments(body.documents)),
     };
     driver.markModified("documents");
+    documentsUploaded = true;
+  }
+
+  // A vehicle swap alone doesn't need re-verification; a new phone number or
+  // a new document does — send the driver back through admin review rather
+  // than keeping an approval that no longer reflects what was reviewed.
+  if (wasApproved && (phoneChanged || documentsUploaded)) {
+    driver.approve = false;
+    driver.status = "pending";
+    driver.isOnline = false;
   }
 
   await driver.save();
 
-  const populatedDriver = await Driver.findById(driver._id)
-    .populate("zoneId", "name")
-    .lean();
-  const populatedAssignedVehicle =
-    populatedDriver?.assignedFleetVehicleId
-      ? await FleetVehicle.findById(populatedDriver.assignedFleetVehicleId)
-          .populate("vehicle_type_id", "name type_name transport_type icon_types")
-          .lean()
-      : null;
+  const assignedVehicle = driver.assignedFleetVehicleId
+    ? await FleetVehicle.findById(driver.assignedFleetVehicleId)
+        .populate("vehicle_type_id", "name type_name transport_type icon_types")
+        .lean()
+    : null;
 
   res.json({
     success: true,
     message: "Fleet driver updated successfully",
-    data: {
-      id: String(populatedDriver._id),
-      name: populatedDriver.name || "",
-      phone: populatedDriver.phone || "",
-      email: populatedDriver.email || "",
-      city: populatedDriver.city || "",
-      salary: Number(populatedDriver.salary || 0),
-      approve: populatedDriver.approve,
-      status: populatedDriver.status,
-      isOnline: Boolean(populatedDriver.isOnline),
-      isOnRide: Boolean(populatedDriver.isOnRide),
-      zoneId: populatedDriver.zoneId?._id || populatedDriver.zoneId || null,
-      zone: serializeDriverZone(populatedDriver.zoneId),
-      assignedFleetVehicleId: populatedDriver.assignedFleetVehicleId || null,
-      assignedVehicle: serializeOwnerFleetAssignedVehicle(populatedAssignedVehicle),
-      createdAt: populatedDriver.createdAt,
-    },
+    data: serializeOwnerFleetDriver(driver, assignedVehicle),
   });
 };
 
@@ -9198,7 +9349,14 @@ export const removeOwnerFleetDriver = async (req, res) => {
 
   driver.owner_id = null;
   driver.assignedFleetVehicleId = null;
-  driver.salary = 0;
+  // Clear the denormalized vehicle copy too, not just the reference — otherwise
+  // a removed driver keeps showing the old fleet vehicle's make/model/plate
+  // anywhere those fields are read directly off the driver.
+  driver.vehicleMake = "";
+  driver.vehicleModel = "";
+  driver.vehicleNumber = "";
+  driver.vehicleColor = "";
+  driver.vehicleTypeId = null;
   driver.isOnline = false;
   driver.socketId = null;
   driver.approve = false;
