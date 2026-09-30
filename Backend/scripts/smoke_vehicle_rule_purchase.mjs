@@ -159,7 +159,7 @@ const run = async () => {
         color: 'White',
         usage_type: usageType,
         documents: {
-          rc: 'https://example.test/rc.jpg',
+          rc: { secureUrl: 'https://example.test/rc.jpg', identifyNumber: plate, expiryDate: '2030-01-01' },
           ...(withPermit ? { commercial_permit: 'https://example.test/permit.jpg' } : {}),
         },
       },

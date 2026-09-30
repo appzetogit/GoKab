@@ -46,6 +46,7 @@ const login = async (phone) =>
   (await api('/drivers/login', { method: 'POST', body: { phone, password: 'password' } })).json?.data?.token;
 
 const doc = (name) => ({ secureUrl: `https://example.com/${name}.jpg`, previewUrl: `https://example.com/${name}.jpg` });
+const rcDoc = (plate) => ({ secureUrl: `https://example.com/rc-${plate}.jpg`, identifyNumber: plate, expiryDate: '2030-01-01' });
 
 const run = async () => {
   await mongoose.connect(DB_URI);
@@ -124,14 +125,14 @@ const run = async () => {
   console.log('\n=== 2. Create: commercial without permit -> 400 COMMERCIAL_PERMIT_REQUIRED ===');
   const noPermit = await api('/drivers/fleet/vehicles', {
     method: 'POST', token: tokenA,
-    body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Maruti', model: 'Dzire', number: 'MP09VC0001', color: 'White', usage_type: 'commercial', documents: {} },
+    body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Maruti', model: 'Dzire', number: 'MP09VC0001', color: 'White', usage_type: 'commercial', documents: { rc: rcDoc('MP09VC0001') } },
   });
   check('400 COMMERCIAL_PERMIT_REQUIRED', noPermit.status === 400 && noPermit.json?.code === 'COMMERCIAL_PERMIT_REQUIRED', JSON.stringify(noPermit.json));
 
   console.log('\n=== 3. Create: private vehicle, commercial-only template not demanded ===');
   const privateOk = await api('/drivers/fleet/vehicles', {
     method: 'POST', token: tokenA,
-    body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Maruti', model: 'Dzire', number: 'MP09VC0001', color: 'White', usage_type: 'private', documents: {} },
+    body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Maruti', model: 'Dzire', number: 'MP09VC0001', color: 'White', usage_type: 'private', documents: { rc: rcDoc('MP09VC0001') } },
   });
   check('201 private vehicle created with no documents', privateOk.status === 201, JSON.stringify(privateOk.json));
   const vehicleAId = privateOk.json?.data?.id;
@@ -144,7 +145,7 @@ const run = async () => {
   check('409 PLATE_ALREADY_REGISTERED (cross-owner)', crossOwnerClash.status === 409 && crossOwnerClash.json?.code === 'PLATE_ALREADY_REGISTERED', JSON.stringify(crossOwnerClash.json));
 
   console.log('\n=== 5. List: assignedDriver.isOnRide and documents_summary present ===');
-  const createB = await api('/drivers/fleet/vehicles', { method: 'POST', token: tokenB, body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Hyundai', model: 'Aura', number: 'MP09VC0002', color: 'Red', usage_type: 'private', documents: { rc: doc('rc') } } });
+  const createB = await api('/drivers/fleet/vehicles', { method: 'POST', token: tokenB, body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Hyundai', model: 'Aura', number: 'MP09VC0002', color: 'Red', usage_type: 'private', documents: { rc: rcDoc('MP09VC0002') } } });
   check('201 owner B vehicle created', createB.status === 201, JSON.stringify(createB.json));
   const listB = await api('/drivers/fleet/vehicles', { token: tokenB });
   const vehicleB = (listB.json?.data?.results || [])[0];
@@ -245,7 +246,7 @@ const run = async () => {
   check('200 deleted', deleteFree.status === 200, JSON.stringify(deleteFree.json));
   const readdSamePlate = await api('/drivers/fleet/vehicles', {
     method: 'POST', token: tokenA,
-    body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Maruti', model: 'Swift', number: 'MP09VC0003', color: 'Green', usage_type: 'private', documents: {} },
+    body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Maruti', model: 'Swift', number: 'MP09VC0003', color: 'Green', usage_type: 'private', documents: { rc: rcDoc('MP09VC0003') } },
   });
   check('201 same plate re-added after hard delete', readdSamePlate.status === 201, JSON.stringify(readdSamePlate.json));
 

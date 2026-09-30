@@ -46,6 +46,7 @@ const login = async (phone) =>
   (await api('/drivers/login', { method: 'POST', body: { phone, password: 'password' } })).json?.data?.token;
 
 const doc = (name) => ({ secureUrl: `https://example.com/${name}.jpg`, previewUrl: `https://example.com/${name}.jpg` });
+const rcDoc = (plate) => ({ secureUrl: `https://example.com/rc-${plate}.jpg`, identifyNumber: plate, expiryDate: '2030-01-01' });
 const requiredDocs = () => ({
   drivingLicense: doc('dl'),
   aadhaarFront: doc('aadhaar-f'),
@@ -179,7 +180,7 @@ const run = async () => {
       number: 'MP09AB1111',
       color: 'White',
       usage_type: 'commercial',
-      documents: { commercial_permit: doc('permit') },
+      documents: { commercial_permit: doc('permit'), rc: rcDoc('MP09AB1111') },
     },
   });
   check('Vehicle created (201)', vehicleRes.status === 201, JSON.stringify(vehicleRes.json));
@@ -265,7 +266,7 @@ const run = async () => {
   const secondVehicle = await api('/drivers/fleet/vehicles', {
     method: 'POST',
     token: primeToken,
-    body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Hyundai', model: 'Aura', number: 'MP09EF3333', color: 'Red', usage_type: 'private', documents: {} },
+    body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Hyundai', model: 'Aura', number: 'MP09EF3333', color: 'Red', usage_type: 'private', documents: { rc: rcDoc('MP09EF3333') } },
   });
   const secondVehicleId = secondVehicle.json?.data?.id;
   const conflictPhone = await api('/drivers/fleet/drivers', {
@@ -283,7 +284,7 @@ const run = async () => {
   const lowerVehicle = await api('/drivers/fleet/vehicles', {
     method: 'POST',
     token: lowerToken,
-    body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Maruti', model: 'Alto', number: 'MP09GH4444', color: 'Grey', usage_type: 'private', documents: {} },
+    body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Maruti', model: 'Alto', number: 'MP09GH4444', color: 'Grey', usage_type: 'private', documents: { rc: rcDoc('MP09GH4444') } },
   });
   const lowerVehicleId = lowerVehicle.json?.data?.id;
   const notAllowed = await api('/drivers/fleet/drivers', {

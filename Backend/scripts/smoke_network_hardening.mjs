@@ -147,7 +147,7 @@ const run = async () => {
       number: 'MP09TEST01',
       color: 'White',
       usage_type: 'commercial',
-      documents: { rc: 'https://example.test/rc.jpg' },
+      documents: { rc: { secureUrl: 'https://example.test/rc.jpg', identifyNumber: 'MP09TESTRC', expiryDate: '2030-01-01' } },
     },
   });
   check(
@@ -166,7 +166,7 @@ const run = async () => {
       number: 'MP09TEST01',
       color: 'White',
       usage_type: 'commercial',
-      documents: { rc: 'https://example.test/rc.jpg', commercial_permit: 'https://example.test/permit.jpg' },
+      documents: { rc: { secureUrl: 'https://example.test/rc.jpg', identifyNumber: 'MP09TESTRC', expiryDate: '2030-01-01' }, commercial_permit: 'https://example.test/permit.jpg' },
     },
   });
   check('With the permit it is accepted', withPermit.status === 201 || withPermit.status === 200, JSON.stringify(withPermit.json).slice(0, 200));
@@ -181,7 +181,7 @@ const run = async () => {
       number: 'MP09TEST02',
       color: 'Red',
       usage_type: 'private',
-      documents: { rc: 'https://example.test/rc.jpg' },
+      documents: { rc: { secureUrl: 'https://example.test/rc.jpg', identifyNumber: 'MP09TESTRC', expiryDate: '2030-01-01' } },
     },
   });
   check(

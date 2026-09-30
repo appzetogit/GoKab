@@ -108,7 +108,10 @@ const run = async () => {
   const completion = await onboardingService.completeDriverOnboarding({
     registrationId,
     phone: '9000000021',
-    documents: { smoke_test_document: 'https://example.test/doc.jpg' },
+    documents: {
+      smoke_test_document: 'https://example.test/doc.jpg',
+      rc: { secureUrl: 'https://example.test/rc.jpg', identifyNumber: 'MP09AB1234', expiryDate: '2030-01-01' },
+    },
   });
   const newDriver = await Driver.findById(completion.driver.id).select('vehicle_usage_type approve').lean();
   check(
@@ -162,10 +165,13 @@ const run = async () => {
   const addVehicleResult = await api('/drivers/fleet/vehicles', {
     method: 'POST',
     token: kavitaToken,
-    body: { vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Maruti', model: 'Alto', number: 'MP09FF0003', color: 'White', usage_type: 'private', documents: {} },
+    body: {
+      vehicleTypeId: new mongoose.Types.ObjectId(), make: 'Maruti', model: 'Alto', number: 'MP09FF0003', color: 'White', usage_type: 'private',
+      documents: { rc: { secureUrl: 'https://example.test/rc.jpg', identifyNumber: 'MP09FF0003', expiryDate: '2030-01-01' } },
+    },
   });
   check(
-    'Adding a private vehicle with no documents succeeds (no driver-identity documents demanded)',
+    'Adding a private vehicle with only RC (no driver-identity documents demanded)',
     addVehicleResult.status === 201,
     JSON.stringify(addVehicleResult.json),
   );
@@ -217,7 +223,10 @@ const run = async () => {
     body: {
       vehicleTypeId: new mongoose.Types.ObjectId(),
       make: 'Tata', model: 'Ace', number: 'MP09FF0005', color: 'Blue', usage_type: 'commercial',
-      documents: { rc: 'https://example.test/rc.jpg', commercial_permit: 'https://example.test/permit.jpg' },
+      documents: {
+        rc: { secureUrl: 'https://example.test/rc.jpg', identifyNumber: 'MP09FF0005', expiryDate: '2030-01-01' },
+        commercial_permit: 'https://example.test/permit.jpg',
+      },
     },
   });
   const eligibility = await categoryService.checkTierEligibility({ driverId: privateOnly._id, tierId: middleTier._id });
