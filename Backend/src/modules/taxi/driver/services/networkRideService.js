@@ -30,6 +30,126 @@ const toObjectId = (value, field) => {
 };
 
 /**
+ * Every check that decides whether a driver may be handed a ride, shared by
+ * `assignRide` and `createDriverRide`'s create+assign path — kept as one
+ * function so the two can never drift apart. `ride` only needs to carry
+ * whatever `isRideScheduledForFuture`/`findDriverConflictingScheduledRide`
+ * actually read (`scheduledAt`, `estimatedDurationMinutes`); the create path
+ * has no ride document yet, so it passes those two fields from the raw
+ * payload instead of a real `Ride`.
+ */
+const validateAssignTarget = async ({ permissions, driverId, targetDriverId, ride, excludeRideId = null }) => {
+  const isSelfAssign = String(targetDriverId) === String(driverId);
+
+  if (!isSelfAssign && !permissions.can_manage_fleet) {
+    throw new ApiError(
+      403,
+      'Your plan only allows taking the ride yourself or publishing it',
+      { category: permissions.category },
+      'CATEGORY_NOT_ALLOWED',
+    );
+  }
+
+  const target = await Driver.findOne({
+    _id: toObjectId(targetDriverId, 'driverId'),
+    deletedAt: null,
+    approve: true,
+  });
+  if (!target) throw new ApiError(404, 'Driver not found', null, 'DRIVER_NOT_FOUND');
+
+  if (!isSelfAssign && String(target.owner_id || '') !== String(permissions.driver.owner_id || 'none')) {
+    throw new ApiError(403, 'That driver is not in your fleet', null, 'DRIVER_NOT_IN_FLEET');
+  }
+
+  const scheduledForLater = isRideScheduledForFuture(ride);
+  if (!scheduledForLater && target.isOnRide) {
+    throw new ApiError(409, 'That driver is already on a ride', null, 'DRIVER_BUSY');
+  }
+
+  const conflict = await findDriverConflictingScheduledRide({
+    driverId: target._id,
+    ride,
+    excludeRideId,
+  });
+  if (conflict) {
+    throw new ApiError(
+      409,
+      'That driver already has another trip in this time range',
+      { conflictingRideId: String(conflict._id) },
+      'DRIVER_BUSY',
+    );
+  }
+
+  return { target, scheduledForLater };
+};
+
+/**
+ * The guarded write that actually hands the ride to `target`. Returns null
+ * (never throws) on a lost race so callers can decide what that means for
+ * them: `assignRide` turns it into RIDE_NOT_OPEN/DRIVER_BUSY, create+assign
+ * turns it into a compensating delete of the ride it just made.
+ *
+ * Two guards, not one:
+ *  - `driverId: null` in the ride filter stops two simultaneous attempts on
+ *    the *same* ride from both winning.
+ *  - For an immediate (non-scheduled) ride, `isOnRide: false` on the driver
+ *    claim below stops the same driver being handed two *different* rides at
+ *    once — `validateAssignTarget`'s isOnRide read happens earlier and can go
+ *    stale by the time this runs, so the actual guard has to be here, atomic,
+ *    not back there. A scheduled assignment never claims `isOnRide` (a driver
+ *    can hold several future bookings), so it only needs the ride-side guard.
+ */
+const applyAssignment = async ({ ride, target, byDriverId, scheduledForLater }) => {
+  if (!scheduledForLater) {
+    const claimed = await Driver.findOneAndUpdate(
+      { _id: target._id, isOnRide: false },
+      { $set: { isOnRide: true } },
+    );
+    if (!claimed) {
+      return { updated: null, reason: 'DRIVER_BUSY' };
+    }
+  }
+
+  const assignedAt = new Date();
+  const updated = await Ride.findOneAndUpdate(
+    { _id: ride._id, driverId: null, status: RIDE_STATUS.SEARCHING },
+    {
+      $set: {
+        driverId: target._id,
+        status: RIDE_STATUS.ACCEPTED,
+        liveStatus: RIDE_LIVE_STATUS.ACCEPTED,
+        acceptedAt: assignedAt,
+        'assignment.mode': 'direct_assign',
+        'assignment.assigned_by_driver_id': byDriverId,
+        'assignment.assigned_at': assignedAt,
+      },
+      $push: {
+        'assignment.history': {
+          driver_id: target._id,
+          action: 'assigned',
+          by_driver_id: byDriverId,
+          at: assignedAt,
+        },
+      },
+    },
+    { new: true },
+  );
+
+  if (!updated) {
+    if (!scheduledForLater) {
+      // The ride-side guard is what actually failed (e.g. this exact ride was
+      // assigned by something else a moment earlier) — release the driver
+      // claim made above rather than leaving them stuck "on a ride" that
+      // never happened.
+      await Driver.updateOne({ _id: target._id }, { $set: { isOnRide: false } });
+    }
+    return { updated: null, reason: 'RIDE_NOT_OPEN' };
+  }
+
+  return { updated, reason: null };
+};
+
+/**
  * Every Prime driver operates under an organisation, because that is the name
  * the customer sees ("Ram Travels"). Reuses the `Owner` record they already
  * have — from the self-drive owner flow, say — rather than creating a second
@@ -185,6 +305,19 @@ export const createDriverRide = async ({ driverId, payload }) => {
     throw new ApiError(422, 'fare must be greater than zero', null, 'INVALID_FARE');
   }
 
+  // A fleet ride must never exist without a driver, so the whole target check
+  // runs before anything is written — a rejected assign leaves no ride behind
+  // (the Post-to-Network flow never sends this field, so it's unaffected).
+  const assignToDriverId = payload?.assign_to_driver_id ?? payload?.assignToDriverId ?? null;
+  const assignTarget = assignToDriverId
+    ? await validateAssignTarget({
+        permissions,
+        driverId,
+        targetDriverId: assignToDriverId,
+        ride: { scheduledAt: payload?.scheduledAt, estimatedDurationMinutes: payload?.estimatedDurationMinutes },
+      })
+    : null;
+
   // If the customer happens to have an app account, link the ride to it so they
   // get in-app tracking instead of an SMS.
   const appUser = await User.findOne({ phone: customerPhone }).select('_id').lean();
@@ -226,7 +359,26 @@ export const createDriverRide = async ({ driverId, payload }) => {
     ride.offline_customer = { name: customerName, phone: customerPhone };
   }
 
-  return serializeNetworkRide(ride);
+  if (!assignTarget) {
+    return serializeNetworkRide(ride);
+  }
+
+  // Between validation above and here the target could have been taken by
+  // something else entirely (another assign racing this one) — the guarded
+  // update is what actually decides, not the earlier check. The ride was
+  // never visible to anyone yet, so on that race it's hard-deleted rather
+  // than left behind as a cancelled row that would just confuse the owner.
+  const { target, scheduledForLater } = assignTarget;
+  const { updated } = await applyAssignment({ ride, target, byDriverId: driverId, scheduledForLater });
+
+  if (!updated) {
+    await Ride.deleteOne({ _id: ride._id, driverId: null, status: RIDE_STATUS.SEARCHING });
+    throw new ApiError(409, 'That driver just became unavailable. Try again.', null, 'DRIVER_BUSY');
+  }
+
+  await notifyNetworkAssignment(updated);
+
+  return serializeNetworkRide(updated, { assignedDriver: target });
 };
 
 const loadOwnedRide = async (rideId, driverId, { session = null } = {}) => {
@@ -256,82 +408,21 @@ export const assignRide = async ({ driverId, rideId, targetDriverId }) => {
     throw new ApiError(409, 'Unpublish this ride before assigning it', null, 'RIDE_NOT_OPEN');
   }
 
-  const isSelfAssign = String(targetDriverId) === String(driverId);
-  if (!isSelfAssign && !permissions.can_manage_fleet) {
-    throw new ApiError(
-      403,
-      'Your plan only allows taking the ride yourself or publishing it',
-      { category: permissions.category },
-      'CATEGORY_NOT_ALLOWED',
-    );
-  }
-
-  const target = await Driver.findOne({
-    _id: toObjectId(targetDriverId, 'driverId'),
-    deletedAt: null,
-    approve: true,
-  });
-  if (!target) throw new ApiError(404, 'Driver not found', null, 'DRIVER_NOT_FOUND');
-
-  if (
-    !isSelfAssign &&
-    String(target.owner_id || '') !== String(permissions.driver.owner_id || 'none')
-  ) {
-    throw new ApiError(403, 'That driver is not in your fleet', null, 'DRIVER_NOT_IN_FLEET');
-  }
-
-  const scheduledForLater = isRideScheduledForFuture(ride);
-  if (!scheduledForLater && target.isOnRide) {
-    throw new ApiError(409, 'That driver is already on a ride', null, 'DRIVER_BUSY');
-  }
-
-  const conflict = await findDriverConflictingScheduledRide({
-    driverId: target._id,
+  const { target, scheduledForLater } = await validateAssignTarget({
+    permissions,
+    driverId,
+    targetDriverId,
     ride,
     excludeRideId: ride._id,
   });
-  if (conflict) {
-    throw new ApiError(
-      409,
-      'That driver already has another trip in this time range',
-      { conflictingRideId: String(conflict._id) },
-      'DRIVER_BUSY',
-    );
-  }
 
-  // Guarded update rather than save(): two tabs assigning at once must not both
-  // win, and `driverId: null` in the filter is what makes the second one fail.
-  const assignedAt = new Date();
-  const updated = await Ride.findOneAndUpdate(
-    { _id: ride._id, driverId: null, status: RIDE_STATUS.SEARCHING },
-    {
-      $set: {
-        driverId: target._id,
-        status: RIDE_STATUS.ACCEPTED,
-        liveStatus: RIDE_LIVE_STATUS.ACCEPTED,
-        acceptedAt: assignedAt,
-        'assignment.mode': 'direct_assign',
-        'assignment.assigned_by_driver_id': driverId,
-        'assignment.assigned_at': assignedAt,
-      },
-      $push: {
-        'assignment.history': {
-          driver_id: target._id,
-          action: 'assigned',
-          by_driver_id: driverId,
-          at: assignedAt,
-        },
-      },
-    },
-    { new: true },
-  );
+  const { updated, reason } = await applyAssignment({ ride, target, byDriverId: driverId, scheduledForLater });
 
   if (!updated) {
+    if (reason === 'DRIVER_BUSY') {
+      throw new ApiError(409, 'That driver just became unavailable. Try again.', null, 'DRIVER_BUSY');
+    }
     throw new ApiError(409, 'This ride already has a driver', null, 'RIDE_NOT_OPEN');
-  }
-
-  if (!scheduledForLater) {
-    await Driver.updateOne({ _id: target._id }, { $set: { isOnRide: true } });
   }
 
   await notifyNetworkAssignment(updated);
