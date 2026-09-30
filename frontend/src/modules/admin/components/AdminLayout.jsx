@@ -1202,17 +1202,17 @@ const AdminLayout = () => {
           //     { label: 'Bus Bookings', path: '/admin/bus-service/bookings', permission: 'bus_service.view' },
           //   ],
           // },
-          {
-            icon: Share2,
-            label: 'Car Pooling',
-            subItems: [
-              { label: 'Pooling Vehicles', path: '/admin/pooling/vehicles', permission: 'pooling.view' },
-              { label: 'Pending Pooling Drivers', path: '/admin/pooling/drivers/pending', permission: 'pooling.view' },
-              { label: 'Pooling Commission', path: '/admin/pooling/commission', permission: 'pooling.view' },
-              { label: 'Routes & Stops', path: '/admin/pooling/routes', permission: 'pooling.view' },
-              { label: 'Pooling Bookings', path: '/admin/pooling/bookings', permission: 'pooling.view' },
-            ],
-          },
+          // {
+          //   icon: Share2,
+          //   label: 'Car Pooling',
+          //   subItems: [
+          //     { label: 'Pooling Vehicles', path: '/admin/pooling/vehicles', permission: 'pooling.view' },
+          //     { label: 'Pending Pooling Drivers', path: '/admin/pooling/drivers/pending', permission: 'pooling.view' },
+          //     { label: 'Pooling Commission', path: '/admin/pooling/commission', permission: 'pooling.view' },
+          //     { label: 'Routes & Stops', path: '/admin/pooling/routes', permission: 'pooling.view' },
+          //     { label: 'Pooling Bookings', path: '/admin/pooling/bookings', permission: 'pooling.view' },
+          //   ],
+          // },
           {
             icon: MapPin,
             label: 'Geofencing',
