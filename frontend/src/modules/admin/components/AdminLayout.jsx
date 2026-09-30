@@ -1160,18 +1160,18 @@ const AdminLayout = () => {
               //{ label: 'Banner Image', path: '/admin/promotions/banner-image', permission: 'promotions.view' },
             ],
           },
-          // {
-          //   icon: IndianRupee,
-          //   label: 'Price Management',
-          //   subItems: [
-          //     { label: 'Service Location', path: '/admin/pricing/service-location', permission: 'service_locations.view' },
-          //     { label: 'Zone', path: '/admin/pricing/zone', permission: 'zones.view' },
-          //     { label: 'App Modules', path: '/admin/pricing/app-modules', permission: 'settings.view' },
-          //     { label: 'Vehicle Type', path: '/admin/pricing/vehicle-type', permission: 'vehicle_types.view' },
-          //     { label: 'Set Price', path: '/admin/pricing/set-price', permission: 'set_prices.view' },
-          //     { label: 'Goods Types', path: '/admin/pricing/goods-types', permission: 'goods_types.view' },
-          //   ],
-          // },
+          {
+            icon: IndianRupee,
+            label: 'Price Management',
+            subItems: [
+              { label: 'Service Location', path: '/admin/pricing/service-location', permission: 'service_locations.view' },
+              { label: 'Zone', path: '/admin/pricing/zone', permission: 'zones.view' },
+              { label: 'App Modules', path: '/admin/pricing/app-modules', permission: 'settings.view' },
+              { label: 'Vehicle Type', path: '/admin/pricing/vehicle-type', permission: 'vehicle_types.view' },
+              { label: 'Set Price', path: '/admin/pricing/set-price', permission: 'set_prices.view' },
+              { label: 'Goods Types', path: '/admin/pricing/goods-types', permission: 'goods_types.view' },
+            ],
+          },
           // {
           //   icon: Plane,
           //   label: 'Airport Management',
