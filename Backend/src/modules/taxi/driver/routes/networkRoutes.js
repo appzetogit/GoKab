@@ -3,6 +3,7 @@ import { asyncHandler } from '../../../../utils/asyncHandler.js';
 import { authenticate } from '../../middlewares/authMiddleware.js';
 import { requireDriverPermission } from '../../middlewares/driverCategoryMiddleware.js';
 import {
+  acknowledgeNetworkAssignmentController,
   liveMapController,
   contactLeadController,
   listDriverLeadConversationsController,
@@ -76,6 +77,12 @@ networkRouter.post(
   '/network/rides/:rideId/reject-assignment',
   driverOnly,
   asyncHandler(rejectNetworkAssignmentController),
+);
+// Same reasoning: confirming is done by the assigned driver, of any category.
+networkRouter.post(
+  '/network/rides/:rideId/acknowledge',
+  driverOnly,
+  asyncHandler(acknowledgeNetworkAssignmentController),
 );
 
 // Publish & feed. The feed itself is open to every category — that is the point

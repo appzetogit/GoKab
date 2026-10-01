@@ -625,6 +625,16 @@ const rideSchema = new mongoose.Schema(
         min: 1,
         max: 5,
       },
+      comment: {
+        type: String,
+        default: '',
+        trim: true,
+        maxlength: 500,
+      },
+      tags: {
+        type: [String],
+        default: [],
+      },
       submittedAt: {
         type: Date,
         default: null,
@@ -722,6 +732,13 @@ const rideSchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
+      // Set when the assigned fleet driver confirms the job. Reset to null on
+      // every assign, reassign and unassign — a confirmation belongs to one
+      // driver's hold on the ride, not to the ride.
+      acknowledged_at: {
+        type: Date,
+        default: null,
+      },
       history: {
         type: [
           {
@@ -733,6 +750,21 @@ const rideSchema = new mongoose.Schema(
           },
         ],
         default: [],
+      },
+    },
+    // Cron bookkeeping so each reminder push goes out exactly once per ride.
+    reminders: {
+      pickup_sent_at: {
+        type: Date,
+        default: null,
+      },
+      owner_pickup_sent_at: {
+        type: Date,
+        default: null,
+      },
+      unacknowledged_sent_at: {
+        type: Date,
+        default: null,
       },
     },
     publish: {

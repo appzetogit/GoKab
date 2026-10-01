@@ -177,6 +177,35 @@ const BUS_DRIVER_NAME_REGEX = /^[A-Za-z]+(?:[ .'-][A-Za-z]+)*$/;
 
 const DATA_URL_PATTERN = /^data:[^;]+;base64,/i;
 
+// An image field that may arrive either as an already-hosted URL (returned
+// untouched) or as a base64 data URL (uploaded, hosted URL returned). Storing
+// the raw data URL instead leaves a multi-megabyte string inside the driver
+// document and in every later `GET /me` response.
+const resolveHostedImageUrl = async (
+  value,
+  { folder, publicIdPrefix, maxBytes = 0, label = "Image" },
+) => {
+  const raw = String(value || "").trim();
+  if (!raw || !DATA_URL_PATTERN.test(raw)) {
+    return raw;
+  }
+
+  if (maxBytes > 0) {
+    const decodedBytes = Math.floor((raw.length - raw.indexOf(",") - 1) * 0.75);
+    if (decodedBytes > maxBytes) {
+      throw new ApiError(
+        400,
+        `${label} must be ${Math.round(maxBytes / (1024 * 1024))} MB or smaller`,
+        { max_bytes: maxBytes },
+        "IMAGE_TOO_LARGE",
+      );
+    }
+  }
+
+  const uploaded = await uploadDataUrlToCloudinary({ dataUrl: raw, folder, publicIdPrefix });
+  return String(uploaded?.secureUrl || "").trim();
+};
+
 const normalizeFleetVehicleDocumentValue = async (documentKey, value) => {
   if (!value) {
     return null;
@@ -2943,7 +2972,12 @@ export const goOnline = async (req, res) => {
   );
 
   if (requireDailySelfie && !hasTodaySelfie && !String(selfieImageUrl || "").trim()) {
-    throw new ApiError(400, "A selfie is required before going online today");
+    throw new ApiError(
+      400,
+      "A selfie is required before going online today",
+      null,
+      "SELFIE_REQUIRED",
+    );
   }
 
   await ensureDriverWalletCanAcceptRide(existingDriver);
@@ -2955,11 +2989,19 @@ export const goOnline = async (req, res) => {
   );
   const nextTodaySummary = buildDriverTodaySummaryFromDocument(existingDriver);
 
+  // Uploaded only now, after every check above that can refuse going online,
+  // so a refused request never leaves an orphaned selfie behind.
+  const hostedSelfieUrl = await resolveHostedImageUrl(selfieImageUrl, {
+    folder: `${env.cloudinary.folder}/driver-selfies`,
+    publicIdPrefix: `selfie-${String(existingDriver._id)}`,
+    label: "Selfie",
+  });
+
   const nextOnlineSelfie =
-    hasTodaySelfie && !String(selfieImageUrl || "").trim()
+    hasTodaySelfie && !hostedSelfieUrl
       ? existingDriver.onlineSelfie
       : {
-          imageUrl: String(selfieImageUrl || "").trim(),
+          imageUrl: hostedSelfieUrl,
           capturedAt: new Date(),
           uploadedAt: new Date(),
           forDate: todayKey,
@@ -2971,6 +3013,7 @@ export const goOnline = async (req, res) => {
       isOnline: true,
       zoneId: resolvedLiveZone?._id || null,
       location: toPoint(coordinates, "location"),
+      locationUpdatedAt: new Date(),
       onlineSelfie: nextOnlineSelfie,
       incentiveTracking: {
         ...trackingBeforeOnline,
@@ -3100,6 +3143,16 @@ export const getCurrentDriver = async (req, res) => {
     throw new ApiError(404, "Driver not found");
   }
 
+  res.json({
+    success: true,
+    data: await buildCurrentDriverProfile(driver),
+  });
+};
+
+// The one definition of the driver profile payload — `GET /me` and
+// `PATCH /me` both return it, so the app can use either response to refresh
+// its profile state without a follow-up fetch and the two can never drift.
+const buildCurrentDriverProfile = async (driver) => {
   if (!String(driver.referralCode || "").trim()) {
     driver.referralCode = generateDriverReferralCode(driver);
     await driver.save();
@@ -3110,58 +3163,55 @@ export const getCurrentDriver = async (req, res) => {
   const vehicleIconUrl = await resolveVehicleMapIcon(driver.vehicleTypeId);
   const todaySummary = await syncDriverTodaySummaryDocument(driver);
 
-  res.json({
-    success: true,
-    data: {
-      id: driver._id,
-      name: driver.name,
-      phone: driver.phone,
-      email: driver.email,
-      owner_id: driver.owner_id || null,
-      salary: Number(driver.salary || 0),
-      profileImage: driver.profileImage || "",
-      gender: driver.gender,
-      vehicleType: driver.vehicleType,
-      vehicleTypeId: driver.vehicleTypeId,
-      vehicleIconType: driver.vehicleIconType,
-      vehicleIconUrl,
-      vehicleMake: driver.vehicleMake,
-      vehicleModel: driver.vehicleModel,
-      registerFor: driver.registerFor,
-      vehicleNumber: driver.vehicleNumber,
-      vehicleColor: driver.vehicleColor,
-      vehicleImage: driver.vehicleImage || "",
-      city: driver.city,
-      approve: driver.approve,
-      status: driver.status,
-      rating: driver.rating,
-      wallet: await serializeDriverWallet(driver),
-      bankDetails: serializeDriverBankDetails(driver.bankDetails),
-      referralCode: driver.referralCode || "",
-      deletionRequest: driver.deletionRequest || { status: "none" },
-      isOnline: driver.isOnline,
-      isOnRide: driver.isOnRide,
-      onlineSelfie: driver.onlineSelfie || {},
-      location: driver.location,
-      zoneId: driver.zoneId?._id || driver.zoneId || null,
-      zone: serializeDriverZone(driver.zoneId),
-      assignedFleetVehicleId: driver.assignedFleetVehicleId
-        ? String(driver.assignedFleetVehicleId)
-        : null,
-      routeBooking: serializeDriverRouteBooking(driver.routeBooking),
-      documents: driver.documents || {},
-      emergencyContacts: Array.isArray(driver.emergencyContacts)
-        ? driver.emergencyContacts.map(serializeEmergencyContact)
-        : [],
-      onboarding: driver.onboarding || {},
-      todaySummary: todaySummary || buildDriverTodaySummaryFromDocument(driver),
-      // Read-only account info for the Edit Profile screen — PATCH /me must
-      // never accept these back (see updateCurrentDriver).
-      account_type: driver.account_type || "individual",
-      driver_category: driver.driver_category || "lower",
-      createdAt: driver.createdAt,
-    },
-  });
+  return {
+    id: driver._id,
+    name: driver.name,
+    phone: driver.phone,
+    email: driver.email,
+    owner_id: driver.owner_id || null,
+    salary: Number(driver.salary || 0),
+    profileImage: driver.profileImage || "",
+    gender: driver.gender,
+    vehicleType: driver.vehicleType,
+    vehicleTypeId: driver.vehicleTypeId,
+    vehicleIconType: driver.vehicleIconType,
+    vehicleIconUrl,
+    vehicleMake: driver.vehicleMake,
+    vehicleModel: driver.vehicleModel,
+    registerFor: driver.registerFor,
+    vehicleNumber: driver.vehicleNumber,
+    vehicleColor: driver.vehicleColor,
+    vehicleImage: driver.vehicleImage || "",
+    city: driver.city,
+    approve: driver.approve,
+    status: driver.status,
+    rating: driver.rating,
+    wallet: await serializeDriverWallet(driver),
+    bankDetails: serializeDriverBankDetails(driver.bankDetails),
+    referralCode: driver.referralCode || "",
+    deletionRequest: driver.deletionRequest || { status: "none" },
+    isOnline: driver.isOnline,
+    isOnRide: driver.isOnRide,
+    onlineSelfie: driver.onlineSelfie || {},
+    location: driver.location,
+    zoneId: driver.zoneId?._id || driver.zoneId || null,
+    zone: serializeDriverZone(driver.zoneId),
+    assignedFleetVehicleId: driver.assignedFleetVehicleId
+      ? String(driver.assignedFleetVehicleId)
+      : null,
+    routeBooking: serializeDriverRouteBooking(driver.routeBooking),
+    documents: driver.documents || {},
+    emergencyContacts: Array.isArray(driver.emergencyContacts)
+      ? driver.emergencyContacts.map(serializeEmergencyContact)
+      : [],
+    onboarding: driver.onboarding || {},
+    todaySummary: todaySummary || buildDriverTodaySummaryFromDocument(driver),
+    // Read-only account info for the Edit Profile screen — PATCH /me must
+    // never accept these back (see updateCurrentDriver).
+    account_type: driver.account_type || "individual",
+    driver_category: driver.driver_category || "lower",
+    createdAt: driver.createdAt,
+  };
 };
 
 export const getDriverEmergencyContacts = async (req, res) => {
@@ -3346,6 +3396,142 @@ export const getDriverScheduledRides = async (req, res) => {
         hasNextPage: safePage * safeLimit < totalCount,
         hasPrevPage: safePage > 1,
       },
+    },
+  });
+};
+
+const REFERRAL_ACTIVE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const REFERRAL_LIST_LIMIT = 200;
+
+/**
+ * Drivers this driver referred, with how much the referrals have produced.
+ * "Active" = approved and seen on the platform in the last 30 days (currently
+ * online, reported a position, or finished a ride).
+ */
+export const getDriverReferrals = async (req, res) => {
+  const driverId = String(req.auth.sub);
+
+  const referred = await Driver.find({ referredBy: driverId, deletedAt: null })
+    .select("name createdAt approve status isOnline locationUpdatedAt")
+    .sort({ createdAt: -1 })
+    .lean();
+  const referredIds = referred.map((item) => item._id);
+
+  const [rideRows, earnedRows] = await Promise.all([
+    referredIds.length
+      ? Ride.aggregate([
+          { $match: { driverId: { $in: referredIds }, status: RIDE_STATUS.COMPLETED } },
+          {
+            $group: {
+              _id: "$driverId",
+              count: { $sum: 1 },
+              lastRideAt: { $max: { $ifNull: ["$completedAt", "$createdAt"] } },
+            },
+          },
+        ])
+      : [],
+    // Only the referrer-side credits: a driver who was themselves referred may
+    // also hold a "new-driver" welcome credit, which is not something they earned
+    // by referring anyone.
+    WalletTransaction.aggregate([
+      {
+        $match: {
+          driverId: new mongoose.Types.ObjectId(driverId),
+          amount: { $gt: 0 },
+          "metadata.source": "driver_referral",
+          "metadata.referenceKey": { $regex: ":referrer$" },
+        },
+      },
+      { $group: { _id: null, total: { $sum: "$amount" } } },
+    ]),
+  ]);
+
+  const ridesByDriver = new Map(rideRows.map((row) => [String(row._id), row]));
+  const activeSince = Date.now() - REFERRAL_ACTIVE_WINDOW_MS;
+  const isRecent = (value) => value && new Date(value).getTime() >= activeSince;
+
+  const results = referred.slice(0, REFERRAL_LIST_LIMIT).map((item) => {
+    const rides = ridesByDriver.get(String(item._id));
+    const approved =
+      item.approve === true &&
+      !["inactive", "rejected", "pending"].includes(String(item.status || "").toLowerCase());
+
+    return {
+      name: item.name || "Driver",
+      joined_at: item.createdAt,
+      active:
+        approved &&
+        Boolean(item.isOnline || isRecent(item.locationUpdatedAt) || isRecent(rides?.lastRideAt)),
+      rides_completed: rides?.count || 0,
+    };
+  });
+
+  res.json({
+    success: true,
+    data: {
+      stats: {
+        total_referrals: referred.length,
+        rides_completed: rideRows.reduce((sum, row) => sum + row.count, 0),
+        total_earned: earnedRows[0]?.total || 0,
+      },
+      results,
+    },
+  });
+};
+
+// "Rahul Sharma" -> "Rahul S." — riders never see their name published in full
+// to a stranger.
+const maskRiderName = (name = "") => {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "Rider";
+  if (parts.length === 1) return parts[0];
+  return `${parts[0]} ${parts[parts.length - 1][0].toUpperCase()}.`;
+};
+
+const DRIVER_RATINGS_RECENT_LIMIT = 20;
+
+/** What riders have said about this driver: star distribution + latest reviews. */
+export const getDriverRatings = async (req, res) => {
+  const driverId = new mongoose.Types.ObjectId(String(req.auth.sub));
+  const reviewed = {
+    driverId,
+    "feedback.submittedAt": { $ne: null },
+    "feedback.rating": { $gte: 1 },
+  };
+
+  const [distributionRows, recent] = await Promise.all([
+    Ride.aggregate([
+      { $match: reviewed },
+      { $group: { _id: "$feedback.rating", count: { $sum: 1 } } },
+    ]),
+    Ride.find(reviewed)
+      .sort({ "feedback.submittedAt": -1 })
+      .limit(DRIVER_RATINGS_RECENT_LIMIT)
+      .select("feedback serviceType userId")
+      .populate("userId", "name")
+      .lean(),
+  ]);
+
+  const distribution = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+  for (const row of distributionRows) {
+    const stars = Math.round(Number(row._id));
+    if (distribution[stars] !== undefined) {
+      distribution[stars] += row.count;
+    }
+  }
+
+  res.json({
+    success: true,
+    data: {
+      total: Object.values(distribution).reduce((sum, count) => sum + count, 0),
+      distribution,
+      results: recent.map((ride) => ({
+        rider_name: maskRiderName(ride.userId?.name),
+        rating: ride.feedback.rating,
+        comment: ride.feedback.comment || "",
+        createdAt: ride.feedback.submittedAt,
+        service_type: ride.serviceType || "ride",
+      })),
     },
   });
 };
@@ -3626,25 +3812,28 @@ export const updateCurrentDriver = async (req, res) => {
   }
 
   if (Object.prototype.hasOwnProperty.call(req.body || {}, "bankDetails")) {
-    driver.bankDetails = normalizeDriverBankDetails(
-      req.body?.bankDetails || {},
-      driver.bankDetails || {},
-    );
+    const bankPayload = req.body?.bankDetails || {};
+    // Validated first (UPI/IFSC/account-number format) so a request that is
+    // going to be refused never uploads the QR image.
+    const nextBankDetails = normalizeDriverBankDetails(bankPayload, driver.bankDetails || {});
+
+    if (Object.prototype.hasOwnProperty.call(bankPayload, "qrCodeImage")) {
+      nextBankDetails.qrCodeImage = await resolveHostedImageUrl(nextBankDetails.qrCodeImage, {
+        folder: `${env.cloudinary.folder}/driver-payout-qr`,
+        publicIdPrefix: `payout-qr-${String(driver._id)}`,
+        maxBytes: 2 * 1024 * 1024,
+        label: "QR image",
+      });
+    }
+
+    driver.bankDetails = nextBankDetails;
   }
 
   await driver.save();
 
   res.json({
     success: true,
-    data: {
-      id: driver._id,
-      name: driver.name,
-      phone: driver.phone,
-      email: driver.email,
-      profileImage: driver.profileImage || "",
-      routeBooking: serializeDriverRouteBooking(driver.routeBooking),
-      bankDetails: serializeDriverBankDetails(driver.bankDetails),
-    },
+    data: await buildCurrentDriverProfile(driver),
   });
 };
 
