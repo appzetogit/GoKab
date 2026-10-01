@@ -66,6 +66,13 @@ const fleetVehicleSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: {},
     },
+    // { [documentKey]: <the expiresAt value a reminder was already sent for> }.
+    // Keyed by the expiry itself, so renewing a document (a new expiry date)
+    // re-arms its reminder instead of staying silenced forever.
+    document_expiry_notified: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
     status: {
       type: String,
       enum: ['pending', 'approved', 'rejected'],

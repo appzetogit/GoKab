@@ -196,6 +196,107 @@ export const notifyNetworkAssignment = async (ride) => {
   return context;
 };
 
+/**
+ * The assigned fleet driver confirmed the job: refresh the owner's board and
+ * tell whoever created/assigned the ride, so "Waiting for driver" can flip to
+ * "Confirmed" without the owner reopening the list.
+ */
+export const notifyAssignmentAcknowledged = async ({ ride, driver }) => {
+  const driverId = String(driver?._id || ride.driverId || '');
+  const driverName = safe(driver?.name, 'Driver');
+
+  if (ride.organization_owner_id) {
+    emitToRoom(getOrgRoom(ride.organization_owner_id), 'org:ride:acknowledged', {
+      rideId: String(ride._id),
+      driverId,
+      driverName,
+    });
+  }
+
+  const ownerDriverIds = [ride.created_by_driver_id, ride.assignment?.assigned_by_driver_id]
+    .filter(Boolean)
+    .map(String)
+    .filter((id, index, list) => list.indexOf(id) === index && id !== driverId);
+
+  if (ownerDriverIds.length) {
+    await sendPushNotificationToEntities({
+      driverIds: ownerDriverIds,
+      title: `${driverName} confirmed the ride`,
+      body: `Pickup: ${safe(ride.pickupAddress, 'see app')}`,
+      data: { type: 'network_ride_acknowledged', rideId: String(ride._id) },
+    }).catch((error) => console.error('[networkNotification] acknowledge push failed:', error.message));
+  }
+};
+
+const formatPickupTime = (date) =>
+  new Date(date).toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Asia/Kolkata',
+  });
+
+// Who counts as "the owner" of a driver-created ride: whoever created it and
+// whoever last assigned it — minus the assigned driver themselves, who must
+// not be told "your driver hasn't confirmed" about their own job.
+export const resolveRideOwnerDriverIds = (ride) =>
+  [ride.created_by_driver_id, ride.assignment?.assigned_by_driver_id]
+    .filter(Boolean)
+    .map(String)
+    .filter((id, index, list) => list.indexOf(id) === index && id !== String(ride.driverId || ''));
+
+export const notifyScheduledRideReminder = async (ride) => {
+  if (!ride.driverId) return;
+
+  await sendPushNotificationToEntities({
+    driverIds: [String(ride.driverId)],
+    title: 'Upcoming scheduled ride',
+    body: `Pickup at ${formatPickupTime(ride.scheduledAt)} · ${safe(ride.pickupAddress, 'see app')}`,
+    data: { type: 'scheduled_ride_reminder', rideId: String(ride._id) },
+  });
+};
+
+export const notifyScheduledRideReminderOwner = async (ride, driverName = 'Your driver') => {
+  const driverIds = resolveRideOwnerDriverIds(ride);
+  if (!driverIds.length) return;
+
+  await sendPushNotificationToEntities({
+    driverIds,
+    title: 'Scheduled ride not confirmed yet',
+    body: `${driverName} hasn't confirmed the ${formatPickupTime(ride.scheduledAt)} pickup at ${safe(ride.pickupAddress, 'see app')}`,
+    data: { type: 'scheduled_ride_reminder_owner', rideId: String(ride._id) },
+  });
+};
+
+export const notifyAssignmentUnacknowledged = async (ride, driverName = 'Your driver') => {
+  const driverIds = resolveRideOwnerDriverIds(ride);
+  if (!driverIds.length) return;
+
+  await sendPushNotificationToEntities({
+    driverIds,
+    title: 'Driver has not confirmed',
+    body: `${driverName} hasn't confirmed the ride from ${safe(ride.pickupAddress, 'the pickup')}. Check Network Rides.`,
+    data: { type: 'network_ride_unacknowledged', rideId: String(ride._id) },
+  });
+};
+
+export const notifyVehicleDocumentExpiring = async ({ driverIds, vehicle, key, expiresAt, daysLeft }) => {
+  if (!driverIds?.length) return;
+
+  const when = daysLeft <= 0 ? 'today' : `in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`;
+
+  await sendPushNotificationToEntities({
+    driverIds: driverIds.map(String),
+    title: 'Vehicle document expiring',
+    body: `${safe(vehicle.license_plate_number, 'A vehicle')}: ${key.replace(/_/g, ' ')} expires ${when}. Renew it to keep the vehicle active.`,
+    data: {
+      type: 'vehicle_document_expiring',
+      vehicle_id: String(vehicle._id),
+      key,
+      expires_at: new Date(expiresAt).toISOString(),
+    },
+  });
+};
+
 export const notifyAssignmentRemoved = async ({ ride, removedDriverId, reason = '' }) => {
   if (removedDriverId) {
     emitToRoom(getDriverRoom(removedDriverId), 'network:ride:unassigned', {

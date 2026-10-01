@@ -76,6 +76,9 @@ export const createDefaultBusinessSettings = () => ({
     user_can_make_a_ride_after_x_miniutes: '15',
     minimum_time_for_search_drivers_for_schedule_ride: '1',
     minimum_time_for_starting_trip_drivers_for_schedule_ride: '15',
+    // How many minutes before pickup a driver may start (arriving/started) a
+    // scheduled ride, and from when it shows as their active trip.
+    scheduled_start_window_minutes: '30',
     can_round_the_bill_values: '1',
     enable_shipment_load_feature: '1',
     enable_shipment_unload_feature: '1',

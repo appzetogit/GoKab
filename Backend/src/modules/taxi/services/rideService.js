@@ -435,6 +435,40 @@ export const isRideScheduledForFuture = (ride = {}, referenceTime = new Date()) 
   return Number.isFinite(scheduledTime) && scheduledTime > new Date(referenceTime).getTime();
 };
 
+const DEFAULT_SCHEDULED_START_WINDOW_MINUTES = 30;
+
+// How long before `scheduledAt` a driver may begin the trip (arriving/started)
+// and see it as their active ride. Admin-tunable via
+// `transport_ride.scheduled_start_window_minutes`.
+export const getScheduledStartWindowMs = async () => {
+  const setting = await AdminBusinessSetting.findOne({ scope: 'default' }).select('transport_ride').lean();
+  const configured = Number(setting?.transport_ride?.scheduled_start_window_minutes);
+  const minutes =
+    Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_SCHEDULED_START_WINDOW_MINUTES;
+
+  return minutes * 60 * 1000;
+};
+
+// True while a scheduled ride's start window has not opened yet. A ride with
+// no `scheduledAt`, or one already inside its window, is never "too early".
+export const isRideBeforeStartWindow = (ride = {}, windowMs = 0, referenceTime = new Date()) => {
+  const scheduledTime = getScheduledRideTimestamp(ride);
+  return (
+    Number.isFinite(scheduledTime) &&
+    scheduledTime - windowMs > new Date(referenceTime).getTime()
+  );
+};
+
+const formatStartWindowOpensAt = (date) =>
+  new Date(date).toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'Asia/Kolkata',
+  });
+
 const getScheduledRideCommitmentWindow = (ride = {}) => {
   const scheduledTime = getScheduledRideTimestamp(ride);
 
@@ -1517,7 +1551,13 @@ export const getActiveRideForIdentity = async ({ role, entityId }) => {
       .populate('userId', 'name phone')
       .populate('driverId', 'name phone profileImage vehicleType vehicleIconType vehicleNumber vehicleColor vehicleMake vehicleModel vehicleImage rating');
 
-    const activeRide = rides.find((ride) => !isRideScheduledForFuture(ride)) || null;
+    // A scheduled ride only becomes the driver's active trip once its start
+    // window opens — before that it is just a booking on the schedule — and
+    // from then on the app's "Open Trip" can reach it to start it.
+    const startWindowMs = rides.some((ride) => isRideScheduledForFuture(ride))
+      ? await getScheduledStartWindowMs()
+      : 0;
+    const activeRide = rides.find((ride) => !isRideBeforeStartWindow(ride, startWindowMs)) || null;
 
     if (activeRide) {
       activeRide.$locals.commissionPreview = await previewRideCommission(activeRide);
@@ -1529,10 +1569,55 @@ export const getActiveRideForIdentity = async ({ role, entityId }) => {
   return null;
 };
 
-export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, page = 1, category = 'all' }) => {
+const parseHistoryDateBound = (value, field) => {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return null;
+  }
+
+  const parsed = new Date(String(value).trim());
+  if (Number.isNaN(parsed.getTime())) {
+    throw new ApiError(422, `${field} must be a valid ISO date`, { field }, 'INVALID_DATE_RANGE');
+  }
+
+  return parsed;
+};
+
+// A ride's position in time for history purposes is when it finished, falling
+// back to when it was booked for rides that never completed (cancelled, still
+// open). Expressed as an $or on plain fields rather than an $expr so the
+// `{ driverId, createdAt }` / `{ userId, createdAt }` indexes still apply.
+const buildHistoryDateRangeClause = ({ from, to }) => {
+  const fromDate = parseHistoryDateBound(from, 'from');
+  const toDate = parseHistoryDateBound(to, 'to');
+
+  if (!fromDate && !toDate) {
+    return null;
+  }
+
+  if (fromDate && toDate && fromDate >= toDate) {
+    throw new ApiError(422, 'from must be earlier than to', { from, to }, 'INVALID_DATE_RANGE');
+  }
+
+  const bounds = {
+    ...(fromDate ? { $gte: fromDate } : {}),
+    ...(toDate ? { $lt: toDate } : {}),
+  };
+
+  return {
+    $or: [
+      { completedAt: { $ne: null, ...bounds } },
+      { completedAt: null, createdAt: bounds },
+    ],
+  };
+};
+
+export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, page = 1, category = 'all', from, to }) => {
   if (!['user', 'driver', 'owner'].includes(role)) {
     throw new ApiError(403, 'Only riders, drivers, and fleet owners can access ride history');
   }
+
+  // Parsed before any query so a bad range fails fast with 422, never as a 500.
+  const dateRangeClause = buildHistoryDateRangeClause({ from, to });
 
   const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
   const safePage = Math.max(Number(page) || 1, 1);
@@ -1571,6 +1656,12 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
     ];
   } else if (normalizedCategory === 'scheduled') {
     query.scheduledAt = { $ne: null };
+  }
+
+  // `$and` (not another top-level `$or`) so it composes with the category
+  // filter above, which already uses `$or` for 'outstation'.
+  if (dateRangeClause) {
+    query.$and = [...(query.$and || []), dateRangeClause];
   }
 
   const counterpartPath = role === 'user' ? 'driverId' : 'userId';
@@ -1798,11 +1889,36 @@ const applyRiderRatingToUserAggregate = async (ride) => {
 // earlier), so this can't ride along with the completion status PATCH in the
 // normal flow — it needs its own endpoint, mirroring how the rider's own
 // rating-of-driver is submitted well after the ride's status is completed.
-export const submitDriverRatingForRider = async ({ rideId, driverId, rating }) => {
+const RIDER_FEEDBACK_COMMENT_MAX = 500;
+const RIDER_FEEDBACK_TAG_MAX_LENGTH = 40;
+const RIDER_FEEDBACK_MAX_TAGS = 10;
+
+const normalizeRiderFeedbackTags = (tags) => {
+  if (tags === undefined || tags === null) {
+    return [];
+  }
+
+  if (!Array.isArray(tags)) {
+    throw new ApiError(400, 'tags must be an array of strings', null, 'INVALID_TAGS');
+  }
+
+  return [
+    ...new Set(
+      tags
+        .map((tag) => String(tag ?? '').trim().slice(0, RIDER_FEEDBACK_TAG_MAX_LENGTH))
+        .filter(Boolean),
+    ),
+  ].slice(0, RIDER_FEEDBACK_MAX_TAGS);
+};
+
+export const submitDriverRatingForRider = async ({ rideId, driverId, rating, comment, tags }) => {
   const normalizedRating = Math.round(Number(rating));
   if (!Number.isInteger(normalizedRating) || normalizedRating < 1 || normalizedRating > 5) {
     throw new ApiError(400, 'rating must be an integer between 1 and 5');
   }
+
+  const normalizedComment = String(comment ?? '').trim().slice(0, RIDER_FEEDBACK_COMMENT_MAX);
+  const normalizedTags = normalizeRiderFeedbackTags(tags);
 
   const ride = await Ride.findOne({ _id: rideId, driverId });
   if (!ride) {
@@ -1815,7 +1931,12 @@ export const submitDriverRatingForRider = async ({ rideId, driverId, rating }) =
     throw new ApiError(409, 'Rider has already been rated for this ride');
   }
 
-  ride.riderFeedback = { rating: normalizedRating, submittedAt: new Date() };
+  ride.riderFeedback = {
+    rating: normalizedRating,
+    comment: normalizedComment,
+    tags: normalizedTags,
+    submittedAt: new Date(),
+  };
   await ride.save();
   await applyRiderRatingToUserAggregate(ride);
 
@@ -1860,6 +1981,31 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
   if (!config.allowedCurrent.includes(ride.liveStatus)) {
     throw new ApiError(409, `Ride cannot move from ${ride.liveStatus} to ${nextStatus}`);
+  }
+
+  // A scheduled ride cannot be started hours early. Re-sending the status the
+  // ride is already in is a harmless no-op and must not be refused.
+  if (
+    [RIDE_LIVE_STATUS.ARRIVING, RIDE_LIVE_STATUS.STARTED].includes(nextStatus) &&
+    ride.liveStatus !== nextStatus &&
+    isRideScheduledForFuture(ride)
+  ) {
+    const windowMs = await getScheduledStartWindowMs();
+
+    if (isRideBeforeStartWindow(ride, windowMs)) {
+      const startsAt = new Date(new Date(ride.scheduledAt).getTime() - windowMs);
+
+      throw new ApiError(
+        409,
+        `This ride is scheduled for later. You can start it from ${formatStartWindowOpensAt(startsAt)}.`,
+        {
+          starts_at: startsAt.toISOString(),
+          scheduled_at: new Date(ride.scheduledAt).toISOString(),
+          window_minutes: Math.round(windowMs / 60000),
+        },
+        'TOO_EARLY_TO_START',
+      );
+    }
   }
 
   // Resolved before anything is mutated: refusing later would leave the ride

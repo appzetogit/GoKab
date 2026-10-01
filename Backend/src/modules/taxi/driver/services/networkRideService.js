@@ -14,6 +14,8 @@ import {
 } from '../../services/rideService.js';
 import {
   buildAssignedByPayload,
+  buildNetworkRideContext,
+  notifyAssignmentAcknowledged,
   notifyAssignmentRejected,
   notifyAssignmentRemoved,
   notifyNetworkAssignment,
@@ -123,6 +125,10 @@ const applyAssignment = async ({ ride, target, byDriverId, scheduledForLater }) 
         'assignment.mode': 'direct_assign',
         'assignment.assigned_by_driver_id': byDriverId,
         'assignment.assigned_at': assignedAt,
+        'assignment.acknowledged_at': null,
+        'reminders.pickup_sent_at': null,
+        'reminders.owner_pickup_sent_at': null,
+        'reminders.unacknowledged_sent_at': null,
       },
       $push: {
         'assignment.history': {
@@ -248,6 +254,9 @@ export const serializeNetworkRide = (ride, { assignedDriver = null, assignedBy =
   assignment: {
     mode: ride.assignment?.mode || 'dispatch',
     assigned_at: ride.assignment?.assigned_at || null,
+    // Always present as a key (null until confirmed): the app only offers the
+    // Confirm button when the key exists at all.
+    acknowledged_at: ride.assignment?.acknowledged_at || null,
     assigned_by: ride.assignment?.mode === 'direct_assign' ? assignedBy || null : null,
     driver: assignedDriver
       ? {
@@ -472,6 +481,10 @@ export const unassignRide = async ({ driverId, rideId, reason = '' }) => {
         'assignment.mode': 'dispatch',
         'assignment.assigned_by_driver_id': null,
         'assignment.assigned_at': null,
+        'assignment.acknowledged_at': null,
+        'reminders.pickup_sent_at': null,
+        'reminders.owner_pickup_sent_at': null,
+        'reminders.unacknowledged_sent_at': null,
       },
       $push: {
         'assignment.history': {
@@ -540,6 +553,10 @@ export const rejectAssignment = async ({ driverId, rideId, reason = '' }) => {
         liveStatus: RIDE_LIVE_STATUS.SEARCHING,
         acceptedAt: null,
         'assignment.mode': 'dispatch',
+        'assignment.acknowledged_at': null,
+        'reminders.pickup_sent_at': null,
+        'reminders.owner_pickup_sent_at': null,
+        'reminders.unacknowledged_sent_at': null,
       },
       $push: {
         'assignment.history': {
@@ -562,6 +579,71 @@ export const rejectAssignment = async ({ driverId, rideId, reason = '' }) => {
   await notifyAssignmentRejected({ ride: updated, driverId, reason });
 
   return serializeNetworkRide(updated);
+};
+
+const serializeForAssignedDriver = async (ride, driver) => {
+  const context = await buildNetworkRideContext(ride);
+  return serializeNetworkRide(ride, {
+    assignedDriver: driver,
+    assignedBy: buildAssignedByPayload(context),
+  });
+};
+
+/**
+ * The assigned fleet driver confirms they will take the job. Idempotent: a
+ * repeat confirm returns the ride unchanged and does not notify the owner a
+ * second time.
+ */
+export const acknowledgeAssignment = async ({ driverId, rideId }) => {
+  const rideObjectId = toObjectId(rideId, 'rideId');
+  const ride = await Ride.findById(rideObjectId);
+  if (!ride || ride.origin !== 'driver_created') {
+    throw new ApiError(404, 'Ride not found', null, 'RIDE_NOT_FOUND');
+  }
+
+  if (String(ride.driverId || '') !== String(driverId)) {
+    throw new ApiError(403, 'This ride is not assigned to you', null, 'NOT_RIDE_DRIVER');
+  }
+
+  const driver = await Driver.findById(driverId).select('name phone vehicleNumber isOnline isOnRide').lean();
+
+  if (ride.assignment?.acknowledged_at) {
+    return serializeForAssignedDriver(ride, driver);
+  }
+
+  const closedLiveStatuses = [
+    RIDE_LIVE_STATUS.STARTED,
+    RIDE_LIVE_STATUS.COMPLETED,
+    RIDE_LIVE_STATUS.CANCELLED,
+  ];
+
+  // The guards live in the filter, not in a read-then-write: a confirm racing
+  // an unassign/cancel must lose, not resurrect a stale confirmation.
+  const updated = await Ride.findOneAndUpdate(
+    {
+      _id: ride._id,
+      driverId,
+      status: RIDE_STATUS.ACCEPTED,
+      liveStatus: { $nin: closedLiveStatuses },
+      'assignment.acknowledged_at': null,
+    },
+    { $set: { 'assignment.acknowledged_at': new Date() } },
+    { new: true },
+  );
+
+  if (!updated) {
+    // Either a concurrent confirm already landed (fine — same result), or the
+    // ride moved on underneath us.
+    const current = await Ride.findById(ride._id);
+    if (current?.assignment?.acknowledged_at && String(current.driverId || '') === String(driverId)) {
+      return serializeForAssignedDriver(current, driver);
+    }
+    throw new ApiError(409, 'This ride can no longer be confirmed', null, 'RIDE_NOT_OPEN');
+  }
+
+  await notifyAssignmentAcknowledged({ ride: updated, driver });
+
+  return serializeForAssignedDriver(updated, driver);
 };
 
 export const cancelDriverRide = async ({ driverId, rideId, reason = '' }) => {
