@@ -7174,6 +7174,34 @@ export const createFleetVehicle = async (payload = {}) => {
   return serializeFleetVehicle(populated);
 };
 
+// The same admin-managed, usage-type-aware required-document rule
+// addOwnerVehicle/updateOwnerFleetVehicle already enforce when a driver adds
+// or edits a fleet vehicle — applied again here so admin can't approve a
+// vehicle that was created before those templates existed, or that
+// otherwise slipped through with an empty `documents` map. Reuses
+// listDriverNeededDocuments (defined further down in this same file) rather
+// than duplicating the driver-controller's filter in a second place.
+const findMissingVehicleApprovalDocuments = async (vehicle) => {
+  const templates = await listDriverNeededDocuments({ activeOnly: true, includeFields: true });
+  const usageType = String(vehicle.usage_type || '').trim().toLowerCase();
+
+  const requiredTemplates = templates.filter(
+    (template) =>
+      template.applies_to === 'vehicle' &&
+      template.is_required &&
+      (!template.applies_when_usage_type || template.applies_when_usage_type === usageType),
+  );
+
+  return requiredTemplates
+    .flatMap((template) =>
+      (Array.isArray(template.fields) ? template.fields : [])
+        .filter((field) => field.required ?? template.is_required ?? false)
+        .map((field) => String(field.key || '').trim())
+        .filter(Boolean),
+    )
+    .filter((key) => !vehicle.documents?.[key]);
+};
+
 export const updateFleetVehicle = async (id, payload = {}) => {
   await ensureFleetOwnersSeeded();
 
@@ -7185,6 +7213,20 @@ export const updateFleetVehicle = async (id, payload = {}) => {
 
   if (nextStatus === 'rejected' && !String(payload.reason ?? item.reason ?? '').trim()) {
     throw new ApiError(400, 'A reason is required to reject a fleet vehicle', null, 'REJECTION_REASON_REQUIRED');
+  }
+
+  // A vehicle missing a required document (RC, insurance, ...) must not go
+  // live just because admin never noticed `documents` was empty.
+  if (nextStatus === 'approved' && previousStatus !== 'approved') {
+    const missingDocuments = await findMissingVehicleApprovalDocuments(item);
+    if (missingDocuments.length > 0) {
+      throw new ApiError(
+        400,
+        `Cannot approve — missing required documents: ${missingDocuments.join(', ')}`,
+        { missing: missingDocuments },
+        'VEHICLE_DOCUMENTS_REQUIRED',
+      );
+    }
   }
 
   if (payload.owner_id !== undefined) {
