@@ -19,6 +19,7 @@ import {
   postLeadMessage,
 } from '../services/leadService.js';
 import {
+  acknowledgeAssignment,
   assignRide,
   cancelDriverRide,
   createDriverRide,
@@ -196,6 +197,14 @@ export const rejectNetworkAssignmentController = asyncHandler(async (req, res) =
     driverId: req.auth.sub,
     rideId: req.params.rideId,
     reason: req.body?.reason,
+  });
+  res.json({ success: true, data: ride });
+});
+
+export const acknowledgeNetworkAssignmentController = asyncHandler(async (req, res) => {
+  const ride = await acknowledgeAssignment({
+    driverId: req.auth.sub,
+    rideId: req.params.rideId,
   });
   res.json({ success: true, data: ride });
 });

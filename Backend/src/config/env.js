@@ -71,6 +71,16 @@ export const env = {
     apiSecret: process.env.CLOUDINARY_API_SECRET || '',
     folder: process.env.CLOUDINARY_FOLDER || 'appzeto-taxi',
   },
+  // Dispatch skips an online driver whose last position is older than this
+  // (app killed / no network). 0 = never skip. Leave at 0 until every driver
+  // is on an app build that sends `driver:location:update`; older builds only
+  // report a position at go-online, so they would otherwise age out of
+  // dispatch ~3 min after going online.
+  driverLocationStaleSeconds:
+    Number.isFinite(Number(process.env.DRIVER_LOCATION_STALE_SECONDS)) &&
+    Number(process.env.DRIVER_LOCATION_STALE_SECONDS) > 0
+      ? Number(process.env.DRIVER_LOCATION_STALE_SECONDS)
+      : 0,
   firebase: {
     databaseURL: process.env.FIREBASE_DATABASE_URL || '',
     serviceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH || '',

@@ -6,6 +6,8 @@ export const SOCKET_EVENTS = Object.freeze({
   RIDE_STATE: 'ride:state',
   RIDE_STATUS_UPDATE: 'ride:status:update',
   RIDE_STATUS_UPDATED: 'ride:status:updated',
+  // Idle (online, not on a ride) position heartbeat from the driver app.
+  DRIVER_LOCATION_UPDATE: 'driver:location:update',
   RIDE_DRIVER_LOCATION_UPDATE: 'ride:driver-location:update',
   RIDE_DRIVER_LOCATION_UPDATED: 'ride:driver-location:updated',
   RIDE_DRIVER_ROUTE_UPDATED: 'ride:driver-route:updated',

@@ -48,6 +48,8 @@ import {
   getDriverIncentives,
   getDriverNotifications,
   cancelDriverScheduledRide,
+  getDriverRatings,
+  getDriverReferrals,
   getDriverScheduledRides,
   getServiceCenterBookings,
   getServiceCenterBookingBiometrics,
@@ -240,6 +242,16 @@ driverRouter.get(
   "/scheduled-rides",
   authenticate(["driver"]),
   asyncHandler(getDriverScheduledRides),
+);
+driverRouter.get(
+  "/referrals",
+  authenticate(["driver"]),
+  asyncHandler(getDriverReferrals),
+);
+driverRouter.get(
+  "/ratings",
+  authenticate(["driver"]),
+  asyncHandler(getDriverRatings),
 );
 driverRouter.post(
   "/scheduled-rides/:rideId/cancel",

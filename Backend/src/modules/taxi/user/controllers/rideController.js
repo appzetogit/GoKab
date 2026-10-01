@@ -377,6 +377,8 @@ export const listMyRides = async (req, res) => {
     limit: req.query.limit,
     page: req.query.page,
     category: req.query.category,
+    from: req.query.from,
+    to: req.query.to,
   });
 
   res.json({
@@ -441,6 +443,8 @@ export const submitDriverRiderRating = async (req, res) => {
     rideId: req.params.rideId,
     driverId: req.auth.sub,
     rating: req.body.rating,
+    comment: req.body.comment,
+    tags: req.body.tags,
   });
 
   res.json({

@@ -1,3 +1,4 @@
+import { env } from '../../../config/env.js';
 import { ApiError } from '../../../utils/ApiError.js';
 import { normalizePoint } from '../../../utils/geo.js';
 import { DISPATCH_TOP_DRIVERS } from '../constants/index.js';
@@ -40,6 +41,21 @@ const buildWalletEligibilityQuery = () => ({
     { 'wallet.isBlocked': { $ne: true } },
   ],
 });
+
+// A driver who has never reported a position timestamp (data from before
+// `locationUpdatedAt` existed) is kept, not excluded.
+const buildFreshLocationQuery = () => {
+  if (!env.driverLocationStaleSeconds) {
+    return null;
+  }
+
+  return {
+    $or: [
+      { locationUpdatedAt: null },
+      { locationUpdatedAt: { $gte: new Date(Date.now() - env.driverLocationStaleSeconds * 1000) } },
+    ],
+  };
+};
 
 const buildDriverMatchFilters = ({ zoneId, serviceLocationId, vehicleTypeId, vehicleTypeIds, vehicleTypeKeys }) => {
   const normalizedVehicleTypeIds = normalizeVehicleTypeIds(vehicleTypeIds, vehicleTypeId);
@@ -227,9 +243,14 @@ const findDriversForZone = async ({
   const selectedFields =
     'name phone socketId vehicleTypeId vehicleType vehicleIconType vehicleNumber vehicleColor vehicleMake vehicleModel rating location zoneId service_location_id isOnline isOnRide routeBooking owner_id assignedFleetVehicleId wallet route_mode active_route_id driver_category';
 
+  // Staleness only matters for drivers matched on their *live* position. A
+  // route-booking driver is matched on their saved anchor point, which never
+  // goes stale, so they are deliberately exempt.
+  const freshLocationQuery = buildFreshLocationQuery();
+
   const [liveLocationDrivers, routeBookingDrivers] = await Promise.all([
     Driver.find({
-      ...commonFilters,
+      ...(freshLocationQuery ? { $and: [commonFilters, freshLocationQuery] } : commonFilters),
       'routeBooking.enabled': { $ne: true },
       ...buildGeoNearFilter('location', coordinates, effectiveMaxDistance),
     })

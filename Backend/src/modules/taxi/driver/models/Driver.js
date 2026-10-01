@@ -436,6 +436,10 @@ const driverSchema = new mongoose.Schema(
         default: [0, 0],
       },
     },
+    locationUpdatedAt: {
+      type: Date,
+      default: null,
+    },
     routeBooking: {
       enabled: {
         type: Boolean,

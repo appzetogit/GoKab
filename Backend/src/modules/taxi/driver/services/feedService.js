@@ -244,6 +244,9 @@ export const serializeFeedItem = (ride, { lead_type, publisher = null, distanceF
   },
   scheduledAt: ride.scheduledAt,
   serviceType: ride.serviceType,
+  // Free text the booking was posted with ("Persons: 2 • Luggage: 1 •
+  // Vehicle: SUV") — the app reads its trip-detail cells out of this.
+  notes: ride.network_notes || '',
   distance_km: ride.estimatedDistanceMeters
     ? Math.round((ride.estimatedDistanceMeters / 1000) * 10) / 10
     : null,

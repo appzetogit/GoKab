@@ -25,6 +25,10 @@ import {
 import { findZoneByPickup } from '../services/matchingService.js';
 import { acceptRideAssignment, createRideRecord, getRideRoom, submitRideBid } from '../services/rideService.js';
 import { SOCKET_EVENTS } from './events.js';
+import {
+  clearDriverLocationThrottle,
+  registerDriverLocationSocketHandlers,
+} from './handlers/driverLocationSocketHandler.js';
 import { registerLeadSocketHandlers } from './handlers/leadSocketHandler.js';
 import { registerRideSocketHandlers } from './handlers/rideSocketHandler.js';
 import { authorizeRideRoomAccess } from './middleware/rideRoomAuth.js';
@@ -38,6 +42,10 @@ const onAsync = (socket, handler) => async (payload = {}) => {
     console.error('[socket onAsync error]', error);
     socket.emit('errorMessage', {
       message: error.message || 'Socket operation failed',
+      // Present only for ApiError, so a client can branch on e.g.
+      // TOO_EARLY_TO_START the same way it does on the REST response.
+      ...(error.code ? { code: error.code } : {}),
+      ...(error.details ? { details: error.details } : {}),
     });
   }
 };
@@ -131,6 +139,7 @@ export const configureTaxiSocketServer = (httpServer) => {
 
     registerRideSocketHandlers({ io, socket, onAsync });
     registerLeadSocketHandlers({ socket, onAsync });
+    registerDriverLocationSocketHandlers({ socket, onAsync });
 
     socket.on(
       'locationUpdate',
@@ -146,6 +155,7 @@ export const configureTaxiSocketServer = (httpServer) => {
         await Driver.findByIdAndUpdate(identity.sub, {
           socketId: socket.id,
           location: toPoint(normalizedCoords, 'coordinates'),
+          locationUpdatedAt: new Date(),
           zoneId: zone?._id || null,
         });
         notifyLateAvailableDriver(identity.sub).catch((error) => {
@@ -258,6 +268,7 @@ export const configureTaxiSocketServer = (httpServer) => {
     socket.on('disconnect', async () => {
       if (identity.role === 'driver') {
         clearDriverRoute(identity.sub);
+        clearDriverLocationThrottle(identity.sub);
         await Driver.findByIdAndUpdate(identity.sub, { socketId: null });
       }
     });
