@@ -3118,6 +3118,11 @@ export const getCurrentDriver = async (req, res) => {
         : [],
       onboarding: driver.onboarding || {},
       todaySummary: todaySummary || buildDriverTodaySummaryFromDocument(driver),
+      // Read-only account info for the Edit Profile screen — PATCH /me must
+      // never accept these back (see updateCurrentDriver).
+      account_type: driver.account_type || "individual",
+      driver_category: driver.driver_category || "lower",
+      createdAt: driver.createdAt,
     },
   });
 };
