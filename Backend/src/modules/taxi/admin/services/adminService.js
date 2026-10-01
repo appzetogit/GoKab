@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { ApiError } from '../../../../utils/ApiError.js';
+import { findMissingDocumentDetails } from '../../services/fleetVehicleDocumentRules.js';
 import { createDefaultAdminState } from '../data/defaultAdminState.js';
 import { Admin } from '../models/Admin.js';
 import { User } from '../../user/models/User.js';
@@ -7181,16 +7182,20 @@ export const createFleetVehicle = async (payload = {}) => {
 // otherwise slipped through with an empty `documents` map. Reuses
 // listDriverNeededDocuments (defined further down in this same file) rather
 // than duplicating the driver-controller's filter in a second place.
-const findMissingVehicleApprovalDocuments = async (vehicle) => {
+const resolveRequiredVehicleApprovalTemplates = async (vehicle) => {
   const templates = await listDriverNeededDocuments({ activeOnly: true, includeFields: true });
   const usageType = String(vehicle.usage_type || '').trim().toLowerCase();
 
-  const requiredTemplates = templates.filter(
+  return templates.filter(
     (template) =>
       template.applies_to === 'vehicle' &&
       template.is_required &&
       (!template.applies_when_usage_type || template.applies_when_usage_type === usageType),
   );
+};
+
+const findMissingVehicleApprovalDocuments = async (vehicle) => {
+  const requiredTemplates = await resolveRequiredVehicleApprovalTemplates(vehicle);
 
   return requiredTemplates
     .flatMap((template) =>
@@ -7200,6 +7205,17 @@ const findMissingVehicleApprovalDocuments = async (vehicle) => {
         .filter(Boolean),
     )
     .filter((key) => !vehicle.documents?.[key]);
+};
+
+// A vehicle can have the RC photo on file (findMissingVehicleApprovalDocuments
+// passes) while its number/expiry are still blank — created before the rule
+// existed, or saved through the pre-Gap-2 edit flow that silently dropped
+// number/expiry-only corrections. Shares `findMissingDocumentDetails` with the
+// driver controller's own add/edit checks so admin can never approve
+// something the app itself would have refused to save.
+const findMissingVehicleApprovalDocumentDetails = async (vehicle) => {
+  const requiredTemplates = await resolveRequiredVehicleApprovalTemplates(vehicle);
+  return findMissingDocumentDetails(requiredTemplates, vehicle.documents || {});
 };
 
 export const updateFleetVehicle = async (id, payload = {}) => {
@@ -7225,6 +7241,16 @@ export const updateFleetVehicle = async (id, payload = {}) => {
         `Cannot approve — missing required documents: ${missingDocuments.join(', ')}`,
         { missing: missingDocuments },
         'VEHICLE_DOCUMENTS_REQUIRED',
+      );
+    }
+
+    const missingDocumentDetails = await findMissingVehicleApprovalDocumentDetails(item);
+    if (missingDocumentDetails.length > 0) {
+      throw new ApiError(
+        400,
+        `Cannot approve — missing: ${missingDocumentDetails.join(', ')}`,
+        { missing: missingDocumentDetails },
+        'VEHICLE_DOCUMENT_DETAILS_REQUIRED',
       );
     }
   }

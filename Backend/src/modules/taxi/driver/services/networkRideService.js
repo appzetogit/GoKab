@@ -13,6 +13,7 @@ import {
   isRideScheduledForFuture,
 } from '../../services/rideService.js';
 import {
+  buildAssignedByPayload,
   notifyAssignmentRejected,
   notifyAssignmentRemoved,
   notifyNetworkAssignment,
@@ -217,7 +218,7 @@ export const updateOrganization = async ({ driverId, companyName }) => {
   };
 };
 
-export const serializeNetworkRide = (ride, { assignedDriver = null } = {}) => ({
+export const serializeNetworkRide = (ride, { assignedDriver = null, assignedBy = null } = {}) => ({
   id: String(ride._id),
   status: ride.status,
   liveStatus: ride.liveStatus,
@@ -247,6 +248,7 @@ export const serializeNetworkRide = (ride, { assignedDriver = null } = {}) => ({
   assignment: {
     mode: ride.assignment?.mode || 'dispatch',
     assigned_at: ride.assignment?.assigned_at || null,
+    assigned_by: ride.assignment?.mode === 'direct_assign' ? assignedBy || null : null,
     driver: assignedDriver
       ? {
           id: String(assignedDriver._id),
@@ -376,9 +378,12 @@ export const createDriverRide = async ({ driverId, payload }) => {
     throw new ApiError(409, 'That driver just became unavailable. Try again.', null, 'DRIVER_BUSY');
   }
 
-  await notifyNetworkAssignment(updated);
+  const assignmentContext = await notifyNetworkAssignment(updated);
 
-  return serializeNetworkRide(updated, { assignedDriver: target });
+  return serializeNetworkRide(updated, {
+    assignedDriver: target,
+    assignedBy: buildAssignedByPayload(assignmentContext),
+  });
 };
 
 const loadOwnedRide = async (rideId, driverId, { session = null } = {}) => {
@@ -425,9 +430,12 @@ export const assignRide = async ({ driverId, rideId, targetDriverId }) => {
     throw new ApiError(409, 'This ride already has a driver', null, 'RIDE_NOT_OPEN');
   }
 
-  await notifyNetworkAssignment(updated);
+  const assignmentContext = await notifyNetworkAssignment(updated);
 
-  return serializeNetworkRide(updated, { assignedDriver: target });
+  return serializeNetworkRide(updated, {
+    assignedDriver: target,
+    assignedBy: buildAssignedByPayload(assignmentContext),
+  });
 };
 
 export const unassignRide = async ({ driverId, rideId, reason = '' }) => {
@@ -633,10 +641,42 @@ export const listNetworkRides = async ({ driverId, scope = 'created', status = '
     : [];
   const driverMap = new Map(drivers.map((driver) => [String(driver._id), driver]));
 
+  // Batched the same way as `assignedDriver` above — one query per field set
+  // for the whole page, never per ride, so a 20-ride list stays 4 queries
+  // instead of 40+.
+  const assignerIds = rides
+    .map((ride) => ride.assignment?.assigned_by_driver_id || ride.created_by_driver_id)
+    .filter(Boolean);
+  const creatorIds = rides.map((ride) => ride.created_by_driver_id).filter(Boolean);
+  const ownerIds = rides.map((ride) => ride.organization_owner_id).filter(Boolean);
+  const identityDriverIds = Array.from(new Set([...assignerIds, ...creatorIds].map(String)));
+
+  const [identityDrivers, owners] = await Promise.all([
+    identityDriverIds.length
+      ? Driver.find({ _id: { $in: identityDriverIds } }).select('name phone').lean()
+      : [],
+    ownerIds.length
+      ? Owner.find({ _id: { $in: ownerIds } }).select('company_name owner_name name').lean()
+      : [],
+  ]);
+  const identityDriverMap = new Map(identityDrivers.map((driver) => [String(driver._id), driver]));
+  const ownerMap = new Map(owners.map((owner) => [String(owner._id), owner]));
+
   return {
-    results: rides.map((ride) =>
-      serializeNetworkRide(ride, { assignedDriver: driverMap.get(String(ride.driverId)) || null }),
-    ),
+    results: rides.map((ride) => {
+      const assignerId = ride.assignment?.assigned_by_driver_id || ride.created_by_driver_id || null;
+      const assignedBy = buildAssignedByPayload({
+        assignerId,
+        assignerDriver: assignerId ? identityDriverMap.get(String(assignerId)) : null,
+        organization: ride.organization_owner_id ? ownerMap.get(String(ride.organization_owner_id)) : null,
+        creatorDriver: ride.created_by_driver_id ? identityDriverMap.get(String(ride.created_by_driver_id)) : null,
+      });
+
+      return serializeNetworkRide(ride, {
+        assignedDriver: driverMap.get(String(ride.driverId)) || null,
+        assignedBy,
+      });
+    }),
     pagination: {
       page: safePage,
       limit: safeLimit,

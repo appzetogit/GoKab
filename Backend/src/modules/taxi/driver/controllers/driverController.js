@@ -27,6 +27,11 @@ import { CustomerBiometricProfile } from "../../admin/models/CustomerBiometricPr
 import { AdminBusinessSetting } from "../../admin/models/AdminBusinessSetting.js";
 import { Notification } from "../../admin/promotions/models/Notification.js";
 import { FleetVehicle } from "../../admin/models/FleetVehicle.js";
+import { buildAssignedByPayload } from "../../services/networkNotificationService.js";
+import {
+  findMissingDocuments,
+  findMissingDocumentDetails,
+} from "../../services/fleetVehicleDocumentRules.js";
 import { PoolingVehicle } from "../../admin/models/PoolingVehicle.js";
 import { PoolingBooking } from "../../admin/models/PoolingBooking.js";
 import { uploadDataUrlToCloudinary } from "../../../../utils/cloudinaryUpload.js";
@@ -229,6 +234,36 @@ const normalizeFleetVehicleDocumentValue = async (documentKey, value) => {
     secureUrl: String(value.secureUrl || previewUrl).trim(),
     uploaded: value.uploaded ?? true,
   };
+};
+
+// The app sends expiryDate as free text (`dd MMM yyyy`, e.g. "12 Mar 2031").
+// Parses it and stamps a normalised ISO date (`expiresAt`) onto the same
+// object so a future cron can find documents expiring soon without
+// re-parsing. Mutates each object in `documents` in place — called on the
+// raw, not-yet-uploaded documents map, same as findMissingDocuments/
+// findMissingDocumentDetails, so a bad date is rejected before anything
+// reaches Cloudinary.
+const validateAndStampDocumentExpiry = (documents = {}) => {
+  if (!documents || typeof documents !== "object") return;
+
+  for (const [key, value] of Object.entries(documents)) {
+    if (!value || typeof value !== "object") continue;
+
+    const rawExpiry = String(value.expiryDate ?? value.expiry_date ?? "").trim();
+    if (!rawExpiry) continue;
+
+    const parsed = new Date(rawExpiry);
+    if (Number.isNaN(parsed.getTime()) || parsed.getTime() < Date.now()) {
+      throw new ApiError(
+        400,
+        `${key} expiry date is invalid or already in the past`,
+        { key },
+        "DOCUMENT_EXPIRED",
+      );
+    }
+
+    value.expiresAt = parsed.toISOString();
+  }
 };
 
 const normalizeFleetVehicleDocuments = async (documents = {}, rcFile = "") => {
@@ -2749,8 +2784,10 @@ const serializeDriverNotification = (item = {}) => ({
   createdAt: item.createdAt || null,
 });
 
-const serializeDriverScheduledRide = (ride = {}, currentDriverId = "") => ({
+const serializeDriverScheduledRide = (ride = {}, currentDriverId = "", { assignedBy = null } = {}) => ({
   rideId: String(ride._id || ""),
+  origin: ride.origin || "customer_app",
+  assigned_by: ride.assignment?.mode === "direct_assign" ? assignedBy || null : null,
   type: ride.serviceType || "ride",
   serviceType: ride.serviceType || "ride",
   status: ride.status || RIDE_STATUS.SEARCHING,
@@ -3256,6 +3293,10 @@ export const getDriverScheduledRides = async (req, res) => {
         "service_location_id",
         "transport_type",
         "userId",
+        "origin",
+        "created_by_driver_id",
+        "organization_owner_id",
+        "assignment",
         "createdAt",
         "updatedAt",
       ].join(" "))
@@ -3264,10 +3305,38 @@ export const getDriverScheduledRides = async (req, res) => {
     Ride.countDocuments(query),
   ]);
 
+  const assignerIds = rides
+    .map((ride) => ride.assignment?.assigned_by_driver_id || ride.created_by_driver_id)
+    .filter(Boolean);
+  const creatorIds = rides.map((ride) => ride.created_by_driver_id).filter(Boolean);
+  const ownerIds = rides.map((ride) => ride.organization_owner_id).filter(Boolean);
+  const identityDriverIds = [...new Set([...assignerIds, ...creatorIds].map(String))];
+
+  const [identityDrivers, owners] = await Promise.all([
+    identityDriverIds.length
+      ? Driver.find({ _id: { $in: identityDriverIds } }).select("name phone").lean()
+      : [],
+    ownerIds.length
+      ? Owner.find({ _id: { $in: ownerIds } }).select("company_name owner_name name").lean()
+      : [],
+  ]);
+  const identityDriverMap = new Map(identityDrivers.map((driver) => [String(driver._id), driver]));
+  const ownerMap = new Map(owners.map((owner) => [String(owner._id), owner]));
+
   res.json({
     success: true,
     data: {
-      results: rides.map((ride) => serializeDriverScheduledRide(ride, req.auth.sub)),
+      results: rides.map((ride) => {
+        const assignerId = ride.assignment?.assigned_by_driver_id || ride.created_by_driver_id || null;
+        const assignedBy = buildAssignedByPayload({
+          assignerId,
+          assignerDriver: assignerId ? identityDriverMap.get(String(assignerId)) : null,
+          organization: ride.organization_owner_id ? ownerMap.get(String(ride.organization_owner_id)) : null,
+          creatorDriver: ride.created_by_driver_id ? identityDriverMap.get(String(ride.created_by_driver_id)) : null,
+        });
+
+        return serializeDriverScheduledRide(ride, req.auth.sub, { assignedBy });
+      }),
       totalCount,
       pagination: {
         page: safePage,
@@ -7454,60 +7523,6 @@ const listFleetDriverDocumentTemplates = async () => {
   );
 };
 
-// Shared by the vehicle-document check below and the fleet-driver-document
-// check in createOwnerFleetDriver: which required field keys across
-// `templates` are missing from the supplied `documents` map.
-const findMissingDocuments = (templates, documents = {}) =>
-  templates
-    .flatMap((template) =>
-      (Array.isArray(template.fields) ? template.fields : [])
-        .filter((field) => field.required ?? template.is_required ?? false)
-        .map((field) => String(field.key || "").trim())
-        .filter(Boolean),
-    )
-    .filter((key) => !documents?.[key]);
-
-// A document key can be present (findMissingDocuments passes) while its
-// number/expiry are still missing — e.g. an RC photo uploaded with no plate
-// number or expiry date typed in. Mirrors the identical check
-// completeDriverOnboarding already runs at registration (onboardingService.js)
-// so a fleet vehicle's RC gets the same number/expiry enforcement a driver's
-// own onboarding vehicle does.
-const findMissingDocumentDetails = (templates, documents = {}) => {
-  const missing = [];
-
-  for (const template of templates) {
-    // Only an admin-marked-required template gets this enforcement — e.g.
-    // Commercial Permit tracks an expiry date but is only mandatory via its
-    // own explicit commercial-vehicle check elsewhere, not via is_required.
-    if (!template.is_required) continue;
-    if (!template.has_identify_number && !template.has_expiry_date) continue;
-
-    const templateDocuments = (Array.isArray(template.fields) ? template.fields : [])
-      .map((field) => documents?.[field.key])
-      .filter(Boolean);
-
-    if (templateDocuments.length === 0) continue;
-
-    const templateName = String(template.name || "Document").trim();
-    const hasIdentifyNumber = templateDocuments.some((item) =>
-      String(item?.identifyNumber || item?.identify_number || "").trim(),
-    );
-    const hasExpiryDate = templateDocuments.some((item) =>
-      String(item?.expiryDate || item?.expiry_date || "").trim(),
-    );
-
-    if (template.has_identify_number && !hasIdentifyNumber) {
-      missing.push(`${templateName} ID number`);
-    }
-    if (template.has_expiry_date && !hasExpiryDate) {
-      missing.push(`${templateName} expiry date`);
-    }
-  }
-
-  return missing;
-};
-
 // Same rule as listFleetDriverDocumentTemplates, but for the vehicle side,
 // and additionally scoped to the vehicle's own usage type — a template
 // flagged applies_when_usage_type: 'commercial' has no business being
@@ -7687,6 +7702,10 @@ export const addOwnerVehicle = async (req, res) => {
       "DOCUMENT_DETAILS_REQUIRED",
     );
   }
+
+  // Also pre-upload, same reasoning: a document with a garbled or
+  // already-expired date is worse than no date at all.
+  validateAndStampDocumentExpiry(documents);
 
   // A commercial vehicle is what unlocks the Prime/Middle categories, so the
   // permit that proves it is commercial has to be supplied up front — admin
@@ -7973,21 +7992,144 @@ export const updateOwnerFleetVehicle = async (req, res) => {
     );
   }
 
-  const nextDocuments = await normalizeFleetVehicleDocuments(
-    rawDocuments,
-    rcFile || rawDocuments?.rc || req.body?.document || req.body?.file || "",
-  );
+  // Split this request's `documents` into two kinds of edit:
+  //  - a new/replacement photo (has some image candidate) — goes through
+  //    normalizeFleetVehicleDocuments (and Cloudinary) once the checks below pass.
+  //  - a number/expiry-only correction on a document that already has a photo
+  //    on file — normalizeFleetVehicleDocumentValue would otherwise silently
+  //    drop it, since it has no image to normalize.
+  const imageOnlyRawDocuments = {};
+  const detailOnlyUpdates = {};
+
+  if (rawDocuments && typeof rawDocuments === "object" && !Array.isArray(rawDocuments)) {
+    for (const [rawKey, value] of Object.entries(rawDocuments)) {
+      const key = String(rawKey).trim();
+      if (!key) continue;
+
+      const imageCandidate =
+        typeof value === "string"
+          ? value.trim()
+          : String(
+              value?.dataUrl ||
+                value?.previewUrl ||
+                value?.secureUrl ||
+                value?.url ||
+                value?.imageUrl ||
+                value?.image ||
+                value?.fileUrl ||
+                value?.document ||
+                value?.file ||
+                "",
+            ).trim();
+
+      if (imageCandidate) {
+        imageOnlyRawDocuments[key] = value;
+        continue;
+      }
+
+      if (value && typeof value === "object") {
+        const identifyNumber = String(value.identifyNumber ?? value.identify_number ?? "").trim();
+        const expiryDate = String(value.expiryDate ?? value.expiry_date ?? "").trim();
+        if (identifyNumber || expiryDate) {
+          detailOnlyUpdates[key] = { identifyNumber, expiryDate };
+        }
+      }
+    }
+  }
+
+  // The legacy top-level `rcFile` field is always an image-type update for `rc`.
+  const legacyRcFile = rcFile || req.body?.document || req.body?.file || "";
+  if (legacyRcFile && !imageOnlyRawDocuments.rc) {
+    imageOnlyRawDocuments.rc = legacyRcFile;
+  }
+
+  // Gap 4: validate + stamp expiresAt on everything touched this request,
+  // before anything is checked for completeness or uploaded.
+  validateAndStampDocumentExpiry(imageOnlyRawDocuments);
+  for (const [key, detail] of Object.entries(detailOnlyUpdates)) {
+    if (!detail.expiryDate) continue;
+    const parsed = new Date(detail.expiryDate);
+    if (Number.isNaN(parsed.getTime()) || parsed.getTime() < Date.now()) {
+      throw new ApiError(
+        400,
+        `${key} expiry date is invalid or already in the past`,
+        { key },
+        "DOCUMENT_EXPIRED",
+      );
+    }
+    detail.expiresAt = parsed.toISOString();
+  }
+
+  // Gap 2: a number/expiry-only edit must target a document that already has
+  // a photo on file — there's nothing to attach the number to otherwise.
+  const detailOnlyFinalDocuments = {};
+  for (const [key, detail] of Object.entries(detailOnlyUpdates)) {
+    const existing = vehicle.documents?.[key];
+    if (!existing) {
+      throw new ApiError(
+        400,
+        `No existing ${key} document to update`,
+        { missing: [key] },
+        "DOCUMENTS_REQUIRED",
+      );
+    }
+
+    detailOnlyFinalDocuments[key] = {
+      ...existing,
+      ...(detail.identifyNumber ? { identifyNumber: detail.identifyNumber } : {}),
+      ...(detail.expiryDate ? { expiryDate: detail.expiryDate, expiresAt: detail.expiresAt } : {}),
+    };
+  }
+
+  // Gap 1: the same required-document checks addOwnerVehicle runs, scoped to
+  // the vehicle's usage type *after* this request's change — a usage switch
+  // can bring new required templates into play. Checked against the raw,
+  // not-yet-uploaded documents (merged with what's already stored), before
+  // anything reaches Cloudinary, same reasoning as addOwnerVehicle.
+  const effectiveUsageType = nextUsageType || vehicle.usage_type;
+  const requiredVehicleTemplates = await listVehicleDocumentTemplates(effectiveUsageType);
+  const touchedDocuments = { ...imageOnlyRawDocuments, ...detailOnlyFinalDocuments };
+  const mergedDocumentsForPresenceCheck = { ...(vehicle.documents || {}), ...touchedDocuments };
+
+  const missingFleetDocuments = findMissingDocuments(requiredVehicleTemplates, mergedDocumentsForPresenceCheck);
+  if (missingFleetDocuments.length > 0) {
+    throw new ApiError(
+      400,
+      `Missing required documents: ${missingFleetDocuments.join(", ")}`,
+      { missing: missingFleetDocuments },
+      "DOCUMENTS_REQUIRED",
+    );
+  }
+
+  // Only documents actually touched this request are checked for number/expiry
+  // — an old document saved before the rule existed must not block an
+  // unrelated edit like colour or model.
+  const missingDocumentDetails = findMissingDocumentDetails(requiredVehicleTemplates, touchedDocuments);
+  if (missingDocumentDetails.length > 0) {
+    throw new ApiError(
+      400,
+      `Missing required document details: ${missingDocumentDetails.join(", ")}`,
+      { missing: missingDocumentDetails },
+      "DOCUMENT_DETAILS_REQUIRED",
+    );
+  }
+
+  // Everything checked out — only now does a new/replacement photo actually upload.
+  const nextDocuments = await normalizeFleetVehicleDocuments(imageOnlyRawDocuments, "");
 
   // Snapshot before mutating: a plate/type/usage/document change on an
   // already-approved vehicle means admin approved something that no longer
   // describes this vehicle, so it has to go back through verification. Make,
-  // model and colour are cosmetic and don't trigger this.
+  // model and colour are cosmetic and don't trigger this. A number/expiry-only
+  // correction counts too — admin approved a specific number, so a changed one
+  // has to be re-verified the same as a changed photo would be.
   const wasApproved = String(vehicle.status || "").toLowerCase() === "approved";
   const materialChange =
     String(vehicle.vehicle_type_id || "") !== String(vehicleTypeId) ||
     vehicle.license_plate_number !== number ||
     (nextUsageType && nextUsageType !== vehicle.usage_type) ||
-    Object.keys(nextDocuments).length > 0;
+    Object.keys(nextDocuments).length > 0 ||
+    Object.keys(detailOnlyFinalDocuments).length > 0;
 
   vehicle.vehicle_type_id = vehicleTypeId;
   vehicle.car_brand = make;
@@ -7998,10 +8140,11 @@ export const updateOwnerFleetVehicle = async (req, res) => {
     vehicle.usage_type = nextUsageType;
     vehicle.usage_type_verified = false;
   }
-  if (Object.keys(nextDocuments).length > 0) {
+  if (Object.keys(nextDocuments).length > 0 || Object.keys(detailOnlyFinalDocuments).length > 0) {
     vehicle.documents = {
       ...(vehicle.documents || {}),
       ...nextDocuments,
+      ...detailOnlyFinalDocuments,
     };
     vehicle.markModified("documents");
   }

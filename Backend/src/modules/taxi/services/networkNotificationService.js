@@ -23,7 +23,10 @@ const describeVehicle = (driver) =>
  * who will actually turn up.
  */
 export const buildNetworkRideContext = async (ride) => {
-  const [assignedDriver, creatorDriver, organization] = await Promise.all([
+  const assignerId = ride.assignment?.assigned_by_driver_id || ride.created_by_driver_id || null;
+  const assignerIsCreator = String(assignerId || '') === String(ride.created_by_driver_id || '');
+
+  const [assignedDriver, creatorDriver, organization, separateAssignerDriver] = await Promise.all([
     ride.driverId
       ? Driver.findById(ride.driverId)
           .select('name phone profileImage rating vehicleNumber vehicleColor vehicleMake vehicleModel vehicleType')
@@ -35,6 +38,7 @@ export const buildNetworkRideContext = async (ride) => {
     ride.organization_owner_id
       ? Owner.findById(ride.organization_owner_id).select('company_name owner_name name mobile').lean()
       : null,
+    assignerId && !assignerIsCreator ? Driver.findById(assignerId).select('name phone').lean() : null,
   ]);
 
   const ownerName =
@@ -44,11 +48,33 @@ export const buildNetworkRideContext = async (ride) => {
     assignedDriver,
     creatorDriver,
     organization,
+    assignerId,
+    assignerDriver: assignerIsCreator ? creatorDriver : separateAssignerDriver,
     orgName: safe(organization?.company_name, 'GoKab'),
     ownerName,
     driverName: safe(assignedDriver?.name, 'Driver'),
     vehicleNumber: safe(assignedDriver?.vehicleNumber),
     vehicleLabel: describeVehicle(assignedDriver),
+  };
+};
+
+/**
+ * Shared shape for "who handed this ride to the driver" — used by the
+ * `assigned_by` field on network-ride list/detail responses so the card can
+ * show "From: Ram Travels · Ram" without a toast-only socket event being the
+ * only place that info ever appeared. Deliberately reuses `ownerName`'s
+ * precedence (org owner_name -> org name -> creator's own name) so the name
+ * shown here always matches what `notifyNetworkAssignment`'s toast already
+ * says, rather than drifting from it over time.
+ */
+export const buildAssignedByPayload = ({ assignerId, assignerDriver, organization, creatorDriver }) => {
+  if (!assignerId) return null;
+
+  return {
+    driver_id: String(assignerId),
+    name: safe(organization?.owner_name) || safe(organization?.name) || safe(creatorDriver?.name, 'Owner'),
+    phone: safe(assignerDriver?.phone),
+    org_name: safe(organization?.company_name),
   };
 };
 

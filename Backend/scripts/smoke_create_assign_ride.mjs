@@ -107,10 +107,38 @@ const run = async () => {
   });
   check('201 created and assigned to Suresh', fleetAssign.status === 201, JSON.stringify(fleetAssign.json));
   check('assignment.driver is Suresh', fleetAssign.json?.data?.assignment?.driver?.id === String(suresh._id));
+  check(
+    'assigned_by.driver_id is Ramesh (who assigned), not Suresh (who it was assigned to)',
+    fleetAssign.json?.data?.assignment?.assigned_by?.driver_id === String(ramesh._id),
+    JSON.stringify(fleetAssign.json?.data?.assignment?.assigned_by),
+  );
+  check(
+    'assigned_by.name/org_name populated (not empty)',
+    Boolean(fleetAssign.json?.data?.assignment?.assigned_by?.name),
+    JSON.stringify(fleetAssign.json?.data?.assignment?.assigned_by),
+  );
   const sureshAfter = await Driver.findById(suresh._id).lean();
   check('Suresh is now isOnRide', sureshAfter.isOnRide === true);
-  await Driver.updateOne({ _id: suresh._id }, { $set: { isOnRide: false } });
   const fleetRideId = fleetAssign.json?.data?.id;
+
+  const sureshToken = await login('9000000002');
+  const listForSuresh = await api('/drivers/network/rides?scope=assigned_to_me', { token: sureshToken });
+  const sureshFleetRide = (listForSuresh.json?.data?.results || []).find((item) => item.id === fleetRideId);
+  check(
+    '`assigned_to_me` list carries the same assigned_by (card can show "From: X")',
+    sureshFleetRide?.assignment?.assigned_by?.driver_id === String(ramesh._id),
+    JSON.stringify(sureshFleetRide?.assignment),
+  );
+
+  const listForRamesh = await api('/drivers/network/rides?scope=created', { token: rameshToken });
+  const rameshFleetRide = (listForRamesh.json?.data?.results || []).find((item) => item.id === fleetRideId);
+  check(
+    '`created` list (owner side) also carries assigned_by',
+    rameshFleetRide?.assignment?.assigned_by?.driver_id === String(ramesh._id),
+    JSON.stringify(rameshFleetRide?.assignment),
+  );
+
+  await Driver.updateOne({ _id: suresh._id }, { $set: { isOnRide: false } });
   await Ride.updateOne({ _id: fleetRideId }, { $set: { status: 'completed', liveStatus: 'completed', driverId: null } });
 
   console.log('\n=== 4. Fleet driver id on a plan without can_manage_fleet -> 403 CATEGORY_NOT_ALLOWED, no ride left ===');
@@ -221,8 +249,22 @@ const run = async () => {
     method: 'POST', token: rameshToken, body: { driverId: String(suresh._id) },
   });
   check('POST /assign still assigns correctly', assignCall.status === 200 && assignCall.json?.data?.assignment?.driver?.id === String(suresh._id), JSON.stringify(assignCall.json));
-  await Ride.deleteOne({ _id: forAssign.json?.data?.id });
+  check(
+    'assignment.assigned_by is Ramesh (whoever called /assign)',
+    assignCall.json?.data?.assignment?.assigned_by?.driver_id === String(ramesh._id),
+    JSON.stringify(assignCall.json?.data?.assignment?.assigned_by),
+  );
   await Driver.updateOne({ _id: suresh._id }, { $set: { isOnRide: false } });
+
+  console.log('\n=== 13. `assignment.assigned_by` on network rides (spec 2026-10-01) ===');
+  check('Unassigned ride: assignment.assigned_by is null', plain.json?.data?.assignment?.assigned_by === null);
+  check(
+    'Create + self-assign: assigned_by.driver_id is Ramesh himself',
+    selfAssign.json?.data?.assignment?.assigned_by?.driver_id === String(ramesh._id),
+    JSON.stringify(selfAssign.json?.data?.assignment?.assigned_by),
+  );
+
+  await Ride.deleteOne({ _id: fleetRideId });
 
   console.log(`\n${pass} passed, ${fail} failed`);
   await mongoose.disconnect();
