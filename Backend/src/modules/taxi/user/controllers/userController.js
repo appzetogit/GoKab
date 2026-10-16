@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { isRazorpayTestModeAllowed, isRazorpayTestPayment, safeEqualHex } from '../../services/razorpaySecurity.js';
 import mongoose from 'mongoose';
 import { Env, StandardCheckoutClient, StandardCheckoutPayRequest, PrefillUserLoginDetails } from '@phonepe-pg/pg-sdk-node';
 import { ApiError } from '../../../../utils/ApiError.js';
@@ -563,7 +564,7 @@ const phonePeRequest = async ({
 };
 
 const razorpayRequest = async ({ method, path, body, keyId, keySecret }) => {
-  if (keyId?.includes('DemoKey') || keyId?.includes('demo')) {
+  if (isRazorpayTestModeAllowed() && (keyId?.includes('DemoKey') || keyId?.includes('demo'))) {
     const mockId = path.startsWith('/orders')
       ? `order_test_${Date.now().toString(36)}`
       : `rfnd_test_${Date.now().toString(36)}`;
@@ -2560,7 +2561,7 @@ const verifyAndApplyUserRazorpayWalletTopup = async ({
   const { keyId, keySecret } = await resolveRazorpayCredentials();
 
   const isTestModePayment =
-    normalizedOrderId.startsWith('order_test_') || normalizedPaymentId.startsWith('pay_test_');
+    isRazorpayTestPayment(normalizedOrderId, normalizedPaymentId);
 
   let amountPaise;
   let orderUserId = '';
@@ -2583,7 +2584,7 @@ const verifyAndApplyUserRazorpayWalletTopup = async ({
       .update(`${normalizedOrderId}|${normalizedPaymentId}`)
       .digest('hex');
 
-    if (expectedSignature !== normalizedSignature) {
+    if (!safeEqualHex(expectedSignature, normalizedSignature)) {
       throw new ApiError(400, 'Invalid payment signature');
     }
 
@@ -2958,7 +2959,7 @@ const verifyRazorpayRentalAdvanceGatewayPayment = async ({
     throw new ApiError(400, 'Payment verification fields are required');
   }
 
-  const isTestModePayment = normalizedOrderId.startsWith('order_test_') || normalizedPaymentId.startsWith('pay_test_');
+  const isTestModePayment = isRazorpayTestPayment(normalizedOrderId, normalizedPaymentId);
 
   if (isTestModePayment) {
     const amount = Number.isFinite(Number(expectedAmount)) ? Number(expectedAmount) : 0;
@@ -2981,7 +2982,7 @@ const verifyRazorpayRentalAdvanceGatewayPayment = async ({
     .update(`${normalizedOrderId}|${normalizedPaymentId}`)
     .digest('hex');
 
-  if (expectedSignature !== normalizedSignature) {
+  if (!safeEqualHex(expectedSignature, normalizedSignature)) {
     throw new ApiError(400, 'Invalid payment signature');
   }
 
@@ -3805,7 +3806,7 @@ export const verifyBusBookingPayment = async (req, res) => {
     throw new ApiError(400, 'Payment verification fields are required');
   }
 
-  const isTestModePayment = orderId.startsWith('order_test_') || paymentId.startsWith('pay_test_');
+  const isTestModePayment = isRazorpayTestPayment(orderId, paymentId);
 
   if (!isTestModePayment) {
     const { keySecret } = await resolveRazorpayCredentials();
@@ -3814,7 +3815,7 @@ export const verifyBusBookingPayment = async (req, res) => {
       .update(`${orderId}|${paymentId}`)
       .digest('hex');
 
-    if (expectedSignature !== signature) {
+    if (!safeEqualHex(expectedSignature, signature)) {
       throw new ApiError(400, 'Invalid payment signature');
     }
   }

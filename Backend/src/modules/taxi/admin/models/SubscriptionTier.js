@@ -33,6 +33,10 @@ const subscriptionTierSchema = new mongoose.Schema(
     can_create_rides: { type: Boolean, default: false },
     can_manage_fleet: { type: Boolean, default: false },
     can_publish_rides: { type: Boolean, default: false },
+    // Saved Contacts: assign rides straight to drivers you've worked with. No
+    // schema default on purpose — a tier that predates the flag falls back to
+    // its category (Middle/Prime on, Lower off), see resolveTierPermissions.
+    can_use_contacts: { type: Boolean },
     // The *ongoing* rule: once on Middle/Prime, a lapse into only one vehicle
     // type starts the grace window (driverCategoryService.recheckCategoryVehicleRule).
     requires_commercial_and_private: { type: Boolean, default: false },

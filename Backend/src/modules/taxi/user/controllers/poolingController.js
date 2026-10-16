@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { isRazorpayTestModeAllowed, isRazorpayTestPayment, safeEqualHex } from '../../services/razorpaySecurity.js';
 import { PoolingRoute } from '../../admin/models/PoolingRoute.js';
 import { PoolingVehicle } from '../../admin/models/PoolingVehicle.js';
 import { PoolingBooking } from '../../admin/models/PoolingBooking.js';
@@ -295,7 +296,7 @@ export const createPoolingBookingOrder = asyncHandler(async (req, res) => {
   const { keyId, keySecret } = await resolveRazorpayCredentials();
   const compactUserId = userId.replace(/[^a-zA-Z0-9]/g, '').slice(-8) || 'usr';
   const amountPaise = Math.round(fareBreakdown.totalFare * 100);
-  const order = (keyId?.includes('DemoKey') || keyId?.includes('demo'))
+  const order = (isRazorpayTestModeAllowed() && (keyId?.includes('DemoKey') || keyId?.includes('demo')))
     ? {
       id: `order_test_${Date.now().toString(36)}`,
       amount: amountPaise,
@@ -365,7 +366,7 @@ export const verifyPoolingBookingPayment = asyncHandler(async (req, res) => {
     throw new ApiError(400, 'routeId, vehicleId, scheduleId and selectedSeats are required');
   }
 
-  const isTestModePayment = orderId.startsWith('order_test_') || paymentId.startsWith('pay_test_');
+  const isTestModePayment = isRazorpayTestPayment(orderId, paymentId);
 
   if (!isTestModePayment) {
     const { keySecret } = await resolveRazorpayCredentials();
@@ -374,7 +375,7 @@ export const verifyPoolingBookingPayment = asyncHandler(async (req, res) => {
       .update(`${orderId}|${paymentId}`)
       .digest('hex');
 
-    if (expectedSignature !== signature) {
+    if (!safeEqualHex(expectedSignature, signature)) {
       throw new ApiError(400, 'Invalid payment signature');
     }
   }

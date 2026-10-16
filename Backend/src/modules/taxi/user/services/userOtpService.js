@@ -1,10 +1,10 @@
 import crypto from 'node:crypto';
 import { ApiError } from '../../../../utils/ApiError.js';
-import { env } from '../../../../config/env.js';
 import { UserAuthSession } from '../models/UserAuthSession.js';
 import { User } from '../models/User.js';
 import { signAccessToken } from './authService.js';
 import { sendOtpSms } from '../../services/smsService.js';
+import { getVisibleOtp, resolveOtpForPhone } from '../../services/otpSecurity.js';
 
 const OTP_TTL_MS = 10 * 60 * 1000;
 const VERIFIED_SESSION_TTL_MS = 10 * 60 * 1000;
@@ -22,41 +22,8 @@ export const validateUserPhone = (phone) => {
   }
 };
 
-const generateOtp = () => String(Math.floor(1000 + Math.random() * 9000));
-
 const hashOtp = (otp) => crypto.createHash('sha256').update(String(otp)).digest('hex');
-const getVisibleOtp = (otp) => (process.env.NODE_ENV !== 'production' ? String(otp) : null);
-const isTruthy = (value) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
-const TEST_LOGIN_OTP_PHONE = '7610416911';
-const TEST_LOGIN_OTP_CODE = '0000';
-const getStaticUserOtpConfig = () => ({
-  phone: normalizeUserPhone(env.sms?.staticOtpPhone || TEST_LOGIN_OTP_PHONE),
-  otp: String(env.sms?.staticOtpCode || TEST_LOGIN_OTP_CODE).trim(),
-});
-const resolveUserOtpForPhone = (phone) => {
-  const normalizedPhone = normalizeUserPhone(phone);
-  const staticOtpConfig = getStaticUserOtpConfig();
-  const defaultOtpEnabled = isTruthy(env.sms?.useDefaultOtp);
-
-  if (defaultOtpEnabled && staticOtpConfig.otp) {
-    return {
-      otp: staticOtpConfig.otp,
-      isStatic: true,
-    };
-  }
-
-  if (staticOtpConfig.phone && staticOtpConfig.otp && normalizedPhone === staticOtpConfig.phone) {
-    return {
-      otp: staticOtpConfig.otp,
-      isStatic: true,
-    };
-  }
-
-  return {
-    otp: generateOtp(),
-    isStatic: false,
-  };
-};
+const resolveUserOtpForPhone = (phone) => resolveOtpForPhone(normalizeUserPhone(phone), normalizeUserPhone);
 
 const ensureUserCanLogin = (user) => {
   if (user?.deletedAt || user?.isActive === false || user?.active === false) {

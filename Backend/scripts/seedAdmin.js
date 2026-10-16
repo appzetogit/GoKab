@@ -23,9 +23,14 @@ if (!MONGO_URI) {
 }
 
 // ── Admin credentials ────────────────────────────────────────────────────────
-const ADMIN_EMAIL = 'redigo@gmail.com';
-const ADMIN_PASS  = '123456';
-const ADMIN_NAME  = 'Super Admin';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+const ADMIN_PASS  = process.env.ADMIN_PASSWORD;
+const ADMIN_NAME  = process.env.ADMIN_NAME || 'Admin';
+
+if (!ADMIN_EMAIL || !ADMIN_PASS) {
+  console.error('❌  Set ADMIN_EMAIL and ADMIN_PASSWORD in the environment');
+  process.exit(1);
+}
 
 // ── Mongoose schema (mirrors Admin.js) ───────────────────────────────────────
 const adminSchema = new mongoose.Schema(

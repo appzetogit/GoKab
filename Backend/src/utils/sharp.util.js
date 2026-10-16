@@ -9,7 +9,10 @@ const resizeRules = {
   drivers: { width: 500, height: 500 },
   vehicles: { width: 800, height: 600 },
   logos: { width: 500, height: 500 },
-  advertisements: { width: 1200, height: 600 }
+  advertisements: { width: 1200, height: 600 },
+  // Profile banners keep the uploader's aspect ratio: no crop, just capped in
+  // width (and never upscaled).
+  banners: { width: 1600, fit: 'inside', withoutEnlargement: true },
 };
 
 /**
@@ -53,7 +56,14 @@ export const processAndSaveMedia = async (buffer, type, mimeType, req) => {
     let pipeline = sharp(buffer);
     const rule = resizeRules[type];
 
-    if (rule) {
+    if (rule?.fit === 'inside') {
+      // Apply EXIF orientation first, or a portrait phone photo is stored sideways.
+      pipeline = pipeline.rotate().resize({
+        width: rule.width,
+        fit: 'inside',
+        withoutEnlargement: Boolean(rule.withoutEnlargement),
+      });
+    } else if (rule) {
       pipeline = pipeline.resize(rule.width, rule.height, {
         fit: 'cover',
         position: 'center'

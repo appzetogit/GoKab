@@ -22,6 +22,7 @@ import { acceptRideAssignment, isRideScheduledForFuture } from '../../services/r
 import { holdForPublishedRide } from './escrowService.js';
 import { notifyNetworkAssignment } from '../../services/networkNotificationService.js';
 import { applyDriverWalletAdjustment, getWalletSnapshot } from './walletService.js';
+import { buildPublisherCard, PUBLISHER_DRIVER_FIELDS } from './publisherCardService.js';
 
 const round2 = (value) => Math.round(Number(value || 0) * 100) / 100;
 
@@ -32,6 +33,16 @@ const CUSTOMER_LEAD_MAX_AGE_MS = 30 * 60 * 1000;
 // The first comma-separated part of an address is the locality, which is what a
 // driver actually scans for when skimming a feed.
 const areaOf = (address = '') => String(address || '').split(',')[0].trim();
+
+/** Absent means secure — only an explicit false/"false"/0 opts out of escrow. */
+export const parseIsSecure = (value) => {
+  if (value === undefined || value === null || value === '') return true;
+  if (typeof value === 'boolean') return value;
+  return !['false', '0', 'no', 'off'].includes(String(value).trim().toLowerCase());
+};
+
+/** Older rides predate the flag; they were all escrow-backed. */
+export const isSecureRide = (ride) => ride?.publish?.is_secure !== false;
 
 const maskName = (name = '') => {
   const trimmed = String(name || '').trim();
@@ -45,8 +56,13 @@ const maskName = (name = '') => {
  * The split is fixed at publish time so everyone sees the same numbers: the
  * acceptor knows exactly what they earn, and the publisher knows exactly what
  * their cut is. No money is frozen yet — that happens when someone accepts.
+ *
+ * An unsecure publish (`isSecure: false`) skips the wallet check here and the
+ * escrow hold at accept, and forces the ride to cash: the split is still
+ * recorded so both drivers agree on it, but they settle it offline.
  */
-export const publishRide = async ({ driverId, rideId, totalFare, ownerCommission, driverPayout, expiresInMinutes }) => {
+export const publishRide = async ({ driverId, rideId, totalFare, ownerCommission, driverPayout, expiresInMinutes, isSecure = true }) => {
+  const secure = parseIsSecure(isSecure);
   const permissions = await getDriverPermissions(driverId);
   const settings = await getDriverNetworkSettings();
 
@@ -81,8 +97,8 @@ export const publishRide = async ({ driverId, rideId, totalFare, ownerCommission
   // Fail fast if the publisher plainly cannot back the payout. The binding
   // check is the atomic freeze at accept time; this one just avoids advertising
   // a ride that would collapse the moment someone takes it.
-  const wallet = await getWalletSnapshot(permissions.driver);
-  if (wallet.available < payout) {
+  const wallet = secure ? await getWalletSnapshot(permissions.driver) : null;
+  if (secure && wallet.available < payout) {
     throw new ApiError(
       402,
       `You need ₹${payout} available to publish this ride (you have ₹${wallet.available})`,
@@ -124,6 +140,8 @@ export const publishRide = async ({ driverId, rideId, totalFare, ownerCommission
         'publish.total_fare': total,
         'publish.owner_commission': commission,
         'publish.driver_payout': payout,
+        'publish.is_secure': secure,
+        ...(secure ? {} : { paymentMethod: 'cash' }),
         'publish.status': 'open',
         'publish.taken_by_driver_id': null,
         'publish.taken_at': null,
@@ -177,6 +195,7 @@ const broadcastNewDriverLead = async (ride) => {
     pickup: ride.pickupAddress || '',
     drop: ride.dropAddress || '',
     amount_for_you: ride.publish?.driver_payout || 0,
+    is_secure: isSecureRide(ride),
     expires_at: ride.publish?.expires_at || null,
   });
 
@@ -254,6 +273,9 @@ export const serializeFeedItem = (ride, { lead_type, publisher = null, distanceF
   total_fare: lead_type === 'driver' ? ride.publish?.total_fare || ride.fare : ride.fare,
   amount_for_you:
     lead_type === 'driver' ? ride.publish?.driver_payout || 0 : ride.estimatedEarnings ?? null,
+  // Escrow only exists between drivers, so it means nothing on a customer lead.
+  is_secure: lead_type === 'driver' ? isSecureRide(ride) : null,
+  payment_method: ride.paymentMethod || 'cash',
   publisher,
   // Deliberately masked: the customer's identity is what the contact fee buys.
   customer: { name_masked: maskName(ride.offline_customer?.name) },
@@ -357,7 +379,7 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
   const publisherIds = paged.map((item) => item.ride.created_by_driver_id).filter(Boolean);
   const [publishers, owners, vehicles, contacts, wallet] = await Promise.all([
     publisherIds.length
-      ? Driver.find({ _id: { $in: publisherIds } }).select('name rating owner_id driver_category').lean()
+      ? Driver.find({ _id: { $in: publisherIds } }).select(PUBLISHER_DRIVER_FIELDS).lean()
       : [],
     Owner.find({ _id: { $in: paged.map((item) => item.ride.organization_owner_id).filter(Boolean) } })
       .select('company_name owner_name name')
@@ -402,22 +424,14 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
     const publisherDriver = publisherMap.get(String(ride.created_by_driver_id));
     const organization = ownerMap.get(String(ride.organization_owner_id));
     const alreadyContacted = contactedRideIds.has(String(ride._id));
-    const holdRequired = tab === 'driver' ? ride.publish?.owner_commission || 0 : 0;
+    const holdRequired = tab === 'driver' && isSecureRide(ride) ? ride.publish?.owner_commission || 0 : 0;
 
     return serializeFeedItem(ride, {
       lead_type: tab === 'customer' ? 'customer' : 'driver',
       vehicle: vehicleMap.get(String(ride.vehicleTypeId)) || null,
       distanceFromMeKm,
       routeMatch,
-      publisher: publisherDriver
-        ? {
-            id: String(publisherDriver._id),
-            name: publisherDriver.name,
-            org_name: organization?.company_name || '',
-            category: publisherDriver.driver_category || 'lower',
-            rating: publisherDriver.rating || 0,
-          }
-        : null,
+      publisher: buildPublisherCard(publisherDriver, organization),
       contact: {
         fee: alreadyContacted ? 0 : contactFee,
         already_contacted: alreadyContacted,
@@ -507,7 +521,10 @@ const acceptPublishedRide = async ({ driverId, ride }) => {
       throw new ApiError(409, 'Another driver just took this ride', null, 'RIDE_ALREADY_TAKEN');
     }
 
-    await holdForPublishedRide({ ride: claimed, session });
+    const secure = isSecureRide(claimed);
+    if (secure) {
+      await holdForPublishedRide({ ride: claimed, session });
+    }
 
     if (!isRideScheduledForFuture(claimed)) {
       await Driver.updateOne({ _id: driverId }, { $set: { isOnRide: true } }, { session });
@@ -522,12 +539,13 @@ const acceptPublishedRide = async ({ driverId, ride }) => {
     emitToRoom(getPublisherRoom(claimed.created_by_driver_id), 'network:ride:taken', {
       rideId: String(claimed._id),
       driverId: String(driverId),
-      held: claimed.publish?.driver_payout || 0,
+      held: secure ? claimed.publish?.driver_payout || 0 : 0,
+      is_secure: secure,
     });
     await closeLeadConversationsForRide(claimed._id, 'RIDE_TAKEN');
     await notifyNetworkAssignment(claimed);
 
-    return { accepted: true, rideId: String(claimed._id), escrow: 'held' };
+    return { accepted: true, rideId: String(claimed._id), escrow: secure ? 'held' : 'none', is_secure: secure };
   } catch (error) {
     await session.abortTransaction();
     throw error;

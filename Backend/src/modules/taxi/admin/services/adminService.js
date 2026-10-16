@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { ApiError } from '../../../../utils/ApiError.js';
 import { findMissingDocumentDetails } from '../../services/fleetVehicleDocumentRules.js';
@@ -3198,7 +3199,7 @@ export const forgotPassword = async (email) => {
   }
 
   // Generate 6-digit OTP
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const otp = String(crypto.randomInt(100000, 1000000));
   const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
   admin.resetPasswordOtp = otp;

@@ -520,9 +520,9 @@ adminRouter.patch('/admin/integration-settings/mail', updateMailSettings);
 adminRouter.patch('/admin/general-settings/:category', updateGeneralSettingsCategory);
 
 adminRouter.get('/on-boarding', getUserOnboarding);
-adminRouter.post('/on-boarding', createOnboardingScreen);
-adminRouter.patch('/on-boarding/:id', updateOnboardingScreen);
-adminRouter.delete('/on-boarding/:id', deleteOnboardingScreen);
+adminRouter.post('/on-boarding', authenticate(['admin']), createOnboardingScreen);
+adminRouter.patch('/on-boarding/:id', authenticate(['admin']), updateOnboardingScreen);
+adminRouter.delete('/on-boarding/:id', authenticate(['admin']), deleteOnboardingScreen);
 adminRouter.get('/on-boarding-driver', getDriverOnboarding);
 adminRouter.get('/on-boarding-owner', getOwnerOnboarding);
 

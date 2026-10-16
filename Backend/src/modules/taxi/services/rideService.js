@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { ApiError } from '../../../utils/ApiError.js';
 import { normalizePoint, toPoint } from '../../../utils/geo.js';
@@ -380,7 +381,7 @@ const waitBeforeTransactionRetry = (attempt) =>
   });
 
 const normalizeAddress = (value = '') => String(value || '').trim();
-const generateRideOtp = () => String(Math.floor(1000 + Math.random() * 9000));
+const generateRideOtp = () => String(crypto.randomInt(1000, 10000));
 const DEFAULT_BID_STEP_AMOUNT = 10;
 const DEFAULT_MAX_BID_STEPS = 5;
 
@@ -1611,7 +1612,41 @@ const buildHistoryDateRangeClause = ({ from, to }) => {
   };
 };
 
-export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, page = 1, category = 'all', from, to }) => {
+/**
+ * Driver-only history fields: which side of the ride this driver was on, and for
+ * rides they published, who drove it and the agreed split.
+ */
+const serializeDriverHistoryExtras = (ride, entityId) => {
+  const drivenById = ride.driverId?._id || ride.driverId || null;
+  const drove = Boolean(drivenById) && String(drivenById) === String(entityId);
+  const isDriverCreated = ride.origin === 'driver_created';
+  return {
+    origin: ride.origin || 'customer_app',
+    ride_role: drove ? 'driven' : 'published',
+    is_secure: isDriverCreated ? ride.publish?.is_secure !== false : null,
+    driven_by:
+      !drove && ride.driverId?._id
+        ? {
+            id: String(ride.driverId._id),
+            name: ride.driverId.name || '',
+            phone: ride.driverId.phone || '',
+            vehicleNumber: ride.driverId.vehicleNumber || '',
+          }
+        : null,
+    split:
+      isDriverCreated && ride.publish?.taken_by_driver_id
+        ? {
+            driver_payout: Number(ride.publish.driver_payout || 0),
+            owner_commission: Number(ride.publish.owner_commission || 0),
+          }
+        : null,
+  };
+};
+
+const HISTORY_STATUSES = new Set(['all', RIDE_STATUS.COMPLETED, RIDE_STATUS.CANCELLED]);
+const HISTORY_DRIVER_ROLES = new Set(['driven', 'published', 'all']);
+
+export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, page = 1, category = 'all', from, to, status = 'all', rideRole = 'driven' }) => {
   if (!['user', 'driver', 'owner'].includes(role)) {
     throw new ApiError(403, 'Only riders, drivers, and fleet owners can access ride history');
   }
@@ -1619,12 +1654,35 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
   // Parsed before any query so a bad range fails fast with 422, never as a 500.
   const dateRangeClause = buildHistoryDateRangeClause({ from, to });
 
+  const normalizedStatus = String(status || 'all').trim().toLowerCase();
+  if (!HISTORY_STATUSES.has(normalizedStatus)) {
+    throw new ApiError(422, "status must be 'completed', 'cancelled' or 'all'", { status }, 'INVALID_STATUS');
+  }
+  // Defaults to `driven` so callers that never send it keep the old behaviour.
+  const normalizedRideRole = String(rideRole || 'driven').trim().toLowerCase();
+  if (role === 'driver' && !HISTORY_DRIVER_ROLES.has(normalizedRideRole)) {
+    throw new ApiError(422, "role must be 'driven', 'published' or 'all'", { role: rideRole }, 'INVALID_ROLE');
+  }
+
   const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
   const safePage = Math.max(Number(page) || 1, 1);
   let query;
+  const roleClauses = [];
 
   if (role === 'driver') {
-    query = { driverId: entityId };
+    const me = new mongoose.Types.ObjectId(String(entityId));
+    // `published` = rides this driver created that someone else drove (taken
+    // from the feed or handed to a fleet/contact driver), including ones that
+    // were cancelled before anyone drove them.
+    const published = { created_by_driver_id: me, driverId: { $ne: me } };
+    if (normalizedRideRole === 'driven') {
+      query = { driverId: me };
+    } else if (normalizedRideRole === 'published') {
+      query = { ...published };
+    } else {
+      query = {};
+      roleClauses.push({ $or: [{ driverId: me }, published] });
+    }
   } else if (role === 'owner') {
     const fleetDriverIds = await Driver.find({ owner_id: entityId }).distinct('_id');
     query = { driverId: { $in: fleetDriverIds } };
@@ -1662,6 +1720,12 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
   // filter above, which already uses `$or` for 'outstation'.
   if (dateRangeClause) {
     query.$and = [...(query.$and || []), dateRangeClause];
+  }
+  if (roleClauses.length) {
+    query.$and = [...(query.$and || []), ...roleClauses];
+  }
+  if (normalizedStatus !== 'all') {
+    query.status = normalizedStatus;
   }
 
   const counterpartPath = role === 'user' ? 'driverId' : 'userId';
@@ -1709,6 +1773,12 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
       'updatedAt',
       'userId',
       'driverId',
+      'origin',
+      'created_by_driver_id',
+      'publish.is_secure',
+      'publish.driver_payout',
+      'publish.owner_commission',
+      'publish.taken_by_driver_id',
     ].join(' '))
     .sort({ createdAt: -1 })
     .skip((safePage - 1) * safeLimit)
@@ -1722,6 +1792,11 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
 
   if (role === 'owner') {
     ridesQuery.populate('driverId', 'name phone profileImage vehicleType vehicleIconType vehicleNumber vehicleColor vehicleMake vehicleModel vehicleImage rating');
+  }
+
+  // On a published row the interesting counterpart is whoever drove it.
+  if (role === 'driver' && normalizedRideRole !== 'driven') {
+    ridesQuery.populate('driverId', 'name phone profileImage vehicleNumber rating');
   }
 
   const [rides, total] = await Promise.all([
@@ -1772,6 +1847,7 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
     updatedAt: ride.updatedAt,
     user: role === 'driver' || role === 'owner' ? (ride.userId || null) : null,
     driver: role === 'user' || role === 'owner' ? (ride.driverId || null) : null,
+    ...(role === 'driver' ? serializeDriverHistoryExtras(ride, entityId) : {}),
     })),
     pagination: {
       page: safePage,
@@ -1966,6 +2042,56 @@ const rideStatusConfig = {
   },
 };
 
+/**
+ * Completion bookkeeping for a driver-created ride without a held escrow. No
+ * platform commission is taken. The ride is stamped settled (so the commission
+ * path can never pick it up later) with what the completing driver earns: the
+ * agreed payout when they took it from the feed or as a contact, the full fare
+ * when it was their own or their fleet's ride.
+ *
+ * Cash (every unsecure split is forced to cash): the driver already holds the
+ * money, so nothing moves. Online: the platform collected the fare, so the
+ * driver is credited their earnings — same as the commission path did, minus
+ * the commission.
+ */
+const markDriverCreatedRideSettledOffline = async ({ ride, driverId }) => {
+  const tookItAsSplit =
+    ride.publish?.taken_by_driver_id && String(ride.publish.taken_by_driver_id) === String(driverId);
+  const earnings = Math.round(Number(tookItAsSplit ? ride.publish?.driver_payout : ride.fare) * 100) / 100 || 0;
+  const paidOnline = String(ride.paymentMethod || '').toLowerCase() !== 'cash';
+
+  const session = await mongoose.startSession();
+  try {
+    session.startTransaction();
+    const claimed = await Ride.findOneAndUpdate(
+      { _id: ride._id, walletSettledAt: null },
+      { $set: { walletSettledAt: new Date(), commissionAmount: 0, driverEarnings: earnings } },
+      { new: true, session },
+    );
+
+    let result = null;
+    if (claimed && paidOnline && earnings > 0) {
+      result = await applyDriverWalletAdjustment({
+        driverId,
+        rideId: ride._id,
+        amount: earnings,
+        type: 'ride_earning',
+        description: 'Driver earning credited for online ride (no platform commission)',
+        metadata: { fare: Number(ride.fare || 0), commissionAmount: 0, driverEarnings: earnings, paymentMethod: 'online', origin: 'driver_created' },
+        session,
+      });
+    }
+
+    await session.commitTransaction();
+    return result;
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    session.endSession();
+  }
+};
+
 export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymentMethod, riderRating, collectedBy }) => {
   const config = rideStatusConfig[nextStatus];
 
@@ -2015,6 +2141,18 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
       ? normalizeRidePaymentMethod(paymentMethod)
       : ride.paymentMethod;
   let escrowCollectedBy = null;
+
+  // An unsecure split (published, or assigned to a saved contact) has no escrow
+  // and no platform settlement, so an online payment would leave the platform
+  // holding a fare it never pays out.
+  if (
+    ride.origin === 'driver_created' &&
+    ride.publish?.is_secure === false &&
+    ride.publish?.taken_by_driver_id &&
+    requestedPaymentMethod !== 'cash'
+  ) {
+    throw new ApiError(422, 'Unsecure rides are cash only', null, 'UNSECURE_RIDE_CASH_ONLY');
+  }
 
   if (nextStatus === RIDE_LIVE_STATUS.COMPLETED && ride.escrow?.state === 'held') {
     escrowCollectedBy =
@@ -2090,6 +2228,11 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
         collectedBy: escrowCollectedBy,
         confirmedBy: 'driver',
       });
+    } else if (ride.origin === 'driver_created') {
+      // Driver-created rides without a held escrow — unsecure publish/assign and
+      // fleet direct assign — carry no platform commission: the fare is settled
+      // between the drivers (or stays inside the fleet) offline.
+      walletUpdate = await markDriverCreatedRideSettledOffline({ ride, driverId });
     } else {
       walletUpdate = await settleCompletedRideWallet({ rideId: ride._id });
     }

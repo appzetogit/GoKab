@@ -197,7 +197,9 @@ const buildSmsPayload = ({ phone, otp, appName, authMode = 'apiKey' }) => {
 };
 
 export const sendOtpSms = async ({ phone, otp, purpose = 'otp' }) => {
-  if (isTruthy(env.sms.useDefaultOtp)) {
+  // Skipping delivery is only safe when the OTP is the configured static code;
+  // otherwise a random OTP would be generated that nobody ever receives.
+  if (isTruthy(env.sms.useDefaultOtp) && String(env.sms.staticOtpCode || '').trim()) {
     return {
       mode: 'debug',
       message: 'Default OTP mode enabled',

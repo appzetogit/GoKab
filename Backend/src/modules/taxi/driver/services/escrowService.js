@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { ApiError } from '../../../../utils/ApiError.js';
 import { Ride } from '../../user/models/Ride.js';
@@ -114,7 +115,7 @@ const unfreeze = async ({ driverId, amount, rideId, session, description }) => {
 };
 
 /** Moves money between two drivers as one debit and one credit. */
-const transferBetweenDrivers = async ({ fromDriverId, toDriverId, amount, rideId, session, reason }) => {
+const transferBetweenDrivers = async ({ fromDriverId, toDriverId, amount, rideId, session, reason, kind = null }) => {
   const safeAmount = round2(amount);
   if (safeAmount <= 0) return [];
 
@@ -124,7 +125,7 @@ const transferBetweenDrivers = async ({ fromDriverId, toDriverId, amount, rideId
     type: 'escrow_transfer_out',
     rideId,
     description: reason || 'Paid to network driver',
-    metadata: { counterpartyDriverId: String(toDriverId) },
+    metadata: { counterpartyDriverId: String(toDriverId), ...(kind ? { kind } : {}) },
     session,
   });
 
@@ -134,7 +135,7 @@ const transferBetweenDrivers = async ({ fromDriverId, toDriverId, amount, rideId
     type: 'escrow_transfer_in',
     rideId,
     description: reason || 'Received from network driver',
-    metadata: { counterpartyDriverId: String(fromDriverId) },
+    metadata: { counterpartyDriverId: String(fromDriverId), ...(kind ? { kind } : {}) },
     session,
   });
 
@@ -311,6 +312,7 @@ export const settlePublishedRide = async ({ rideId, collectedBy, confirmedBy = '
         rideId: ride._id,
         session,
         reason: 'Driver payout for published ride',
+        kind: 'driver_payout',
       });
     } else if (collectedBy === 'driver') {
       settleTxnIds = await transferBetweenDrivers({
@@ -320,6 +322,7 @@ export const settlePublishedRide = async ({ rideId, collectedBy, confirmedBy = '
         rideId: ride._id,
         session,
         reason: 'Owner commission for published ride',
+        kind: 'owner_commission',
       });
     } else {
       // Paid in the app: the platform holds the fare, so it pays both sides.
@@ -331,7 +334,7 @@ export const settlePublishedRide = async ({ rideId, collectedBy, confirmedBy = '
         type: 'escrow_transfer_in',
         rideId: ride._id,
         description: 'Owner commission for published ride (paid online)',
-        metadata: { platformFee, counterpartyDriverId: String(acceptorId) },
+        metadata: { platformFee, counterpartyDriverId: String(acceptorId), kind: 'owner_commission' },
         session,
       });
       const acceptorCredit = await applyDriverWalletAdjustment({
@@ -340,7 +343,7 @@ export const settlePublishedRide = async ({ rideId, collectedBy, confirmedBy = '
         type: 'escrow_transfer_in',
         rideId: ride._id,
         description: 'Driver payout for published ride (paid online)',
-        metadata: { counterpartyDriverId: String(publisherId) },
+        metadata: { counterpartyDriverId: String(publisherId), kind: 'driver_payout' },
         session,
       });
       // `counterpartyDriverId` is a real column, not just metadata — reports and
@@ -429,6 +432,7 @@ export const releasePublishedRide = async ({ rideId, reason = '', penaltyFrom = 
         rideId: ride._id,
         session,
         reason: 'Cancellation penalty after accepting a published ride',
+        kind: 'cancel_penalty',
       });
     }
 
@@ -508,6 +512,87 @@ export const openEscrowDispute = async ({ rideId, driverId, reason = '' }) => {
 };
 
 /**
+ * "Report" on an unsecure published ride. There is no escrow to dispute, so the
+ * only remedy is a human: this files a support ticket and records the report on
+ * the ride. It never moves or freezes money.
+ */
+export const reportUnsecureRide = async ({ rideId, driverId, reason = '' }) => {
+  if (!mongoose.isValidObjectId(rideId)) {
+    throw new ApiError(400, 'rideId is invalid', null, 'INVALID_ID');
+  }
+  const ride = await Ride.findById(rideId);
+  if (!ride || ride.origin !== 'driver_created') {
+    throw new ApiError(404, 'Ride not found', null, 'RIDE_NOT_FOUND');
+  }
+  if (ride.publish?.is_secure !== false || !ride.publish?.taken_by_driver_id) {
+    throw new ApiError(
+      409,
+      'Only an accepted unsecure ride can be reported — secure rides use the escrow dispute',
+      null,
+      'NOT_UNSECURE_RIDE',
+    );
+  }
+
+  const publisherId = String(ride.created_by_driver_id || '');
+  const acceptorId = String(ride.publish.taken_by_driver_id || '');
+  const me = String(driverId);
+  if (me !== publisherId && me !== acceptorId) {
+    throw new ApiError(403, 'Only the publisher or the accepting driver can report this ride', null, 'NOT_RIDE_PARTY');
+  }
+
+  const trimmedReason = String(reason || '').trim().slice(0, 1000);
+  if (!trimmedReason) {
+    throw new ApiError(422, 'Tell us what went wrong', null, 'REASON_REQUIRED');
+  }
+  if ((ride.publish.reports || []).some((report) => String(report.driver_id) === me)) {
+    throw new ApiError(409, 'You have already reported this ride', null, 'ALREADY_REPORTED');
+  }
+
+  const { SupportTicket } = await import('../../support/models/SupportTicket.js');
+  const driver = await Driver.findById(driverId).select('name phone').lean();
+  const role = me === publisherId ? 'publisher' : 'accepting driver';
+  const ticketCode = `TIC_${Date.now()}${crypto.randomInt(100000, 1000000)}`;
+  const summary =
+    `Report on unsecure ride ${String(ride._id)} by the ${role}. ` +
+    `Agreed split (settled offline): fare ₹${ride.publish.total_fare}, ` +
+    `driver payout ₹${ride.publish.driver_payout}, owner commission ₹${ride.publish.owner_commission}. ` +
+    `Reason: ${trimmedReason}`;
+
+  // Claim the report slot first (guarded, so two simultaneous reports by the
+  // same driver can't both land), then file the ticket against it.
+  const claimed = await Ride.updateOne(
+    { _id: ride._id, 'publish.reports.driver_id': { $ne: driverId } },
+    { $push: { 'publish.reports': { driver_id: driverId, ticket_code: ticketCode, reason: trimmedReason, at: new Date() } } },
+  );
+  if (!claimed.modifiedCount) {
+    throw new ApiError(409, 'You have already reported this ride', null, 'ALREADY_REPORTED');
+  }
+
+  try {
+    await SupportTicket.create({
+      ticketCode,
+      title: 'Unsecure ride report',
+      userType: 'driver',
+      supportType: 'request',
+      requesterRole: 'driver',
+      requesterId: driverId,
+      requesterName: driver?.name || '',
+      requesterPhone: driver?.phone || '',
+      status: 'pending',
+      messages: [{ senderRole: 'driver', senderId: driverId, senderName: driver?.name || '', message: summary }],
+      lastMessageAt: new Date(),
+    });
+  } catch (error) {
+    // The ticket is the whole point of a report; without it, give the slot back
+    // so the driver can retry.
+    await Ride.updateOne({ _id: ride._id }, { $pull: { 'publish.reports': { driver_id: driverId, ticket_code: ticketCode } } });
+    throw error;
+  }
+
+  return { reported: true, rideId: String(ride._id), ticketCode, money_moved: false };
+};
+
+/**
  * Admin correction: the settlement was booked against the wrong collector, so
  * reverse the transfer that was made and apply the correct one.
  */
@@ -539,6 +624,7 @@ export const resolveEscrowDispute = async ({ rideId, correctCollectedBy, adminId
           rideId: ride._id,
           session,
           reason: 'Dispute correction: reversing driver payout',
+          kind: 'driver_payout_reversal',
         });
       } else if (previous === 'driver') {
         await transferBetweenDrivers({
@@ -548,6 +634,7 @@ export const resolveEscrowDispute = async ({ rideId, correctCollectedBy, adminId
           rideId: ride._id,
           session,
           reason: 'Dispute correction: reversing owner commission',
+          kind: 'owner_commission_reversal',
         });
       }
 
@@ -560,6 +647,7 @@ export const resolveEscrowDispute = async ({ rideId, correctCollectedBy, adminId
           rideId: ride._id,
           session,
           reason: 'Dispute correction: driver payout',
+          kind: 'driver_payout',
         });
       } else if (correctCollectedBy === 'driver') {
         await transferBetweenDrivers({
@@ -569,6 +657,7 @@ export const resolveEscrowDispute = async ({ rideId, correctCollectedBy, adminId
           rideId: ride._id,
           session,
           reason: 'Dispute correction: owner commission',
+          kind: 'owner_commission',
         });
       }
     }

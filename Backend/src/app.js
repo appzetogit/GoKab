@@ -30,7 +30,18 @@ export const createApp = () => {
       allowedHeaders: ['Content-Type', 'Authorization'],
     }),
   );
-  app.use(express.json({ limit: '10mb' }));
+  app.use(
+    express.json({
+      limit: '10mb',
+      // Webhook signatures are HMACs over the exact request bytes, so keep them
+      // for webhook routes only (re-stringifying the parsed body won't match).
+      verify: (req, _res, buf) => {
+        if (String(req.originalUrl || '').includes('/webhooks/')) {
+          req.rawBody = Buffer.from(buf);
+        }
+      },
+    }),
+  );
   app.use(express.urlencoded({ extended: true }));
   app.use(morgan(env.nodeEnv === 'production' ? 'combined' : 'dev'));
 

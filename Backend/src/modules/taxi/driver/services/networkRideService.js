@@ -22,6 +22,11 @@ import {
   notifyNetworkRideCancelled,
 } from '../../services/networkNotificationService.js';
 import { getDriverPermissions } from '../../services/driverCategoryService.js';
+import { buildPublisherCard, PUBLISHER_DRIVER_FIELDS } from './publisherCardService.js';
+import { isSavedContact } from './contactService.js';
+import { holdForPublishedRide, releasePublishedRide } from './escrowService.js';
+import { parseIsSecure } from './feedService.js';
+import { getWalletSnapshot } from './walletService.js';
 
 const ASSIGNABLE_STATUSES = new Set([RIDE_STATUS.SEARCHING]);
 
@@ -44,7 +49,7 @@ const toObjectId = (value, field) => {
 const validateAssignTarget = async ({ permissions, driverId, targetDriverId, ride, excludeRideId = null }) => {
   const isSelfAssign = String(targetDriverId) === String(driverId);
 
-  if (!isSelfAssign && !permissions.can_manage_fleet) {
+  if (!isSelfAssign && !permissions.can_manage_fleet && !permissions.can_use_contacts) {
     throw new ApiError(
       403,
       'Your plan only allows taking the ride yourself or publishing it',
@@ -60,8 +65,32 @@ const validateAssignTarget = async ({ permissions, driverId, targetDriverId, rid
   });
   if (!target) throw new ApiError(404, 'Driver not found', null, 'DRIVER_NOT_FOUND');
 
-  if (!isSelfAssign && String(target.owner_id || '') !== String(permissions.driver.owner_id || 'none')) {
-    throw new ApiError(403, 'That driver is not in your fleet', null, 'DRIVER_NOT_IN_FLEET');
+  // A target is either the driver themselves, a member of their fleet (needs
+  // can_manage_fleet), or one of their saved contacts (needs can_use_contacts).
+  let targetType = 'self';
+  if (!isSelfAssign) {
+    const inFleet =
+      permissions.can_manage_fleet &&
+      Boolean(permissions.driver.owner_id) &&
+      String(target.owner_id || '') === String(permissions.driver.owner_id);
+    const isContact =
+      !inFleet && permissions.can_use_contacts && (await isSavedContact(driverId, target._id));
+
+    if (!inFleet && !isContact) {
+      // Same codes as before contacts existed: without fleet rights it's the
+      // plan that's the problem (the app shows an upgrade), with them it's the
+      // target.
+      if (!permissions.can_manage_fleet) {
+        throw new ApiError(
+          403,
+          'Your plan only allows taking the ride yourself, publishing it, or assigning it to a saved contact',
+          { category: permissions.category },
+          'CATEGORY_NOT_ALLOWED',
+        );
+      }
+      throw new ApiError(403, 'That driver is not in your fleet or saved contacts', null, 'DRIVER_NOT_IN_FLEET');
+    }
+    targetType = inFleet ? 'fleet' : 'contact';
   }
 
   const scheduledForLater = isRideScheduledForFuture(ride);
@@ -83,7 +112,7 @@ const validateAssignTarget = async ({ permissions, driverId, targetDriverId, rid
     );
   }
 
-  return { target, scheduledForLater };
+  return { target, scheduledForLater, targetType };
 };
 
 /**
@@ -102,7 +131,11 @@ const validateAssignTarget = async ({ permissions, driverId, targetDriverId, rid
  *    not back there. A scheduled assignment never claims `isOnRide` (a driver
  *    can hold several future bookings), so it only needs the ride-side guard.
  */
-const applyAssignment = async ({ ride, target, byDriverId, scheduledForLater }) => {
+const applyAssignment = async ({ ride, target, byDriverId, scheduledForLater, targetType = 'fleet', split = null }) => {
+  if (targetType === 'contact') {
+    return applyContactAssignment({ ride, target, byDriverId, scheduledForLater, split });
+  }
+
   if (!scheduledForLater) {
     const claimed = await Driver.findOneAndUpdate(
       { _id: target._id, isOnRide: false },
@@ -123,6 +156,7 @@ const applyAssignment = async ({ ride, target, byDriverId, scheduledForLater }) 
         liveStatus: RIDE_LIVE_STATUS.ACCEPTED,
         acceptedAt: assignedAt,
         'assignment.mode': 'direct_assign',
+        'assignment.target_type': targetType,
         'assignment.assigned_by_driver_id': byDriverId,
         'assignment.assigned_at': assignedAt,
         'assignment.acknowledged_at': null,
@@ -154,6 +188,188 @@ const applyAssignment = async ({ ride, target, byDriverId, scheduledForLater }) 
   }
 
   return { updated, reason: null };
+};
+
+const round2 = (value) => Math.round(Number(value || 0) * 100) / 100;
+
+/**
+ * The money terms of handing a ride to a saved contact. A contact is outside
+ * the organisation, so — like a published ride — the fare is split between the
+ * assigner (owner_commission) and the contact (driver_payout), and a secure
+ * split is held in escrow. `driver_payout` is required; the commission defaults
+ * to whatever is left of the fare.
+ */
+export const parseContactSplit = ({ fare, body = {} }) => {
+  const total = round2(body.total_fare ?? body.totalFare ?? fare);
+  const payoutInput = body.driver_payout ?? body.driverPayout;
+  if (payoutInput === undefined || payoutInput === null || payoutInput === '') {
+    throw new ApiError(
+      422,
+      'Set driver_payout (what the contact earns) to assign to a saved contact',
+      null,
+      'SPLIT_REQUIRED',
+    );
+  }
+  const payout = round2(payoutInput);
+  const commissionInput = body.owner_commission ?? body.ownerCommission;
+  const commission =
+    commissionInput === undefined || commissionInput === null || commissionInput === ''
+      ? round2(total - payout)
+      : round2(commissionInput);
+
+  if (commission < 0 || payout <= 0) {
+    throw new ApiError(422, 'Driver payout must be greater than zero', null, 'INVALID_SPLIT');
+  }
+  if (round2(commission + payout) !== total) {
+    throw new ApiError(422, 'Commission plus driver payout must equal the total fare', { total, commission, payout }, 'INVALID_SPLIT');
+  }
+
+  return { total, commission, payout, secure: parseIsSecure(body.is_secure ?? body.isSecure) };
+};
+
+/** Same up-front check as a secure publish, so the app can offer Top-up / Unsecure. */
+const assertCanFundSecureSplit = async (driver, split) => {
+  if (!split?.secure) return;
+  const wallet = await getWalletSnapshot(driver);
+  if (wallet.available < split.payout) {
+    throw new ApiError(
+      402,
+      `You need ₹${split.payout} available to assign this ride securely (you have ₹${wallet.available})`,
+      { required: split.payout, available: wallet.available },
+      'INSUFFICIENT_WALLET_FOR_PUBLISH',
+    );
+  }
+};
+
+/**
+ * Contact assignment: driver claim, ride update, split and (when secure) both
+ * escrow holds commit together or not at all — a failed hold must not leave the
+ * contact assigned to a ride with nothing frozen behind it.
+ */
+const applyContactAssignment = async ({ ride, target, byDriverId, scheduledForLater, split }) => {
+  const session = await mongoose.startSession();
+  try {
+    session.startTransaction();
+
+    if (!scheduledForLater) {
+      const claimed = await Driver.findOneAndUpdate(
+        { _id: target._id, isOnRide: false },
+        { $set: { isOnRide: true } },
+        { session },
+      );
+      if (!claimed) {
+        await session.abortTransaction();
+        return { updated: null, reason: 'DRIVER_BUSY' };
+      }
+    }
+
+    const assignedAt = new Date();
+    const updated = await Ride.findOneAndUpdate(
+      { _id: ride._id, driverId: null, status: RIDE_STATUS.SEARCHING, 'escrow.state': { $in: ['none', null] } },
+      {
+        $set: {
+          driverId: target._id,
+          status: RIDE_STATUS.ACCEPTED,
+          liveStatus: RIDE_LIVE_STATUS.ACCEPTED,
+          acceptedAt: assignedAt,
+          fare: split.total,
+          ...(split.secure ? {} : { paymentMethod: 'cash' }),
+          'assignment.mode': 'direct_assign',
+          'assignment.target_type': 'contact',
+          'assignment.assigned_by_driver_id': byDriverId,
+          'assignment.assigned_at': assignedAt,
+          'assignment.acknowledged_at': null,
+          'publish.total_fare': split.total,
+          'publish.owner_commission': split.commission,
+          'publish.driver_payout': split.payout,
+          'publish.is_secure': split.secure,
+          'publish.taken_by_driver_id': target._id,
+          'publish.taken_at': assignedAt,
+          'reminders.pickup_sent_at': null,
+          'reminders.owner_pickup_sent_at': null,
+          'reminders.unacknowledged_sent_at': null,
+        },
+        $push: {
+          'assignment.history': { driver_id: target._id, action: 'assigned', by_driver_id: byDriverId, at: assignedAt },
+        },
+      },
+      { new: true, session },
+    );
+
+    if (!updated) {
+      await session.abortTransaction();
+      return { updated: null, reason: 'RIDE_NOT_OPEN' };
+    }
+
+    if (split.secure) {
+      try {
+        await holdForPublishedRide({ ride: updated, session });
+      } catch (error) {
+        // The acceptor-side error carries the contact's own wallet balance;
+        // the assigner must not see that.
+        if (error?.code === 'INSUFFICIENT_WALLET') {
+          throw new ApiError(
+            402,
+            "That driver doesn't have enough wallet balance to take this ride securely. Assign it as unsecure instead.",
+            null,
+            'CONTACT_INSUFFICIENT_WALLET',
+          );
+        }
+        throw error;
+      }
+    }
+
+    await session.commitTransaction();
+    return { updated: await Ride.findById(updated._id), reason: null };
+  } catch (error) {
+    if (session.inTransaction()) await session.abortTransaction();
+    throw error;
+  } finally {
+    session.endSession();
+  }
+};
+
+/**
+ * Undoing a contact assignment (unassign, reassign, the contact declining)
+ * wipes the split so the ride can be assigned or published afresh. These are
+ * the `$set` fields to merge into the guarded ride update.
+ */
+const contactSplitResetFields = (ride) => ({
+  'assignment.target_type': null,
+  ...(ride.assignment?.target_type === 'contact'
+    ? {
+        'publish.total_fare': 0,
+        'publish.owner_commission': 0,
+        'publish.driver_payout': 0,
+        'publish.is_secure': true,
+        'publish.taken_by_driver_id': null,
+        'publish.taken_at': null,
+      }
+    : {}),
+});
+
+/**
+ * Gives back a held escrow *after* the ride update that removed the driver has
+ * succeeded — releasing first would unfreeze the money even when that update
+ * loses a race and the driver stays on the ride. The escrow is then reset to
+ * `none` so a later assign/publish can hold again.
+ */
+const releaseEscrowAfterUnassign = async (ride, { penaltyFrom = null, reason = 'assignment_removed' } = {}) => {
+  if (ride.escrow?.state !== 'held') return;
+  const result = await releasePublishedRide({ rideId: ride._id, reason, penaltyFrom });
+  if (!result?.released) return;
+  await Ride.updateOne(
+    { _id: ride._id, 'escrow.state': 'released', driverId: null },
+    {
+      $set: {
+        'escrow.state': 'none',
+        'escrow.publisher_driver_id': null,
+        'escrow.acceptor_driver_id': null,
+        'escrow.publisher_hold': 0,
+        'escrow.acceptor_hold': 0,
+      },
+    },
+  );
 };
 
 /**
@@ -220,11 +436,13 @@ export const updateOrganization = async ({ driverId, companyName }) => {
   return {
     id: String(owner._id),
     company_name: owner.company_name,
+    // Same value as company_name, under the key the app sends it with.
+    name: owner.company_name,
     owner_name: owner.owner_name || owner.name,
   };
 };
 
-export const serializeNetworkRide = (ride, { assignedDriver = null, assignedBy = null } = {}) => ({
+export const serializeNetworkRide = (ride, { assignedDriver = null, assignedBy = null, publisher = null } = {}) => ({
   id: String(ride._id),
   status: ride.status,
   liveStatus: ride.liveStatus,
@@ -253,6 +471,8 @@ export const serializeNetworkRide = (ride, { assignedDriver = null, assignedBy =
   otp_masked: ride.otp ? '****' : '',
   assignment: {
     mode: ride.assignment?.mode || 'dispatch',
+    // self | fleet | contact for a direct assign, else null.
+    target_type: ride.assignment?.target_type || null,
     assigned_at: ride.assignment?.assigned_at || null,
     // Always present as a key (null until confirmed): the app only offers the
     // Confirm button when the key exists at all.
@@ -274,6 +494,7 @@ export const serializeNetworkRide = (ride, { assignedDriver = null, assignedBy =
     total_fare: ride.publish?.total_fare || 0,
     owner_commission: ride.publish?.owner_commission || 0,
     driver_payout: ride.publish?.driver_payout || 0,
+    is_secure: ride.publish?.is_secure !== false,
     expires_at: ride.publish?.expires_at || null,
     taken_by_driver_id: ride.publish?.taken_by_driver_id
       ? String(ride.publish.taken_by_driver_id)
@@ -285,6 +506,9 @@ export const serializeNetworkRide = (ride, { assignedDriver = null, assignedBy =
     acceptor_hold: ride.escrow?.acceptor_hold || 0,
     collected_by: ride.escrow?.collected_by || null,
   },
+  // The creating driver's card (images included). Filled on list endpoints;
+  // null where the caller didn't load it.
+  publisher,
   createdAt: ride.createdAt,
 });
 
@@ -328,6 +552,9 @@ export const createDriverRide = async ({ driverId, payload }) => {
         ride: { scheduledAt: payload?.scheduledAt, estimatedDurationMinutes: payload?.estimatedDurationMinutes },
       })
     : null;
+  // A contact needs its split checked (and a secure one funded) before the ride exists too.
+  const contactSplit = assignTarget?.targetType === 'contact' ? parseContactSplit({ fare, body: payload }) : null;
+  if (contactSplit) await assertCanFundSecureSplit(driver, contactSplit);
 
   // If the customer happens to have an app account, link the ride to it so they
   // get in-app tracking instead of an SMS.
@@ -379,8 +606,17 @@ export const createDriverRide = async ({ driverId, payload }) => {
   // update is what actually decides, not the earlier check. The ride was
   // never visible to anyone yet, so on that race it's hard-deleted rather
   // than left behind as a cancelled row that would just confuse the owner.
-  const { target, scheduledForLater } = assignTarget;
-  const { updated } = await applyAssignment({ ride, target, byDriverId: driverId, scheduledForLater });
+  const { target, scheduledForLater, targetType } = assignTarget;
+  let updated = null;
+  try {
+    ({ updated } = await applyAssignment({
+      ride, target, byDriverId: driverId, scheduledForLater, targetType, split: contactSplit,
+    }));
+  } catch (error) {
+    // e.g. the contact can't fund their side of a secure split.
+    await Ride.deleteOne({ _id: ride._id, driverId: null, status: RIDE_STATUS.SEARCHING });
+    throw error;
+  }
 
   if (!updated) {
     await Ride.deleteOne({ _id: ride._id, driverId: null, status: RIDE_STATUS.SEARCHING });
@@ -407,11 +643,13 @@ const loadOwnedRide = async (rideId, driverId, { session = null } = {}) => {
 };
 
 /**
- * Hands a ride to one of the organisation's own drivers (or to the creator
- * themselves). No escrow is involved — the fare belongs to the organisation
- * either way, so there is nothing to hold between two parties.
+ * Hands a ride to the creator themselves, one of the organisation's own drivers,
+ * or a saved contact. Self/fleet: no escrow — the fare belongs to the
+ * organisation either way. Contact: the body carries a split (driver_payout,
+ * optional owner_commission / is_secure) and a secure split is held in escrow
+ * exactly like a published ride.
  */
-export const assignRide = async ({ driverId, rideId, targetDriverId }) => {
+export const assignRide = async ({ driverId, rideId, targetDriverId, body = {}, preValidated = null }) => {
   const permissions = await getDriverPermissions(driverId);
   const ride = await loadOwnedRide(rideId, driverId);
 
@@ -422,15 +660,22 @@ export const assignRide = async ({ driverId, rideId, targetDriverId }) => {
     throw new ApiError(409, 'Unpublish this ride before assigning it', null, 'RIDE_NOT_OPEN');
   }
 
-  const { target, scheduledForLater } = await validateAssignTarget({
-    permissions,
-    driverId,
-    targetDriverId,
-    ride,
-    excludeRideId: ride._id,
-  });
+  const { target, scheduledForLater, targetType } =
+    preValidated ||
+    (await validateAssignTarget({
+      permissions,
+      driverId,
+      targetDriverId,
+      ride,
+      excludeRideId: ride._id,
+    }));
 
-  const { updated, reason } = await applyAssignment({ ride, target, byDriverId: driverId, scheduledForLater });
+  const split = targetType === 'contact' ? parseContactSplit({ fare: ride.fare, body }) : null;
+  if (split) await assertCanFundSecureSplit(permissions.driver, split);
+
+  const { updated, reason } = await applyAssignment({
+    ride, target, byDriverId: driverId, scheduledForLater, targetType, split,
+  });
 
   if (!updated) {
     if (reason === 'DRIVER_BUSY') {
@@ -458,7 +703,11 @@ export const unassignRide = async ({ driverId, rideId, reason = '' }) => {
   if ([RIDE_LIVE_STATUS.STARTED, RIDE_LIVE_STATUS.COMPLETED].includes(ride.liveStatus)) {
     throw new ApiError(409, 'The trip has already started', null, 'RIDE_ALREADY_STARTED');
   }
-  if (ride.escrow?.state === 'held') {
+  // A driver who took a published ride from the feed holds their own side of
+  // the escrow; the publisher can't simply pull it. A contact assignment was
+  // the assigner's own decision, so undoing it just gives both holds back.
+  const isContactAssignment = ride.assignment?.target_type === 'contact';
+  if (ride.escrow?.state === 'held' && !isContactAssignment) {
     throw new ApiError(
       409,
       'Money is held in escrow for this ride — cancel it instead',
@@ -469,11 +718,13 @@ export const unassignRide = async ({ driverId, rideId, reason = '' }) => {
 
   const removedDriverId = ride.driverId;
   const now = new Date();
+  const unwound = isContactAssignment ? contactSplitResetFields(ride) : {};
 
   const updated = await Ride.findOneAndUpdate(
     { _id: ride._id, driverId: removedDriverId },
     {
       $set: {
+        ...unwound,
         driverId: null,
         status: RIDE_STATUS.SEARCHING,
         liveStatus: RIDE_LIVE_STATUS.SEARCHING,
@@ -503,6 +754,7 @@ export const unassignRide = async ({ driverId, rideId, reason = '' }) => {
     throw new ApiError(409, 'This ride changed while you were removing the driver', null, 'RIDE_NOT_OPEN');
   }
 
+  if (isContactAssignment) await releaseEscrowAfterUnassign(ride, { reason: 'contact_unassigned' });
   await releaseDriverIfIdle(removedDriverId);
   await notifyAssignmentRemoved({ ride: updated, removedDriverId, reason });
 
@@ -526,12 +778,26 @@ const releaseDriverIfIdle = async (driverId) => {
   }
 };
 
-export const reassignRide = async ({ driverId, rideId, targetDriverId, reason = '' }) => {
+export const reassignRide = async ({ driverId, rideId, targetDriverId, reason = '', body = {} }) => {
+  // Everything about the new target is checked before the current driver is
+  // removed, so a bad target or split can't leave the ride stranded unassigned.
+  const permissions = await getDriverPermissions(driverId);
+  const ride = await loadOwnedRide(rideId, driverId);
+  const preValidated = await validateAssignTarget({ permissions, driverId, targetDriverId, ride, excludeRideId: ride._id });
+  if (preValidated.targetType === 'contact') {
+    await assertCanFundSecureSplit(permissions.driver, parseContactSplit({ fare: ride.fare, body }));
+  }
+
   await unassignRide({ driverId, rideId, reason: reason || 'Reassigned' });
-  return assignRide({ driverId, rideId, targetDriverId });
+  return assignRide({ driverId, rideId, targetDriverId, body, preValidated });
 };
 
-/** The assigned fleet driver declines the job. */
+/**
+ * The assigned driver declines the job — a fleet driver, a saved contact, or a
+ * driver who took it from the feed. Any escrow goes back first; only backing
+ * out of a ride taken from the feed carries the admin's cancellation penalty
+ * (same as cancelling it), since that driver chose to take it.
+ */
 export const rejectAssignment = async ({ driverId, rideId, reason = '' }) => {
   const ride = await Ride.findById(toObjectId(rideId, 'rideId'));
   if (!ride) throw new ApiError(404, 'Ride not found', null, 'RIDE_NOT_FOUND');
@@ -543,11 +809,17 @@ export const rejectAssignment = async ({ driverId, rideId, reason = '' }) => {
     throw new ApiError(409, 'The trip has already started', null, 'RIDE_ALREADY_STARTED');
   }
 
+  const tookFromFeed = ride.assignment?.mode === 'published';
+  const unwound = contactSplitResetFields(ride);
+
   const now = new Date();
   const updated = await Ride.findOneAndUpdate(
     { _id: ride._id, driverId },
     {
       $set: {
+        ...unwound,
+        // Off the feed for good; the publisher can publish or assign it again.
+        ...(tookFromFeed ? { 'publish.status': 'cancelled', 'publish.is_published': false, 'publish.taken_by_driver_id': null, 'publish.taken_at': null } : {}),
         driverId: null,
         status: RIDE_STATUS.SEARCHING,
         liveStatus: RIDE_LIVE_STATUS.SEARCHING,
@@ -575,6 +847,10 @@ export const rejectAssignment = async ({ driverId, rideId, reason = '' }) => {
     throw new ApiError(409, 'This ride changed while you were declining it', null, 'RIDE_NOT_OPEN');
   }
 
+  await releaseEscrowAfterUnassign(ride, {
+    reason: 'assignment_declined',
+    penaltyFrom: tookFromFeed ? 'acceptor' : null,
+  });
   await releaseDriverIfIdle(driverId);
   await notifyAssignmentRejected({ ride: updated, driverId, reason });
 
@@ -735,7 +1011,7 @@ export const listNetworkRides = async ({ driverId, scope = 'created', status = '
 
   const [identityDrivers, owners] = await Promise.all([
     identityDriverIds.length
-      ? Driver.find({ _id: { $in: identityDriverIds } }).select('name phone').lean()
+      ? Driver.find({ _id: { $in: identityDriverIds } }).select(`phone ${PUBLISHER_DRIVER_FIELDS}`).lean()
       : [],
     ownerIds.length
       ? Owner.find({ _id: { $in: ownerIds } }).select('company_name owner_name name').lean()
@@ -757,7 +1033,109 @@ export const listNetworkRides = async ({ driverId, scope = 'created', status = '
       return serializeNetworkRide(ride, {
         assignedDriver: driverMap.get(String(ride.driverId)) || null,
         assignedBy,
+        publisher: buildPublisherCard(
+          ride.created_by_driver_id ? identityDriverMap.get(String(ride.created_by_driver_id)) : null,
+          ride.organization_owner_id ? ownerMap.get(String(ride.organization_owner_id)) : null,
+        ),
       });
+    }),
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages: Math.ceil(total / safeLimit) || 1,
+    },
+  };
+};
+
+/**
+ * Work this driver is committed to but hasn't started: scheduled bookings they
+ * accepted, plus every driver-created ride handed to them (fleet assign, feed
+ * accept, contact assign) — even an immediate one, since it still waits on
+ * them. `/scheduled-rides` is the opposite list: open rides nobody has taken.
+ * Soonest first; immediate rides (no scheduledAt) sort to the top.
+ */
+export const listUpcomingRides = async ({ driverId, page = 1, limit = 20 }) => {
+  const safePage = Math.max(1, Number(page) || 1);
+  const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
+  const me = toObjectId(driverId, 'driverId');
+
+  const filter = {
+    driverId: me,
+    status: RIDE_STATUS.ACCEPTED,
+    $or: [{ scheduledAt: { $ne: null } }, { origin: 'driver_created' }],
+  };
+
+  const [rides, total] = await Promise.all([
+    Ride.find(filter)
+      .sort({ scheduledAt: 1, acceptedAt: 1 })
+      .skip((safePage - 1) * safeLimit)
+      .limit(safeLimit)
+      .populate('userId', 'name phone')
+      .lean(),
+    Ride.countDocuments(filter),
+  ]);
+
+  const assignerIds = rides.map((ride) => ride.assignment?.assigned_by_driver_id || ride.created_by_driver_id).filter(Boolean);
+  const creatorIds = rides.map((ride) => ride.created_by_driver_id).filter(Boolean);
+  const identityIds = Array.from(new Set([...assignerIds, ...creatorIds].map(String)));
+  const ownerIds = rides.map((ride) => ride.organization_owner_id).filter(Boolean);
+
+  const [identityDrivers, owners] = await Promise.all([
+    identityIds.length ? Driver.find({ _id: { $in: identityIds } }).select(`phone ${PUBLISHER_DRIVER_FIELDS}`).lean() : [],
+    ownerIds.length ? Owner.find({ _id: { $in: ownerIds } }).select('company_name owner_name name').lean() : [],
+  ]);
+  const identityMap = new Map(identityDrivers.map((driver) => [String(driver._id), driver]));
+  const ownerMap = new Map(owners.map((owner) => [String(owner._id), owner]));
+  const now = Date.now();
+
+  return {
+    results: rides.map((ride) => {
+      const isNetwork = ride.origin === 'driver_created';
+      const assignerId = isNetwork ? ride.assignment?.assigned_by_driver_id || ride.created_by_driver_id || null : null;
+      const tookFromFeed = String(ride.publish?.taken_by_driver_id || '') === String(driverId);
+
+      return {
+        id: String(ride._id),
+        origin: ride.origin,
+        source: isNetwork ? 'network' : 'scheduled',
+        status: ride.status,
+        liveStatus: ride.liveStatus,
+        scheduledAt: ride.scheduledAt || null,
+        is_overdue: Boolean(ride.scheduledAt && new Date(ride.scheduledAt).getTime() < now),
+        serviceType: ride.serviceType,
+        pickup: { address: ride.pickupAddress || '', coordinates: ride.pickupLocation?.coordinates || [] },
+        drop: { address: ride.dropAddress || '', coordinates: ride.dropLocation?.coordinates || [] },
+        fare: ride.fare,
+        amount_for_you: tookFromFeed ? Number(ride.publish?.driver_payout || 0) : null,
+        paymentMethod: ride.paymentMethod,
+        notes: ride.network_notes || '',
+        customer: {
+          name: ride.userId?.name || ride.offline_customer?.name || '',
+          phone: ride.userId?.phone || ride.offline_customer?.phone || '',
+        },
+        assignment: {
+          mode: ride.assignment?.mode || 'dispatch',
+          assigned_at: ride.assignment?.assigned_at || null,
+          acknowledged_at: ride.assignment?.acknowledged_at || null,
+          assigned_by: assignerId
+            ? buildAssignedByPayload({
+                assignerId,
+                assignerDriver: identityMap.get(String(assignerId)),
+                organization: ride.organization_owner_id ? ownerMap.get(String(ride.organization_owner_id)) : null,
+                creatorDriver: ride.created_by_driver_id ? identityMap.get(String(ride.created_by_driver_id)) : null,
+              })
+            : null,
+        },
+        is_secure: isNetwork ? ride.publish?.is_secure !== false : null,
+        escrow_state: ride.escrow?.state || 'none',
+        publisher: isNetwork
+          ? buildPublisherCard(
+              identityMap.get(String(ride.created_by_driver_id)),
+              ride.organization_owner_id ? ownerMap.get(String(ride.organization_owner_id)) : null,
+            )
+          : null,
+      };
     }),
     pagination: {
       page: safePage,

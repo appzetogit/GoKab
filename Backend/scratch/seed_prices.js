@@ -1,7 +1,14 @@
 
 import mongoose from 'mongoose';
 
-const mongoUrl = 'mongodb+srv://mrindianarmy100_db_user:h0qizv8eJVwnUHGC@taxi.6ifoxfu.mongodb.net/appzeto_taxi?appName=Taxi';
+import 'dotenv/config';
+
+// From .env, never inlined: the URI that used to be here was committed to git.
+const mongoUrl = process.env.MONGODB_URI;
+if (!mongoUrl) {
+  console.error('MONGODB_URI is not set');
+  process.exit(1);
+}
 
 // Schemas copied for standalone script
 const slSchema = new mongoose.Schema({ name: String, currency_symbol: String, active: Number }, { strict: false });

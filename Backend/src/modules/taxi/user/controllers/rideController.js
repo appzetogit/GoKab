@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import { safeEqualHex } from '../../services/razorpaySecurity.js';
+import { loadPublisherCardForRide } from '../../driver/services/publisherCardService.js';
 import mongoose from 'mongoose';
 import { ApiError } from '../../../../utils/ApiError.js';
 import { normalizePoint } from '../../../../utils/geo.js';
@@ -352,6 +354,16 @@ export const getRideById = async (req, res) => {
 
   const ride = await getRideDetails(req.params.rideId);
 
+  // Driver-created rides show who created them (images included) on the detail
+  // screen, same card as the feed. Other rides are returned exactly as before.
+  if (ride.origin === 'driver_created') {
+    const data = ride.toJSON();
+    data.publisher = await loadPublisherCardForRide(ride);
+    data.is_secure = ride.publish?.is_secure !== false;
+    res.json({ success: true, data });
+    return;
+  }
+
   res.json({
     success: true,
     data: ride,
@@ -379,6 +391,9 @@ export const listMyRides = async (req, res) => {
     category: req.query.category,
     from: req.query.from,
     to: req.query.to,
+    status: req.query.status,
+    // `role` here is the driver's side of the ride, not the auth role.
+    rideRole: req.query.role,
   });
 
   res.json({
@@ -546,7 +561,7 @@ export const verifyRazorpayRideCompletion = async (req, res) => {
     .update(`${orderId}|${paymentId}`)
     .digest('hex');
 
-  if (expectedSignature !== signature) {
+  if (!safeEqualHex(expectedSignature, signature)) {
     throw new ApiError(400, 'Invalid payment signature');
   }
 
@@ -856,7 +871,7 @@ export const verifyRazorpayRideTip = async (req, res) => {
     .update(`${orderId}|${paymentId}`)
     .digest('hex');
 
-  if (expectedSignature !== signature) {
+  if (!safeEqualHex(expectedSignature, signature)) {
     throw new ApiError(400, 'Invalid payment signature');
   }
 

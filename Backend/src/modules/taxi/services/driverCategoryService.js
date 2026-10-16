@@ -233,6 +233,10 @@ export const resolveTierPermissions = (tier) => ({
   can_create_rides: Boolean(tier?.can_create_rides),
   can_publish_rides: Boolean(tier?.can_publish_rides),
   can_manage_fleet: Boolean(tier?.can_manage_fleet),
+  can_use_contacts:
+    tier?.can_use_contacts === undefined || tier?.can_use_contacts === null
+      ? ['middle', 'prime'].includes(String(tier?.driver_category || ''))
+      : Boolean(tier.can_use_contacts),
   requires_commercial_and_private: Boolean(tier?.requires_commercial_and_private),
   requires_commercial_at_purchase: Boolean(tier?.requires_commercial_at_purchase),
   max_routes: Math.max(0, Number(tier?.max_routes ?? 0)),

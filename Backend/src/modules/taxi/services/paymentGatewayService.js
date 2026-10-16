@@ -1,3 +1,4 @@
+import { isRazorpayTestModeAllowed } from './razorpaySecurity.js';
 import { ApiError } from '../../../utils/ApiError.js';
 import { ensureThirdPartySettings } from '../admin/services/adminService.js';
 
@@ -203,12 +204,20 @@ export const resolveConfiguredGatewayCredentials = async (gatewayKey) => {
     let keyId = normalizeString(isLive ? validatedGateway.live_api_key : validatedGateway.test_api_key);
     let keySecret = normalizeString(isLive ? validatedGateway.live_secret_key : validatedGateway.test_secret_key);
 
-    if (keyId.toLowerCase().includes('demo') || keySecret.toLowerCase().includes('demo') || !keyId) {
+    const isPlaceholder =
+      !keyId || !keySecret || keyId.toLowerCase().includes('demo') || keySecret.toLowerCase().includes('demo');
+    if (isPlaceholder) {
       if (isLive) {
         throw new ApiError(500, 'Razorpay keys are demo placeholders. Configure real live keys in Admin > Payment Gateways');
       }
-      keyId = 'rzp_test_GoKabDemoKey';
-      keySecret = 'GoKabDemoSecret';
+      // Demo keys are passed through unchanged so callers take their mock-order
+      // path, which itself only works with RAZORPAY_ALLOW_TEST_MODE=true. There
+      // is no hardcoded fallback account any more.
+      if (!isRazorpayTestModeAllowed()) {
+        throw new ApiError(503, 'Razorpay test keys are not configured. Add them in Admin > Payment Gateways');
+      }
+      keyId = keyId || 'rzp_test_DemoKey';
+      keySecret = keySecret || 'demo';
     }
 
     return { keyId, keySecret, environment };

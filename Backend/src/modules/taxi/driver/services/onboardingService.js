@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import { ApiError } from '../../../../utils/ApiError.js';
-import { env } from '../../../../config/env.js';
 import { normalizePoint, toPoint } from '../../../../utils/geo.js';
 import { uploadDataUrlToCloudinary } from '../../../../utils/cloudinaryUpload.js';
 import { Driver } from '../models/Driver.js';
@@ -20,6 +19,8 @@ import { hashPassword, signAccessToken } from './authService.js';
 import { findExistingDriverAccount, startDriverLoginOtp } from './loginOtpService.js';
 import { findZoneByPickup } from './locationService.js';
 import { sendOtpSms } from '../../services/smsService.js';
+import { getVisibleOtp, resolveOtpForPhone } from '../../services/otpSecurity.js';
+import { resolveDriverBanner } from './driverBannerService.js';
 import { WalletTransaction } from '../models/WalletTransaction.js';
 import { applyDriverWalletAdjustment } from './walletService.js';
 
@@ -251,38 +252,8 @@ const getRequiredVehicleFieldMap = async (role) => {
     }, {});
 };
 
-const generateOtp = () => String(Math.floor(1000 + Math.random() * 9000));
-
 const hashOtp = (otp) => crypto.createHash('sha256').update(String(otp)).digest('hex');
-const isTruthy = (value) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
-const getStaticDriverOtpConfig = () => ({
-  phone: normalizePhone(env.sms?.staticOtpPhone || ''),
-  otp: String(env.sms?.staticOtpCode || '').trim(),
-});
-const resolveDriverOnboardingOtpForPhone = (phone) => {
-  const normalizedPhone = normalizePhone(phone);
-  const staticOtpConfig = getStaticDriverOtpConfig();
-  const defaultOtpEnabled = isTruthy(env.sms?.useDefaultOtp);
-
-  if (defaultOtpEnabled && staticOtpConfig.otp) {
-    return {
-      otp: staticOtpConfig.otp,
-      isStatic: true,
-    };
-  }
-
-  if (staticOtpConfig.phone && staticOtpConfig.otp && normalizedPhone === staticOtpConfig.phone) {
-    return {
-      otp: staticOtpConfig.otp,
-      isStatic: true,
-    };
-  }
-
-  return {
-    otp: generateOtp(),
-    isStatic: false,
-  };
-};
+const resolveDriverOnboardingOtpForPhone = (phone) => resolveOtpForPhone(normalizePhone(phone), normalizePhone);
 
 const getVehicleType = (vehicleTypeId, registerFor = '') => {
   const type = VEHICLE_TYPE_MAP[String(vehicleTypeId || registerFor || '').trim().toLowerCase()];
@@ -589,7 +560,7 @@ export const startDriverOnboarding = async ({ phone, role = 'driver' }) => {
       otp,
       purpose: 'driver onboarding OTP',
     });
-  const debugOtp = process.env.NODE_ENV !== 'production' ? otp : null;
+  const debugOtp = getVisibleOtp(otp);
 
   if (debugOtp) {
     console.log(`[onboardingService] OTP for ${normalizedPhone} = ${debugOtp} (${smsDispatch.mode})`);
@@ -633,7 +604,7 @@ export const verifyDriverOtp = async ({ registrationId, phone, otp }) => {
   };
 };
 
-export const saveDriverPersonalDetails = async ({ registrationId, phone, fullName, email, gender, password }) => {
+export const saveDriverPersonalDetails = async ({ registrationId, phone, fullName, email, gender, password, bannerImage }) => {
   const session = await getSession(registrationId, phone);
   const isOwner = isOwnerRole(session.role);
 
@@ -656,6 +627,12 @@ export const saveDriverPersonalDetails = async ({ registrationId, phone, fullNam
     throw new ApiError(400, 'A valid email address is required');
   }
 
+  // Optional; omitted keeps whatever an earlier save of this step stored.
+  const previousBanner = session.personal?.bannerImage || '';
+  const nextBanner = isOwner
+    ? ''
+    : (await resolveDriverBanner(bannerImage, { current: previousBanner })) ?? previousBanner;
+
   session.personal = {
     fullName: normalizedName,
     email: normalizedEmail,
@@ -665,6 +642,7 @@ export const saveDriverPersonalDetails = async ({ registrationId, phone, fullNam
         ? String(password)
         : crypto.randomBytes(24).toString('hex'),
     ),
+    bannerImage: nextBanner,
   };
   session.status = 'personal_saved';
   await session.save();
@@ -675,6 +653,7 @@ export const saveDriverPersonalDetails = async ({ registrationId, phone, fullNam
       fullName: session.personal.fullName,
       email: session.personal.email,
       gender: session.personal.gender,
+      bannerImage: session.personal.bannerImage || '',
     },
     session: publicSessionPayload(session),
   };
@@ -1177,6 +1156,7 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
     email: session.personal.email,
     gender: session.personal.gender,
     password: session.personal.passwordHash,
+    bannerImage: session.personal.bannerImage || '',
     service_location_id:
       session.vehicle.locationId && /^[a-f\d]{24}$/i.test(String(session.vehicle.locationId))
         ? session.vehicle.locationId
@@ -1207,6 +1187,7 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
         fullName: session.personal.fullName,
         email: session.personal.email,
         gender: session.personal.gender,
+        bannerImage: session.personal.bannerImage || '',
       },
       vehicle: {
         registerFor: session.vehicle.registerFor,

@@ -11,6 +11,13 @@ import {
   postDriverLeadMessageController,
   acceptFeedRideController,
   disputeEscrowController,
+  reportUnsecureRideController,
+  earningsSummaryController,
+  commissionEarningsController,
+  workedWithController,
+  listContactsController,
+  addContactController,
+  removeContactController,
   getFeedController,
   publishRideController,
   unpublishRideController,
@@ -18,6 +25,7 @@ import {
   cancelNetworkRideController,
   createNetworkRideController,
   fleetAvailabilityController,
+  upcomingRidesController,
   listNetworkRidesController,
   reassignNetworkRideController,
   rejectNetworkAssignmentController,
@@ -59,6 +67,8 @@ networkRouter.patch(
 );
 
 networkRouter.get('/network/rides', driverOnly, asyncHandler(listNetworkRidesController));
+// Any category: a Lower driver can still be assigned work or take it from the feed.
+networkRouter.get('/rides/upcoming', driverOnly, asyncHandler(upcomingRidesController));
 networkRouter.post('/network/rides', driverOnly, canCreateRides, asyncHandler(createNetworkRideController));
 networkRouter.get(
   '/network/fleet/availability',
@@ -104,6 +114,23 @@ networkRouter.post(
   driverOnly,
   asyncHandler(disputeEscrowController),
 );
+// Unsecure rides have no escrow to dispute; either party can report instead.
+networkRouter.post(
+  '/network/rides/:rideId/report',
+  driverOnly,
+  asyncHandler(reportUnsecureRideController),
+);
+
+// Saved Contacts. Not gated by middleware: the lists answer `locked: true` for a
+// tier without can_use_contacts (data is kept), and the service refuses adds.
+networkRouter.get('/contacts/worked-with', driverOnly, asyncHandler(workedWithController));
+networkRouter.get('/contacts', driverOnly, asyncHandler(listContactsController));
+networkRouter.post('/contacts', driverOnly, asyncHandler(addContactController));
+networkRouter.delete('/contacts/:contactId', driverOnly, asyncHandler(removeContactController));
+
+// Earnings split (any category: a Lower driver still earns from rides they drive).
+networkRouter.get('/earnings/summary', driverOnly, asyncHandler(earningsSummaryController));
+networkRouter.get('/earnings/commissions', driverOnly, asyncHandler(commissionEarningsController));
 
 networkRouter.get('/feed', driverOnly, asyncHandler(getFeedController));
 networkRouter.post('/feed/rides/:rideId/accept', driverOnly, asyncHandler(acceptFeedRideController));

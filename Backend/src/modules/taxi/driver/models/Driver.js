@@ -86,6 +86,13 @@ const driverSchema = new mongoose.Schema(
         return val;
       },
     },
+    // Wide header image on the driver's public card (feed, network rides).
+    // Always a URL this server re-encoded — see driverBannerService.
+    bannerImage: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     gender: {
       type: String,
       default: '',

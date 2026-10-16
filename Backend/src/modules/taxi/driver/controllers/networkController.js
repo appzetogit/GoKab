@@ -11,7 +11,9 @@ import {
   unpublishRide,
 } from '../services/feedService.js';
 import { getLiveMapSnapshot } from '../../services/liveMapService.js';
-import { openEscrowDispute } from '../services/escrowService.js';
+import { openEscrowDispute, reportUnsecureRide } from '../services/escrowService.js';
+import { getEarningsSummary, listCommissionEarnings } from '../services/earningsService.js';
+import { addContact, listContacts, listWorkedWith, removeContact } from '../services/contactService.js';
 import {
   listLeadConversations,
   listLeadMessages,
@@ -25,6 +27,7 @@ import {
   createDriverRide,
   getFleetAvailability,
   listNetworkRides,
+  listUpcomingRides,
   reassignRide,
   rejectAssignment,
   unassignRide,
@@ -73,6 +76,7 @@ export const getDriverCategoryController = asyncHandler(async (req, res) => {
         can_create_rides: permissions.can_create_rides,
         can_publish_rides: permissions.can_publish_rides,
         can_manage_fleet: permissions.can_manage_fleet,
+        can_use_contacts: permissions.can_use_contacts,
         max_routes: permissions.max_routes,
         routes_used: permissions.routes_used,
         max_fleet_drivers: permissions.max_fleet_drivers,
@@ -154,7 +158,8 @@ export const setDriverRouteModeController = asyncHandler(async (req, res) => {
 export const updateOrganizationController = asyncHandler(async (req, res) => {
   const result = await updateOrganization({
     driverId: req.auth.sub,
-    companyName: req.body?.company_name ?? req.body?.companyName,
+    // The app's edit-org screen sends `{ name }`; it used to be silently ignored.
+    companyName: req.body?.company_name ?? req.body?.companyName ?? req.body?.name,
   });
   res.json({ success: true, data: result });
 });
@@ -169,6 +174,8 @@ export const assignNetworkRideController = asyncHandler(async (req, res) => {
     driverId: req.auth.sub,
     rideId: req.params.rideId,
     targetDriverId: req.body?.driverId ?? req.body?.driver_id,
+    // Split for a saved-contact target (ignored for self/fleet).
+    body: req.body || {},
   });
   res.json({ success: true, data: ride });
 });
@@ -188,6 +195,7 @@ export const reassignNetworkRideController = asyncHandler(async (req, res) => {
     rideId: req.params.rideId,
     targetDriverId: req.body?.driverId ?? req.body?.driver_id,
     reason: req.body?.reason,
+    body: req.body || {},
   });
   res.json({ success: true, data: ride });
 });
@@ -229,6 +237,13 @@ export const listNetworkRidesController = asyncHandler(async (req, res) => {
   res.json({ success: true, data: result });
 });
 
+export const upcomingRidesController = asyncHandler(async (req, res) => {
+  res.json({
+    success: true,
+    data: await listUpcomingRides({ driverId: req.auth.sub, page: req.query.page, limit: req.query.limit }),
+  });
+});
+
 export const fleetAvailabilityController = asyncHandler(async (req, res) => {
   res.json({ success: true, data: await getFleetAvailability(req.auth.sub) });
 });
@@ -245,6 +260,7 @@ export const publishRideController = asyncHandler(async (req, res) => {
     ownerCommission: req.body?.owner_commission ?? req.body?.ownerCommission,
     driverPayout: req.body?.driver_payout ?? req.body?.driverPayout,
     expiresInMinutes: req.body?.expires_in_minutes ?? req.body?.expiresInMinutes,
+    isSecure: req.body?.is_secure ?? req.body?.isSecure,
   });
   res.status(201).json({ success: true, data: result });
 });
@@ -283,6 +299,82 @@ export const disputeEscrowController = asyncHandler(async (req, res) => {
       driverId: req.auth.sub,
       reason: req.body?.reason,
     }),
+  });
+});
+
+export const reportUnsecureRideController = asyncHandler(async (req, res) => {
+  res.status(201).json({
+    success: true,
+    data: await reportUnsecureRide({
+      rideId: req.params.rideId,
+      driverId: req.auth.sub,
+      reason: req.body?.reason,
+    }),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Earnings split: rides driven vs commission on published rides
+// ---------------------------------------------------------------------------
+
+export const earningsSummaryController = asyncHandler(async (req, res) => {
+  res.json({
+    success: true,
+    data: await getEarningsSummary({
+      driverId: req.auth.sub,
+      range: req.query.range,
+      from: req.query.from,
+      to: req.query.to,
+    }),
+  });
+});
+
+export const commissionEarningsController = asyncHandler(async (req, res) => {
+  res.json({
+    success: true,
+    data: await listCommissionEarnings({
+      driverId: req.auth.sub,
+      range: req.query.range,
+      from: req.query.from,
+      to: req.query.to,
+      page: req.query.page,
+      limit: req.query.limit,
+    }),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Saved Contacts (§7.2)
+// ---------------------------------------------------------------------------
+
+export const workedWithController = asyncHandler(async (req, res) => {
+  res.json({
+    success: true,
+    data: await listWorkedWith({ driverId: req.auth.sub, page: req.query.page, limit: req.query.limit }),
+  });
+});
+
+export const listContactsController = asyncHandler(async (req, res) => {
+  res.json({
+    success: true,
+    data: await listContacts({ driverId: req.auth.sub, page: req.query.page, limit: req.query.limit }),
+  });
+});
+
+export const addContactController = asyncHandler(async (req, res) => {
+  const result = await addContact({
+    driverId: req.auth.sub,
+    contactDriverId: req.body?.driver_id ?? req.body?.driverId ?? req.body?.contact_driver_id,
+    sourceRideId: req.body?.source_ride_id ?? req.body?.sourceRideId ?? null,
+    nickname: req.body?.nickname,
+  });
+  res.status(result.created ? 201 : 200).json({ success: true, data: result });
+});
+
+export const removeContactController = asyncHandler(async (req, res) => {
+  res.json({
+    success: true,
+    data: await removeContact({ driverId: req.auth.sub, contactId: req.params.contactId }),
   });
 });
 

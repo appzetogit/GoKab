@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
+import { isRazorpayTestModeAllowed, isRazorpayTestPayment, safeEqualHex } from "../../services/razorpaySecurity.js";
 import mongoose from "mongoose";
 import { asyncHandler } from "../../../../utils/asyncHandler.js";
+import { resolveDriverBanner } from "../services/driverBannerService.js";
 import QRCode from "qrcode";
 import { Env, StandardCheckoutClient, StandardCheckoutPayRequest, PrefillUserLoginDetails } from "@phonepe-pg/pg-sdk-node";
 import { env } from "../../../../config/env.js";
@@ -3171,6 +3173,7 @@ const buildCurrentDriverProfile = async (driver) => {
     owner_id: driver.owner_id || null,
     salary: Number(driver.salary || 0),
     profileImage: driver.profileImage || "",
+    bannerImage: driver.bannerImage || "",
     gender: driver.gender,
     vehicleType: driver.vehicleType,
     vehicleTypeId: driver.vehicleTypeId,
@@ -3783,6 +3786,11 @@ export const updateCurrentDriver = async (req, res) => {
 
   if (Object.prototype.hasOwnProperty.call(req.body || {}, "profileImage")) {
     driver.profileImage = String(req.body.profileImage || "").trim();
+  }
+
+  const bannerInput = req.body?.bannerImage !== undefined ? req.body.bannerImage : req.body?.banner_image;
+  if (bannerInput !== undefined) {
+    driver.bannerImage = await resolveDriverBanner(bannerInput, { current: driver.bannerImage });
   }
 
   if (Object.prototype.hasOwnProperty.call(req.body || {}, "routeBooking")) {
@@ -6521,7 +6529,7 @@ const buildMockRazorpayOrder = (body, redirectOptions) => {
 };
 
 const fetchRazorpay = async ({ method, path, body, keyId, keySecret, isOwner = false }) => {
-  if (keyId?.includes('DemoKey') || keyId?.includes('demo')) {
+  if (isRazorpayTestModeAllowed() && (keyId?.includes('DemoKey') || keyId?.includes('demo'))) {
     return buildMockRazorpayOrder(body, { isOwner });
   }
 
@@ -6538,7 +6546,7 @@ const fetchRazorpay = async ({ method, path, body, keyId, keySecret, isOwner = f
 
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      if (process.env.NODE_ENV !== 'production' || keyId?.includes('test')) {
+      if (isRazorpayTestModeAllowed()) {
         return buildMockRazorpayOrder(body, { isOwner });
       }
 
@@ -6552,7 +6560,7 @@ const fetchRazorpay = async ({ method, path, body, keyId, keySecret, isOwner = f
 
     return payload;
   } catch (err) {
-    if (process.env.NODE_ENV !== 'production' || keyId?.includes('test')) {
+    if (isRazorpayTestModeAllowed()) {
       return buildMockRazorpayOrder(body, { isOwner });
     }
     throw err;
@@ -6703,7 +6711,7 @@ const verifyAndApplyDriverRazorpayWalletTopup = async ({
   let resolvedRole = "";
 
   if (effectiveOrderId) {
-    if (effectiveOrderId.startsWith("order_test_") || normalizedPaymentId.startsWith("pay_test_")) {
+    if (isRazorpayTestPayment(effectiveOrderId, normalizedPaymentId)) {
       // Test Mode Auto-Verification: no real Razorpay order exists to look up,
       // so trust the amount the client paid against (the exact figure it just
       // showed the user in the "Simulate Success" modal) instead of a fixed
@@ -6721,7 +6729,7 @@ const verifyAndApplyDriverRazorpayWalletTopup = async ({
         .update(`${effectiveOrderId}|${normalizedPaymentId}`)
         .digest("hex");
 
-      if (expectedSignature !== normalizedSignature) {
+      if (!safeEqualHex(expectedSignature, normalizedSignature)) {
         throw new ApiError(400, "Invalid payment signature");
       }
 
@@ -10355,7 +10363,7 @@ export const toggleDriverRenewalRemindersController = asyncHandler(async (req, r
 
 export const razorpayWebhookController = asyncHandler(async (req, res) => {
   const signature = req.headers['x-razorpay-signature'] || '';
-  const result = await subscriptionTierService.handleRazorpayWebhook(req.body, signature);
+  const result = await subscriptionTierService.handleRazorpayWebhook(req.body, signature, req.rawBody);
   res.json({ success: true, ...result });
 });
 

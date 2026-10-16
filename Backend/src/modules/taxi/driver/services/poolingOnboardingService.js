@@ -1,8 +1,8 @@
 import crypto from 'node:crypto';
-import { env } from '../../../../config/env.js';
 import { ApiError } from '../../../../utils/ApiError.js';
 import { PoolingVehicle } from '../../admin/models/PoolingVehicle.js';
 import { sendOtpSms } from '../../services/smsService.js';
+import { getVisibleOtp, resolveOtpForPhone } from '../../services/otpSecurity.js';
 import { signAccessToken } from './authService.js';
 import { PoolingDriverOnboardingSession } from '../models/PoolingDriverOnboardingSession.js';
 
@@ -10,8 +10,6 @@ const OTP_TTL_MS = 10 * 60 * 1000;
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
-const TEST_LOGIN_OTP_PHONE = '6268423925';
-const TEST_LOGIN_OTP_CODE = '0000';
 
 const VEHICLE_TYPES = new Set(['bike', 'hatchback', 'sedan', 'suv', 'van', 'luxury']);
 
@@ -34,29 +32,7 @@ const buildPhoneCandidates = (phone) => {
 };
 
 const hashOtp = (otp) => crypto.createHash('sha256').update(String(otp)).digest('hex');
-const generateOtp = () => String(Math.floor(1000 + Math.random() * 9000));
-const getVisibleOtp = (otp) => (process.env.NODE_ENV !== 'production' ? String(otp) : null);
-const isTruthy = (value) => ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
-const getStaticDriverOtpConfig = () => ({
-  phone: normalizePhone(env.sms?.staticOtpPhone || TEST_LOGIN_OTP_PHONE),
-  otp: String(env.sms?.staticOtpCode || TEST_LOGIN_OTP_CODE).trim(),
-});
-
-const resolveDriverLoginOtpForPhone = (phone) => {
-  const normalizedPhone = normalizePhone(phone);
-  const staticOtpConfig = getStaticDriverOtpConfig();
-  const defaultOtpEnabled = isTruthy(env.sms?.useDefaultOtp);
-
-  if (defaultOtpEnabled && staticOtpConfig.otp) {
-    return { otp: staticOtpConfig.otp, isStatic: true };
-  }
-
-  if (staticOtpConfig.phone && staticOtpConfig.otp && normalizedPhone === staticOtpConfig.phone) {
-    return { otp: staticOtpConfig.otp, isStatic: true };
-  }
-
-  return { otp: generateOtp(), isStatic: false };
-};
+const resolveDriverLoginOtpForPhone = (phone) => resolveOtpForPhone(normalizePhone(phone), normalizePhone);
 
 const generateRegistrationId = () => `pool-${crypto.randomBytes(8).toString('hex')}`;
 

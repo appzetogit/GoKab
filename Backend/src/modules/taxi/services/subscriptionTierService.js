@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import Razorpay from 'razorpay';
 import { ApiError } from '../../../utils/ApiError.js';
 import { SubscriptionTier } from '../admin/models/SubscriptionTier.js';
@@ -8,12 +7,21 @@ import { TierAuditLog } from '../admin/models/TierAuditLog.js';
 import { DriverSubscription } from '../driver/models/DriverSubscription.js';
 import { SubscriptionPayment } from '../driver/models/SubscriptionPayment.js';
 import { env } from '../../../config/env.js';
+import { isValidRazorpayPaymentSignature, isValidRazorpayWebhookSignature } from './razorpaySecurity.js';
 
-const getRazorpayInstance = () => {
-  const key_id = String(process.env.RAZORPAY_KEY_ID || 'rzp_test_Sfly3DalsiEPN8').trim();
-  const key_secret = String(process.env.RAZORPAY_KEY_SECRET || 'J4MPIKYt342CofanLuPvPvp1').trim();
-  return new Razorpay({ key_id, key_secret });
+// Subscription checkout uses its own env-configured Razorpay account. No
+// literal fallbacks: a missing key is a configuration error, not a reason to
+// charge through someone else's test account.
+const getRazorpayKeys = () => {
+  const key_id = String(process.env.RAZORPAY_KEY_ID || '').trim();
+  const key_secret = String(process.env.RAZORPAY_KEY_SECRET || '').trim();
+  if (!key_id || !key_secret) {
+    throw new ApiError(503, 'Subscription payments are not configured (RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET)');
+  }
+  return { key_id, key_secret };
 };
+
+const getRazorpayInstance = () => new Razorpay(getRazorpayKeys());
 
 /**
  * A captured payment that could not be turned into a plan needs a human. The
@@ -133,6 +141,7 @@ export const subscriptionTierService = {
       can_create_rides,
       can_publish_rides,
       can_manage_fleet,
+      can_use_contacts,
       requires_commercial_and_private,
       requires_commercial_at_purchase,
       max_routes,
@@ -169,6 +178,8 @@ export const subscriptionTierService = {
       can_create_rides: Boolean(can_create_rides),
       can_publish_rides: Boolean(can_publish_rides),
       can_manage_fleet: Boolean(can_manage_fleet),
+      // Omitted → left unset, so the category default applies (see resolveTierPermissions).
+      ...(can_use_contacts !== undefined && can_use_contacts !== null ? { can_use_contacts: Boolean(can_use_contacts) } : {}),
       requires_commercial_and_private: Boolean(requires_commercial_and_private),
       requires_commercial_at_purchase: Boolean(requires_commercial_at_purchase),
       ...(max_routes !== undefined ? { max_routes: Math.max(0, Number(max_routes)) } : {}),
@@ -481,20 +492,22 @@ export const subscriptionTierService = {
       orderId: order.id,
       amount: finalAmount,
       currency: 'INR',
-      keyId: String(process.env.RAZORPAY_KEY_ID || 'rzp_test_Sfly3DalsiEPN8').trim(),
+      keyId: getRazorpayKeys().key_id,
       paymentRecordId: paymentRecord._id,
       proratedCredit,
     };
   },
 
   async verifySubscriptionPayment({ driverId, razorpay_order_id, razorpay_payment_id, razorpay_signature }) {
-    const key_secret = String(process.env.RAZORPAY_KEY_SECRET || 'J4MPIKYt342CofanLuPvPvp1').trim();
-    const generatedSignature = crypto
-      .createHmac('sha256', key_secret)
-      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-      .digest('hex');
+    const { key_secret } = getRazorpayKeys();
+    const signatureValid = isValidRazorpayPaymentSignature({
+      orderId: razorpay_order_id,
+      paymentId: razorpay_payment_id,
+      signature: razorpay_signature,
+      keySecret: key_secret,
+    });
 
-    if (generatedSignature !== razorpay_signature) {
+    if (!signatureValid) {
       throw new ApiError(400, 'Razorpay payment signature verification failed');
     }
 
@@ -600,13 +613,14 @@ export const subscriptionTierService = {
     return { success: true, activeSubscription: currentSub, action: 'queued_for_next_cycle' };
   },
 
-  async handleRazorpayWebhook(eventBody, signatureHeader) {
-    const webhookSecret = String(process.env.RAZORPAY_WEBHOOK_SECRET || 'secret123').trim();
-    if (webhookSecret) {
-      const expectedSignature = crypto.createHmac('sha256', webhookSecret).update(JSON.stringify(eventBody)).digest('hex');
-      if (expectedSignature !== signatureHeader) {
-        throw new ApiError(400, 'Invalid webhook signature');
-      }
+  async handleRazorpayWebhook(eventBody, signatureHeader, rawBody) {
+    const webhookSecret = String(process.env.RAZORPAY_WEBHOOK_SECRET || '').trim();
+    if (!webhookSecret) {
+      // Refuse rather than process unauthenticated events.
+      throw new ApiError(503, 'Razorpay webhook secret is not configured');
+    }
+    if (!isValidRazorpayWebhookSignature({ rawBody, signature: signatureHeader, webhookSecret })) {
+      throw new ApiError(400, 'Invalid webhook signature');
     }
 
     const event = eventBody?.event;

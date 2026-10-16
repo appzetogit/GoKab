@@ -728,6 +728,13 @@ const rideSchema = new mongoose.Schema(
         ref: 'TaxiDriver',
         default: null,
       },
+      // For a direct assign: who the ride went to relative to the assigner.
+      // `contact` assignments carry a split in `publish` and may hold escrow.
+      target_type: {
+        type: String,
+        enum: ['self', 'fleet', 'contact', null],
+        default: null,
+      },
       assigned_at: {
         type: Date,
         default: null,
@@ -796,6 +803,25 @@ const rideSchema = new mongoose.Schema(
         type: Number,
         default: 0,
         min: 0,
+      },
+      // Secure (default): both sides' shares are frozen in escrow at accept and
+      // settled through the wallets. Unsecure: no wallet check, no hold, cash
+      // only — the two drivers settle the split between themselves offline.
+      is_secure: {
+        type: Boolean,
+        default: true,
+      },
+      // "Report" on an unsecure ride: opens a support ticket, moves no money.
+      reports: {
+        type: [
+          {
+            driver_id: { type: mongoose.Schema.Types.ObjectId, ref: 'TaxiDriver' },
+            ticket_code: { type: String, default: '' },
+            reason: { type: String, default: '', trim: true },
+            at: { type: Date, default: Date.now },
+          },
+        ],
+        default: [],
       },
       status: {
         type: String,
