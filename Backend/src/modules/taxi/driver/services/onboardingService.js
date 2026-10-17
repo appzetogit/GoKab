@@ -20,7 +20,7 @@ import { findExistingDriverAccount, startDriverLoginOtp } from './loginOtpServic
 import { findZoneByPickup } from './locationService.js';
 import { sendOtpSms } from '../../services/smsService.js';
 import { getVisibleOtp, resolveOtpForPhone } from '../../services/otpSecurity.js';
-import { resolveDriverBanner } from './driverBannerService.js';
+import { resolveDriverBanner, resolveDriverProfileImage } from './driverBannerService.js';
 import { WalletTransaction } from '../models/WalletTransaction.js';
 import { applyDriverWalletAdjustment } from './walletService.js';
 
@@ -604,7 +604,16 @@ export const verifyDriverOtp = async ({ registrationId, phone, otp }) => {
   };
 };
 
-export const saveDriverPersonalDetails = async ({ registrationId, phone, fullName, email, gender, password, bannerImage }) => {
+export const saveDriverPersonalDetails = async ({
+  registrationId,
+  phone,
+  fullName,
+  email,
+  gender,
+  password,
+  bannerImage,
+  profileImage,
+}) => {
   const session = await getSession(registrationId, phone);
   const isOwner = isOwnerRole(session.role);
 
@@ -632,6 +641,10 @@ export const saveDriverPersonalDetails = async ({ registrationId, phone, fullNam
   const nextBanner = isOwner
     ? ''
     : (await resolveDriverBanner(bannerImage, { current: previousBanner })) ?? previousBanner;
+  const previousProfileImage = session.personal?.profileImage || '';
+  const nextProfileImage = isOwner
+    ? ''
+    : (await resolveDriverProfileImage(profileImage, { current: previousProfileImage })) ?? previousProfileImage;
 
   session.personal = {
     fullName: normalizedName,
@@ -643,6 +656,7 @@ export const saveDriverPersonalDetails = async ({ registrationId, phone, fullNam
         : crypto.randomBytes(24).toString('hex'),
     ),
     bannerImage: nextBanner,
+    profileImage: nextProfileImage,
   };
   session.status = 'personal_saved';
   await session.save();
@@ -654,6 +668,7 @@ export const saveDriverPersonalDetails = async ({ registrationId, phone, fullNam
       email: session.personal.email,
       gender: session.personal.gender,
       bannerImage: session.personal.bannerImage || '',
+      profileImage: session.personal.profileImage || '',
     },
     session: publicSessionPayload(session),
   };
@@ -1157,6 +1172,7 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
     gender: session.personal.gender,
     password: session.personal.passwordHash,
     bannerImage: session.personal.bannerImage || '',
+    profileImage: session.personal.profileImage || '',
     service_location_id:
       session.vehicle.locationId && /^[a-f\d]{24}$/i.test(String(session.vehicle.locationId))
         ? session.vehicle.locationId
@@ -1188,6 +1204,7 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
         email: session.personal.email,
         gender: session.personal.gender,
         bannerImage: session.personal.bannerImage || '',
+        profileImage: session.personal.profileImage || '',
       },
       vehicle: {
         registerFor: session.vehicle.registerFor,

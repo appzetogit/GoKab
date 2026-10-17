@@ -14,13 +14,16 @@ import { matchRideToRoute } from '../../services/routeMatchService.js';
 import {
   emitToRoom,
   getFeedRoom,
-  getPublisherRoom,
   stopDispatchFlow,
   notifyRideAccepted,
 } from '../../services/dispatchService.js';
 import { acceptRideAssignment, isRideScheduledForFuture } from '../../services/rideService.js';
 import { holdForPublishedRide } from './escrowService.js';
-import { notifyNetworkAssignment } from '../../services/networkNotificationService.js';
+import {
+  notifyNetworkAssignment,
+  notifyPublishedRideExpired,
+  notifyPublishedRideTaken,
+} from '../../services/networkNotificationService.js';
 import { applyDriverWalletAdjustment, getWalletSnapshot } from './walletService.js';
 import { buildPublisherCard, PUBLISHER_DRIVER_FIELDS } from './publisherCardService.js';
 
@@ -536,11 +539,11 @@ const acceptPublishedRide = async ({ driverId, ride }) => {
       rideId: String(claimed._id),
       reason: 'TAKEN',
     });
-    emitToRoom(getPublisherRoom(claimed.created_by_driver_id), 'network:ride:taken', {
-      rideId: String(claimed._id),
-      driverId: String(driverId),
+    await notifyPublishedRideTaken({
+      ride: claimed,
+      acceptorDriverId: driverId,
       held: secure ? claimed.publish?.driver_payout || 0 : 0,
-      is_secure: secure,
+      isSecure: secure,
     });
     await closeLeadConversationsForRide(claimed._id, 'RIDE_TAKEN');
     await notifyNetworkAssignment(claimed);
@@ -636,9 +639,7 @@ export const expirePublishedRides = async () => {
       rideId: String(ride._id),
       reason: 'EXPIRED',
     });
-    emitToRoom(getPublisherRoom(ride.created_by_driver_id), 'network:ride:expired', {
-      rideId: String(ride._id),
-    });
+    await notifyPublishedRideExpired(ride);
     await closeLeadConversationsForRide(ride._id, 'EXPIRED');
   }
 

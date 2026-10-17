@@ -47,6 +47,8 @@ import {
   getDriverEmergencyContacts,
   getDriverIncentives,
   getDriverNotifications,
+  markAllDriverNotificationsRead,
+  markDriverNotificationRead,
   cancelDriverScheduledRide,
   getDriverRatings,
   getDriverReferrals,
@@ -237,6 +239,16 @@ driverRouter.get(
   "/notifications",
   authenticate(["driver", "owner"]),
   asyncHandler(getDriverNotifications),
+);
+driverRouter.patch(
+  "/notifications/read-all",
+  authenticate(["driver", "owner"]),
+  asyncHandler(markAllDriverNotificationsRead),
+);
+driverRouter.patch(
+  "/notifications/:id/read",
+  authenticate(["driver", "owner"]),
+  asyncHandler(markDriverNotificationRead),
 );
 driverRouter.get(
   "/scheduled-rides",

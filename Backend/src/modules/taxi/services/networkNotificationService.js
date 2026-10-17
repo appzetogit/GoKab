@@ -228,6 +228,56 @@ export const notifyAssignmentAcknowledged = async ({ ride, driver }) => {
   }
 };
 
+/**
+ * Someone took a ride off the feed. The socket event refreshes an open
+ * publisher app; the push is the only way a publisher with the app closed
+ * finds out their lead is gone.
+ */
+export const notifyPublishedRideTaken = async ({ ride, acceptorDriverId, held = 0, isSecure = true }) => {
+  const acceptor = await Driver.findById(acceptorDriverId).select('name phone vehicleNumber').lean();
+  const acceptorName = safe(acceptor?.name, 'A driver');
+
+  emitToRoom(getPublisherRoom(ride.created_by_driver_id), 'network:ride:taken', {
+    rideId: String(ride._id),
+    driverId: String(acceptorDriverId),
+    held,
+    is_secure: isSecure,
+    acceptor: {
+      id: String(acceptorDriverId),
+      name: safe(acceptor?.name),
+      phone: safe(acceptor?.phone),
+      vehicleNumber: safe(acceptor?.vehicleNumber),
+    },
+  });
+
+  await sendPushNotificationToEntities({
+    driverIds: [String(ride.created_by_driver_id)],
+    title: 'Your ride was accepted',
+    body: `${acceptorName} accepted ${safe(ride.pickupAddress, 'Pickup')} → ${safe(ride.dropAddress, 'Drop')}`,
+    data: {
+      type: 'network_ride_taken',
+      rideId: String(ride._id),
+      acceptorDriverId: String(acceptorDriverId),
+      acceptorName,
+      isSecure: String(isSecure),
+    },
+  }).catch((error) => console.error('[networkNotification] ride taken push failed:', error.message));
+};
+
+/** A published ride reached its expiry with no taker. */
+export const notifyPublishedRideExpired = async (ride) => {
+  emitToRoom(getPublisherRoom(ride.created_by_driver_id), 'network:ride:expired', {
+    rideId: String(ride._id),
+  });
+
+  await sendPushNotificationToEntities({
+    driverIds: [String(ride.created_by_driver_id)],
+    title: 'Your published ride expired',
+    body: 'Your published ride expired with no taker. Republish or assign it.',
+    data: { type: 'network_ride_expired', rideId: String(ride._id) },
+  }).catch((error) => console.error('[networkNotification] ride expired push failed:', error.message));
+};
+
 const formatPickupTime = (date) =>
   new Date(date).toLocaleTimeString('en-IN', {
     hour: '2-digit',

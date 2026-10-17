@@ -28,6 +28,7 @@ import { RentalBookingRequest } from "../../admin/models/RentalBookingRequest.js
 import { CustomerBiometricProfile } from "../../admin/models/CustomerBiometricProfile.js";
 import { AdminBusinessSetting } from "../../admin/models/AdminBusinessSetting.js";
 import { Notification } from "../../admin/promotions/models/Notification.js";
+import { NotificationRead } from "../models/NotificationRead.js";
 import { FleetVehicle } from "../../admin/models/FleetVehicle.js";
 import { buildAssignedByPayload } from "../../services/networkNotificationService.js";
 import {
@@ -2804,8 +2805,10 @@ const ensureServiceCenterStaffTargetAccess = async (req, staffId = "") => {
   return { access, center, staff };
 };
 
-const serializeDriverNotification = (item = {}) => ({
+const serializeDriverNotification = (item = {}, readAt = null) => ({
   id: String(item._id || ""),
+  isRead: Boolean(readAt),
+  readAt: readAt || null,
   title: String(item.push_title || "").trim(),
   body: String(item.message || "").trim(),
   image: String(item.image || "").trim(),
@@ -3238,16 +3241,24 @@ export const getDriverEmergencyContacts = async (req, res) => {
   });
 };
 
-export const getDriverNotifications = async (req, res) => {
+const DRIVER_NOTIFICATION_LIMIT = 100;
+
+// Read state is kept per account (see NotificationRead), and drivers and
+// owners share this inbox, so both the account and its role are needed.
+const resolveNotificationAccount = async (req) => {
   const isOwner = String(req.auth?.role || "").toLowerCase() === "owner";
   const account = isOwner
-    ? await Owner.findById(req.auth.sub).lean()
-    : await Driver.findById(req.auth.sub).lean();
+    ? await Owner.findById(req.auth.sub).select("_id service_location_id").lean()
+    : await Driver.findById(req.auth.sub).select("_id service_location_id").lean();
 
   if (!account) {
     throw new ApiError(404, isOwner ? "Owner not found" : "Driver not found");
   }
 
+  return { account, accountRole: isOwner ? "owner" : "driver" };
+};
+
+const buildDriverNotificationQuery = (account) => {
   const serviceLocationId = account.service_location_id || null;
   const query = {
     status: "sent",
@@ -3262,17 +3273,107 @@ export const getDriverNotifications = async (req, res) => {
     ];
   }
 
-  const notifications = await Notification.find(query)
+  return query;
+};
+
+const listVisibleDriverNotifications = (account) =>
+  Notification.find(buildDriverNotificationQuery(account))
     .sort({ sent_at: -1, createdAt: -1 })
-    .limit(100)
+    .limit(DRIVER_NOTIFICATION_LIMIT)
     .lean();
+
+export const getDriverNotifications = async (req, res) => {
+  const { account, accountRole } = await resolveNotificationAccount(req);
+  const notifications = await listVisibleDriverNotifications(account);
+
+  const reads = notifications.length
+    ? await NotificationRead.find({
+      account_role: accountRole,
+      account_id: account._id,
+      notification_id: { $in: notifications.map((item) => item._id) },
+    })
+      .select("notification_id read_at")
+      .lean()
+    : [];
+  const readAtById = new Map(reads.map((row) => [String(row.notification_id), row.read_at]));
 
   res.json({
     success: true,
     data: {
-      results: notifications.map(serializeDriverNotification),
+      results: notifications.map((item) =>
+        serializeDriverNotification(item, readAtById.get(String(item._id)) || null),
+      ),
     },
   });
+};
+
+export const markDriverNotificationRead = async (req, res) => {
+  const notificationId = String(req.params.id || "").trim();
+
+  if (!mongoose.isValidObjectId(notificationId)) {
+    throw new ApiError(404, "Notification not found", null, "NOTIFICATION_NOT_FOUND");
+  }
+
+  const { account, accountRole } = await resolveNotificationAccount(req);
+  const notification = await Notification.findOne({
+    ...buildDriverNotificationQuery(account),
+    _id: notificationId,
+  })
+    .select("_id")
+    .lean();
+
+  if (!notification) {
+    throw new ApiError(404, "Notification not found", null, "NOTIFICATION_NOT_FOUND");
+  }
+
+  // Marking an already-read notification keeps its original read time.
+  const read = await NotificationRead.findOneAndUpdate(
+    { account_role: accountRole, account_id: account._id, notification_id: notification._id },
+    { $setOnInsert: { read_at: new Date() } },
+    { upsert: true, returnDocument: "after" },
+  ).lean();
+
+  res.json({
+    success: true,
+    data: { id: String(notification._id), readAt: read.read_at },
+  });
+};
+
+export const markAllDriverNotificationsRead = async (req, res) => {
+  const { account, accountRole } = await resolveNotificationAccount(req);
+  const notifications = await listVisibleDriverNotifications(account);
+
+  if (!notifications.length) {
+    res.json({ success: true, data: { updated: 0 } });
+    return;
+  }
+
+  const notificationIds = notifications.map((item) => item._id);
+  const alreadyRead = await NotificationRead.find({
+    account_role: accountRole,
+    account_id: account._id,
+    notification_id: { $in: notificationIds },
+  })
+    .select("notification_id")
+    .lean();
+  const readIds = new Set(alreadyRead.map((row) => String(row.notification_id)));
+  const unreadIds = notificationIds.filter((id) => !readIds.has(String(id)));
+
+  if (unreadIds.length) {
+    const now = new Date();
+    await NotificationRead.bulkWrite(
+      unreadIds.map((notificationId) => ({
+        updateOne: {
+          filter: { account_role: accountRole, account_id: account._id, notification_id: notificationId },
+          update: { $setOnInsert: { read_at: now } },
+          upsert: true,
+        },
+      })),
+      { ordered: false },
+    );
+  }
+
+  res.json({ success: true, data: { updated: unreadIds.length } });
 };
 
 export const getDriverScheduledRides = async (req, res) => {

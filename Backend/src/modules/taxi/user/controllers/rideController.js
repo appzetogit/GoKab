@@ -376,10 +376,28 @@ export const getMyActiveRide = async (req, res) => {
     entityId: req.auth.sub,
   });
 
-  res.json({
-    success: true,
-    data: ride ? serializeRideRealtime(ride) : null,
-  });
+  if (!ride) {
+    res.json({ success: true, data: null });
+    return;
+  }
+
+  const data = serializeRideRealtime(ride);
+
+  // The acceptor's trip screen needs the escrow state to know whether to ask
+  // who collected the fare (completion fails with COLLECTED_BY_REQUIRED
+  // otherwise). Wallet holds are between the two drivers, so only drivers see
+  // them; `ride:state` on the socket is shared with the rider and stays as is.
+  if (req.auth.role === 'driver' && ride.origin === 'driver_created') {
+    data.origin = ride.origin;
+    data.is_secure = ride.publish?.is_secure !== false;
+    data.escrow = {
+      state: ride.escrow?.state || 'none',
+      publisher_hold: Number(ride.escrow?.publisher_hold || 0),
+      acceptor_hold: Number(ride.escrow?.acceptor_hold || 0),
+    };
+  }
+
+  res.json({ success: true, data });
 };
 
 export const listMyRides = async (req, res) => {
