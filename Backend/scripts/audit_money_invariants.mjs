@@ -17,6 +17,7 @@
  */
 
 import mongoose from 'mongoose';
+import { payRideAsRider } from './smoke_pay_ride_as_rider.mjs';
 
 const API = process.env.AUDIT_API || 'http://127.0.0.1:4000/api/v1';
 const DB_URI = process.env.AUDIT_DB_URI || 'mongodb://127.0.0.1:27031/gokab?replicaSet=rs0';
@@ -166,6 +167,11 @@ const run = async () => {
     await step('arriving');
     await step('started');
     await step('completed', { collectedBy: outcome });
+    if (outcome === 'platform') {
+      // The platform only pays out once the rider's payment is verified.
+      const paid = await payRideAsRider({ api, rideId });
+      if (paid.status !== 201) console.log(`  platform: rider payment failed -> ${JSON.stringify(paid.json)}`);
+    }
     console.log(`  ${outcome}: completed, collected by ${outcome}`);
   }
 

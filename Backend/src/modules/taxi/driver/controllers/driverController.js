@@ -29,6 +29,7 @@ import { CustomerBiometricProfile } from "../../admin/models/CustomerBiometricPr
 import { AdminBusinessSetting } from "../../admin/models/AdminBusinessSetting.js";
 import { Notification } from "../../admin/promotions/models/Notification.js";
 import { NotificationRead } from "../models/NotificationRead.js";
+import { settleAwaitingPlatformEscrow } from "../services/escrowService.js";
 import { FleetVehicle } from "../../admin/models/FleetVehicle.js";
 import { buildAssignedByPayload } from "../../services/networkNotificationService.js";
 import {
@@ -1679,6 +1680,14 @@ const refreshDriverPaymentCollection = async (ride) => {
 
   ride.driverPaymentCollection = nextCollection;
   await ride.save();
+
+  // A published ride completed as collected by the platform settles once
+  // Razorpay confirms the QR was paid. The cron retries if this fails.
+  if (isPaid) {
+    await settleAwaitingPlatformEscrow(ride._id).catch((error) =>
+      console.error(`[driverController] escrow settlement after QR payment on ${ride._id} failed:`, error?.message || error),
+    );
+  }
 
   return serializeDriverPaymentCollection(nextCollection);
 };

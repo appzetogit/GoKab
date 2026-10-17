@@ -25,6 +25,7 @@ process.env.MONGODB_URI ||= process.env.SMOKE_DB_URI || 'mongodb://127.0.0.1:270
 process.env.JWT_SECRET ||= 'smoke-only-jwt-secret';
 
 import mongoose from 'mongoose';
+import { payRideAsRider } from './smoke_pay_ride_as_rider.mjs';
 
 const API = process.env.SMOKE_API || 'http://127.0.0.1:4101/api/v1';
 const DB_URI = process.env.SMOKE_DB_URI || process.env.MONGODB_URI;
@@ -129,6 +130,9 @@ const run = async () => {
     const acceptA = await publishAndAccept(rideA, true);
     check('A accepted with escrow', acceptA.json?.data?.escrow === 'held', JSON.stringify(acceptA.json));
     await complete(rideA, vikas._id, { paymentMethod: 'online' });
+    // A platform-collected ride settles only after the rider's payment.
+    const paidA = await payRideAsRider({ api, rideId: rideA });
+    check('A: rider paid in the app', paidA.status === 201, JSON.stringify(paidA.json).slice(0, 200));
 
     const rideB = await createRide('cash');
     const acceptB = await publishAndAccept(rideB, false);

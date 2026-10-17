@@ -27,6 +27,7 @@ process.env.JWT_SECRET ||= 'smoke-only-jwt-secret';
 
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
+import { payRideAsRider } from './smoke_pay_ride_as_rider.mjs';
 
 const { io: socketClient } = await import('../../frontend/node_modules/socket.io-client/build/cjs/index.js');
 
@@ -130,16 +131,16 @@ const run = async () => {
   const rameshSocket = await connectSocket(rameshToken);
   const vikasSocket = await connectSocket(vikasToken);
 
-  const createAndPublish = async () => {
+  const createAndPublish = async ({ phone = '9100000077', paymentMethod = 'cash' } = {}) => {
     const created = await api('/drivers/network/rides', {
       method: 'POST',
       token: rameshToken,
       body: {
-        customer: { name: 'Walk-in Customer', phone: '9100000077' },
+        customer: { name: 'Walk-in Customer', phone },
         pickup: { coordinates: INDORE, address: 'Vijay Nagar, Indore' },
         drop: { coordinates: BHOPAL, address: 'MP Nagar, Bhopal' },
         fare: 5000,
-        paymentMethod: 'cash',
+        paymentMethod,
         notes: TAG,
       },
     });
@@ -225,6 +226,15 @@ const run = async () => {
     const detail = await api(`/rides/${rideId}`, { token: vikasToken });
     check('GET /rides/:id carries escrow too', detail.json?.data?.escrow?.state === 'held'
       && detail.json?.data?.is_secure === true);
+    let midTripRelabel = null;
+    try {
+      await updateRideLifecycle({ rideId, driverId: vikas._id, nextStatus: 'arriving', paymentMethod: 'online' });
+    } catch (error) {
+      midTripRelabel = error;
+    }
+    check('payment method locked mid-trip: cash → online refused (PAYMENT_METHOD_LOCKED)',
+      midTripRelabel?.code === 'PAYMENT_METHOD_LOCKED', midTripRelabel?.message);
+    check('...and the ride stays cash', (await Ride.findById(rideId).lean()).paymentMethod === 'cash');
     await updateRideLifecycle({ rideId, driverId: vikas._id, nextStatus: 'arriving' });
     await updateRideLifecycle({ rideId, driverId: vikas._id, nextStatus: 'started' });
     let completeError = null;
@@ -249,16 +259,95 @@ const run = async () => {
     check('platform refused on a cash ride (PLATFORM_COLLECTION_NOT_ALLOWED)',
       platformOnCash?.code === 'PLATFORM_COLLECTION_NOT_ALLOWED', platformOnCash?.message);
     const platformRelabelled = await completeWith({ collectedBy: 'platform', paymentMethod: 'online' });
-    check('platform refused when the driver relabels the cash ride as online',
-      platformRelabelled?.code === 'PLATFORM_COLLECTION_NOT_ALLOWED', platformRelabelled?.message);
-    const onlineNoChoice = await completeWith({ paymentMethod: 'online' });
-    check('relabelling as online no longer defaults to platform', onlineNoChoice?.code === 'COLLECTED_BY_REQUIRED',
-      onlineNoChoice?.message);
+    check('relabelling the cash ride as online at completion refused (PAYMENT_METHOD_LOCKED)',
+      platformRelabelled?.code === 'PAYMENT_METHOD_LOCKED', platformRelabelled?.message);
     const stillHeld = await Ride.findById(rideId).lean();
     check('refusals left the ride uncompleted with escrow held',
       stillHeld.status !== 'completed' && stillHeld.escrow.state === 'held');
     await updateRideLifecycle({ rideId, driverId: vikas._id, nextStatus: 'completed', collectedBy: 'driver' });
     check('completes with collectedBy', (await Ride.findById(rideId).lean()).status === 'completed');
+
+    console.log('\nPlatform payout waits for a verified payment');
+    const { settlePaidPlatformEscrows, releaseOrphanedEscrow } = await import(
+      '../src/modules/taxi/services/networkCronService.js'
+    );
+    const { settleAwaitingPlatformEscrow, releasePublishedRide } = await import(
+      '../src/modules/taxi/driver/services/escrowService.js'
+    );
+    const wallet = async (id) => (await Driver.findById(id).select('wallet').lean()).wallet;
+    const runOnlineRideToCompletion = async () => {
+      const onlineRideId = await createAndPublish({ phone: '9100000001', paymentMethod: 'online' });
+      const take = await api(`/drivers/feed/rides/${onlineRideId}/accept`, { method: 'POST', token: vikasToken });
+      check('setup: online ride accepted with escrow', take.json?.data?.escrow === 'held', JSON.stringify(take.json));
+      await updateRideLifecycle({ rideId: onlineRideId, driverId: vikas._id, nextStatus: 'arriving' });
+      await updateRideLifecycle({ rideId: onlineRideId, driverId: vikas._id, nextStatus: 'started' });
+      return onlineRideId;
+    };
+
+    const platformRideId = await runOnlineRideToCompletion();
+    const beforeRamesh = await wallet(ramesh._id);
+    const beforeVikas = await wallet(vikas._id);
+    await updateRideLifecycle({ rideId: platformRideId, driverId: vikas._id, nextStatus: 'completed', collectedBy: 'platform' });
+    const waiting = await Ride.findById(platformRideId).lean();
+    check('ride completed, escrow still held', waiting.status === 'completed' && waiting.escrow.state === 'held');
+    check('marked as waiting for the payment', Boolean(waiting.escrow.awaiting_platform_payment_since)
+      && waiting.escrow.collected_by === 'platform');
+    const afterCompleteRamesh = await wallet(ramesh._id);
+    const afterCompleteVikas = await wallet(vikas._id);
+    check('no money moved at completion', afterCompleteRamesh.balance === beforeRamesh.balance
+      && afterCompleteVikas.balance === beforeVikas.balance
+      && afterCompleteRamesh.frozenBalance === beforeRamesh.frozenBalance
+      && afterCompleteVikas.frozenBalance === beforeVikas.frozenBalance);
+    const listed = await api('/drivers/network/rides?status=completed&limit=50', { token: rameshToken });
+    const listedRow = (listed.json?.data?.results || []).find((item) => item.id === platformRideId);
+    check('network rides list shows awaiting_payment', listedRow?.escrow?.awaiting_payment === true,
+      JSON.stringify(listedRow?.escrow));
+    check('cron does not settle an unpaid ride', (await settlePaidPlatformEscrows()).platformSettled === 0);
+    await Ride.updateOne(
+      { _id: platformRideId },
+      { $set: { 'driverPaymentCollection.status': 'paid', 'driverPaymentCollection.amount': 4999 } },
+    );
+    check('a payment short of the fare does not settle', (await settleAwaitingPlatformEscrow(platformRideId)) === null);
+    await Ride.updateOne({ _id: platformRideId }, { $unset: { driverPaymentCollection: '' } });
+
+    const riderPaid = await payRideAsRider({ api, rideId: platformRideId });
+    check('rider pays in the app', riderPaid.status === 201, JSON.stringify(riderPaid.json).slice(0, 200));
+    const settledRide = await Ride.findById(platformRideId).lean();
+    check('escrow settled by the payment', settledRide.escrow.state === 'settled'
+      && settledRide.escrow.awaiting_platform_payment_since === null && settledRide.escrow.collected_confirmed_by === 'system');
+    const paidRamesh = await wallet(ramesh._id);
+    const paidVikas = await wallet(vikas._id);
+    check('acceptor credited the 3000 payout', paidVikas.balance - beforeVikas.balance === 3000,
+      String(paidVikas.balance - beforeVikas.balance));
+    check('publisher credited the commission', paidRamesh.balance > beforeRamesh.balance,
+      String(paidRamesh.balance - beforeRamesh.balance));
+    check('both holds released', paidRamesh.frozenBalance === beforeRamesh.frozenBalance - 3000
+      && paidVikas.frozenBalance === beforeVikas.frozenBalance - 2000);
+    check('settling again moves nothing', (await settleAwaitingPlatformEscrow(platformRideId)) === null);
+
+    const sweptRideId = await runOnlineRideToCompletion();
+    await updateRideLifecycle({ rideId: sweptRideId, driverId: vikas._id, nextStatus: 'completed', collectedBy: 'platform' });
+    await Ride.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(sweptRideId) },
+      { $set: { updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000) } },
+    );
+    await releaseOrphanedEscrow();
+    check('orphan sweep leaves a ride waiting for payment alone',
+      (await Ride.findById(sweptRideId).lean()).escrow.state === 'held');
+    // The payment was saved but the settlement never ran (say, a restart).
+    await Ride.updateOne(
+      { _id: sweptRideId },
+      { $set: { 'driverPaymentCollection.status': 'paid', 'driverPaymentCollection.amount': 5000, 'driverPaymentCollection.paidAt': new Date() } },
+    );
+    check('cron settles a paid ride it missed', (await settlePaidPlatformEscrows()).platformSettled === 1);
+    check('...and it is settled', (await Ride.findById(sweptRideId).lean()).escrow.state === 'settled');
+
+    const releasedRideId = await runOnlineRideToCompletion();
+    await updateRideLifecycle({ rideId: releasedRideId, driverId: vikas._id, nextStatus: 'completed', collectedBy: 'platform' });
+    await releasePublishedRide({ rideId: releasedRideId, reason: 'admin force release' });
+    const releasedRide = await Ride.findById(releasedRideId).lean();
+    check('a released escrow is no longer waiting', releasedRide.escrow.state === 'released'
+      && releasedRide.escrow.awaiting_platform_payment_since === null);
 
     console.log('\nP2  Publisher told when the lead expires (waits for the 1-minute cron)');
     const expiringId = await createAndPublish();

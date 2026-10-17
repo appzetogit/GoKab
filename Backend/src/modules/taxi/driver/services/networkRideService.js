@@ -505,6 +505,9 @@ export const serializeNetworkRide = (ride, { assignedDriver = null, assignedBy =
     publisher_hold: ride.escrow?.publisher_hold || 0,
     acceptor_hold: ride.escrow?.acceptor_hold || 0,
     collected_by: ride.escrow?.collected_by || null,
+    // Completed as collected by the platform; both drivers are paid once the
+    // rider's online payment is verified.
+    awaiting_payment: Boolean(ride.escrow?.awaiting_platform_payment_since),
   },
   // The creating driver's card (images included). Filled on list endpoints;
   // null where the caller didn't load it.

@@ -10,6 +10,7 @@
  */
 
 import mongoose from 'mongoose';
+import { payRideAsRider } from './smoke_pay_ride_as_rider.mjs';
 // The backend does not depend on the client library, so borrow the copy the
 // frontend already has rather than adding a dependency just for tests.
 const { io: socketClient } = await import('../../frontend/node_modules/socket.io-client/build/cjs/index.js');
@@ -520,6 +521,12 @@ const run = async () => {
   await updateRideLifecycle({ rideId: onlineRideId, driverId: vikas._id, nextStatus: 'arriving' });
   await updateRideLifecycle({ rideId: onlineRideId, driverId: vikas._id, nextStatus: 'started' });
   await updateRideLifecycle({ rideId: onlineRideId, driverId: vikas._id, nextStatus: 'completed' });
+
+  const awaitingOnline = await Ride.findById(onlineRideId).lean();
+  check('Platform payout waits for the rider payment', awaitingOnline.escrow.state === 'held'
+    && Boolean(awaitingOnline.escrow.awaiting_platform_payment_since), awaitingOnline.escrow.state);
+  const riderPaid = await payRideAsRider({ api, rideId: onlineRideId });
+  check('Rider pays from the wallet', riderPaid.status === 201, JSON.stringify(riderPaid.json).slice(0, 200));
 
   const pubOnline = await Driver.findById(ramesh._id).lean();
   const accOnline = await Driver.findById(vikas._id).lean();

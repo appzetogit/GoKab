@@ -875,6 +875,14 @@ const rideSchema = new mongoose.Schema(
         enum: ['driver', 'publisher', 'admin', 'system', null],
         default: null,
       },
+      // Set when the ride was completed as collected by the platform: the
+      // escrow stays held until a verified online payment for this ride
+      // arrives (rider app payment or the driver's payment QR), and only then
+      // settles. Cleared on settlement.
+      awaiting_platform_payment_since: {
+        type: Date,
+        default: null,
+      },
       dispute_until: {
         type: Date,
         default: null,
