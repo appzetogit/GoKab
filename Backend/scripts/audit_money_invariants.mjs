@@ -117,7 +117,8 @@ const run = async () => {
       method: 'POST',
       token: rameshToken,
       body: {
-        customer: { name: `Churn ${i}`, phone: `91000001${String(i).padStart(2, '0')}` },
+        // Platform settlement needs an app customer (the seeded rider).
+        customer: { name: `Churn ${i}`, phone: outcome === 'platform' ? '9100000001' : `91000001${String(i).padStart(2, '0')}` },
         pickup: { coordinates: INDORE, address: 'Vijay Nagar, Indore' },
         drop: { coordinates: BHOPAL, address: 'MP Nagar, Bhopal' },
         fare: 5000,

@@ -501,7 +501,8 @@ const run = async () => {
     method: 'POST',
     token: rameshToken,
     body: {
-      customer: { name: 'Online Customer', phone: '9100000082' },
+      // The seeded app rider: only an app customer can pay the platform.
+      customer: { name: 'Online Customer', phone: '9100000001' },
       pickup: { coordinates: INDORE, address: 'Indore' },
       drop: { coordinates: BHOPAL, address: 'Bhopal' },
       fare: 5000,

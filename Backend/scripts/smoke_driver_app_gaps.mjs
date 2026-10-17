@@ -234,6 +234,29 @@ const run = async () => {
       completeError = error;
     }
     check('completion without collectedBy still refused', completeError?.code === 'COLLECTED_BY_REQUIRED');
+    check('...offering only publisher/driver for a cash offline-customer ride',
+      JSON.stringify(completeError?.details?.options) === JSON.stringify(['publisher', 'driver']),
+      JSON.stringify(completeError?.details));
+    const completeWith = async (args) => {
+      try {
+        await updateRideLifecycle({ rideId, driverId: vikas._id, nextStatus: 'completed', ...args });
+        return null;
+      } catch (error) {
+        return error;
+      }
+    };
+    const platformOnCash = await completeWith({ collectedBy: 'platform' });
+    check('platform refused on a cash ride (PLATFORM_COLLECTION_NOT_ALLOWED)',
+      platformOnCash?.code === 'PLATFORM_COLLECTION_NOT_ALLOWED', platformOnCash?.message);
+    const platformRelabelled = await completeWith({ collectedBy: 'platform', paymentMethod: 'online' });
+    check('platform refused when the driver relabels the cash ride as online',
+      platformRelabelled?.code === 'PLATFORM_COLLECTION_NOT_ALLOWED', platformRelabelled?.message);
+    const onlineNoChoice = await completeWith({ paymentMethod: 'online' });
+    check('relabelling as online no longer defaults to platform', onlineNoChoice?.code === 'COLLECTED_BY_REQUIRED',
+      onlineNoChoice?.message);
+    const stillHeld = await Ride.findById(rideId).lean();
+    check('refusals left the ride uncompleted with escrow held',
+      stillHeld.status !== 'completed' && stillHeld.escrow.state === 'held');
     await updateRideLifecycle({ rideId, driverId: vikas._id, nextStatus: 'completed', collectedBy: 'driver' });
     check('completes with collectedBy', (await Ride.findById(rideId).lean()).status === 'completed');
 

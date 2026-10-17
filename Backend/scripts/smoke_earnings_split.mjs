@@ -94,7 +94,8 @@ const run = async () => {
       method: 'POST',
       token: rameshToken,
       body: {
-        customer: { name: 'Earnings Customer', phone: '9100000066' },
+        // Online rides belong to an app customer: only they can pay the platform.
+        customer: { name: 'Earnings Customer', phone: paymentMethod === 'online' ? '9100000001' : '9100000066' },
         pickup: { coordinates: INDORE, address: 'Vijay Nagar, Indore' },
         drop: { coordinates: BHOPAL, address: 'MP Nagar, Bhopal' },
         fare: 5000,

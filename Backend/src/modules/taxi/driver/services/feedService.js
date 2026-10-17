@@ -484,11 +484,13 @@ const acceptPublishedRide = async ({ driverId, ride }) => {
   }
 
   const session = await mongoose.startSession();
+  let claimed = null;
+  let secure = false;
   try {
     session.startTransaction();
 
     const now = new Date();
-    const claimed = await Ride.findOneAndUpdate(
+    claimed = await Ride.findOneAndUpdate(
       {
         _id: ride._id,
         'publish.status': 'open',
@@ -524,7 +526,7 @@ const acceptPublishedRide = async ({ driverId, ride }) => {
       throw new ApiError(409, 'Another driver just took this ride', null, 'RIDE_ALREADY_TAKEN');
     }
 
-    const secure = isSecureRide(claimed);
+    secure = isSecureRide(claimed);
     if (secure) {
       await holdForPublishedRide({ ride: claimed, session });
     }
@@ -534,27 +536,41 @@ const acceptPublishedRide = async ({ driverId, ride }) => {
     }
 
     await session.commitTransaction();
-
-    emitToRoom(getFeedRoom(claimed.service_location_id), 'feed:driver:removed', {
-      rideId: String(claimed._id),
-      reason: 'TAKEN',
-    });
-    await notifyPublishedRideTaken({
-      ride: claimed,
-      acceptorDriverId: driverId,
-      held: secure ? claimed.publish?.driver_payout || 0 : 0,
-      isSecure: secure,
-    });
-    await closeLeadConversationsForRide(claimed._id, 'RIDE_TAKEN');
-    await notifyNetworkAssignment(claimed);
-
-    return { accepted: true, rideId: String(claimed._id), escrow: secure ? 'held' : 'none', is_secure: secure };
   } catch (error) {
-    await session.abortTransaction();
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
     throw error;
   } finally {
     session.endSession();
   }
+
+  // The ride is taken from here on. Nothing below may turn that into an error
+  // for the acceptor: each step is logged and skipped if it fails.
+  const afterCommit = async (label, step) => {
+    try {
+      await step();
+    } catch (error) {
+      console.error(`[feed] accept ${claimed._id}: ${label} failed:`, error?.message || error);
+    }
+  };
+
+  emitToRoom(getFeedRoom(claimed.service_location_id), 'feed:driver:removed', {
+    rideId: String(claimed._id),
+    reason: 'TAKEN',
+  });
+  await afterCommit('publisher notification', () =>
+    notifyPublishedRideTaken({
+      ride: claimed,
+      acceptorDriverId: driverId,
+      held: secure ? claimed.publish?.driver_payout || 0 : 0,
+      isSecure: secure,
+    }),
+  );
+  await afterCommit('closing lead conversations', () => closeLeadConversationsForRide(claimed._id, 'RIDE_TAKEN'));
+  await afterCommit('assignment notification', () => notifyNetworkAssignment(claimed));
+
+  return { accepted: true, rideId: String(claimed._id), escrow: secure ? 'held' : 'none', is_secure: secure };
 };
 
 const acceptCustomerLead = async ({ driverId, ride }) => {

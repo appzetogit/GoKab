@@ -2155,14 +2155,31 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
   }
 
   if (nextStatus === RIDE_LIVE_STATUS.COMPLETED && ride.escrow?.state === 'held') {
-    escrowCollectedBy =
-      String(collectedBy || '').trim() || (requestedPaymentMethod === 'online' ? 'platform' : '');
+    // A `platform` settlement pays both drivers out of money the platform is
+    // assumed to hold, so it is only possible when an app customer booked the
+    // ride as online and it is still being completed as online. An offline
+    // customer cannot pay the platform at all, and a driver must not be able to
+    // turn a cash fare they pocketed into a platform payout.
+    const platformCanCollect =
+      Boolean(ride.userId) && ride.paymentMethod === 'online' && requestedPaymentMethod === 'online';
+    const collectedByOptions = platformCanCollect ? ['publisher', 'driver', 'platform'] : ['publisher', 'driver'];
 
-    if (!['publisher', 'driver', 'platform'].includes(escrowCollectedBy)) {
+    escrowCollectedBy = String(collectedBy || '').trim() || (platformCanCollect ? 'platform' : '');
+
+    if (escrowCollectedBy === 'platform' && !platformCanCollect) {
+      throw new ApiError(
+        422,
+        'The platform did not collect this fare. Choose who collected it.',
+        { options: collectedByOptions },
+        'PLATFORM_COLLECTION_NOT_ALLOWED',
+      );
+    }
+
+    if (!collectedByOptions.includes(escrowCollectedBy)) {
       throw new ApiError(
         422,
         'Tell us who collected the fare before completing this ride',
-        { options: ['publisher', 'driver', 'platform'] },
+        { options: collectedByOptions },
         'COLLECTED_BY_REQUIRED',
       );
     }
