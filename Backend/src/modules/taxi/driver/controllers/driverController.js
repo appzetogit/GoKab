@@ -4050,7 +4050,7 @@ const isOwnStorageUrl = (value, req) => {
   } catch {
     return false;
   }
-  if (!parsed.pathname.startsWith("/images/")) return false;
+  if (!parsed.pathname.startsWith("/images/") && !parsed.pathname.startsWith("/api/images/")) return false;
 
   const ownHosts = new Set([String(req.get("host") || "").toLowerCase()]);
   const configuredBase = String(process.env.STORAGE_BASE_URL || "").trim();

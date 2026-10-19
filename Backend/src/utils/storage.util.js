@@ -99,8 +99,16 @@ export const getPublicUrl = (relativePath, filename, req) => {
     }
   }
 
-  return `${host}/images/${relativePath}/${filename}`;
+  return `${host}${getPublicImagePath()}/${relativePath}/${filename}`;
 };
+
+/**
+ * URL path uploaded files are served under. `/api/images` because nginx on
+ * gokab.in forwards only `/api/*` to the backend (see app.js). Set
+ * STORAGE_PUBLIC_PATH=/images to go back once `/images` is routed too.
+ */
+export const getPublicImagePath = () =>
+  `/${String(process.env.STORAGE_PUBLIC_PATH || '/api/images').replace(/^\/+|\/+$/g, '')}`;
 
 /**
  * Resolves physical path on disk for deletion
