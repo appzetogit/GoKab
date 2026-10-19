@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { isRazorpayTestModeAllowed, isRazorpayTestPayment, safeEqualHex } from "../../services/razorpaySecurity.js";
 import mongoose from "mongoose";
 import { asyncHandler } from "../../../../utils/asyncHandler.js";
-import { resolveDriverBanner } from "../services/driverBannerService.js";
+import { resolveDriverBanner, resolveDriverProfileImage } from "../services/driverBannerService.js";
 import QRCode from "qrcode";
 import { Env, StandardCheckoutClient, StandardCheckoutPayRequest, PrefillUserLoginDetails } from "@phonepe-pg/pg-sdk-node";
 import { env } from "../../../../config/env.js";
@@ -3914,12 +3914,19 @@ export const updateCurrentDriver = async (req, res) => {
   }
 
   if (Object.prototype.hasOwnProperty.call(req.body || {}, "profileImage")) {
-    driver.profileImage = String(req.body.profileImage || "").trim();
+    // Stored as a URL, never as the base64 itself: a data URL is re-encoded and
+    // hosted, an image this server already hosts is kept, '' clears it.
+    // Anything else is refused. Storing raw base64 made every /drivers/me
+    // response carry the whole photo, and a bad upload broke the app's decoder.
+    const rawProfileImage = String(req.body.profileImage ?? "").trim();
+    driver.profileImage = /^https?:\/\//i.test(rawProfileImage) && isOwnStorageUrl(rawProfileImage, req)
+      ? rawProfileImage
+      : await resolveDriverProfileImage(rawProfileImage, { current: driver.profileImage, req });
   }
 
   const bannerInput = req.body?.bannerImage !== undefined ? req.body.bannerImage : req.body?.banner_image;
   if (bannerInput !== undefined) {
-    driver.bannerImage = await resolveDriverBanner(bannerInput, { current: driver.bannerImage });
+    driver.bannerImage = await resolveDriverBanner(bannerInput, { current: driver.bannerImage, req });
   }
 
   if (Object.prototype.hasOwnProperty.call(req.body || {}, "routeBooking")) {

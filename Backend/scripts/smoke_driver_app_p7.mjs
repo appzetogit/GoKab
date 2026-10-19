@@ -161,8 +161,25 @@ const run = async () => {
     check('Lower (max_vehicles 2) → max_vehicles_allowed 2', mohanList.json?.data?.max_vehicles_allowed === 2,
       JSON.stringify(mohanList.json?.data).slice(0, 200));
 
-    const target = vehicles[0];
+    // Other suites leave incomplete test vehicles behind. An edit needs a
+    // vehicle type, and (once the RC template is required) a complete RC on
+    // file, so the target gets one for the duration of the test.
+    const target = vehicles.find((item) => item.vehicle_type_id) || vehicles[0];
     const before = await FleetVehicle.findById(target.id).lean();
+    await FleetVehicle.updateOne(
+      { _id: target.id },
+      {
+        $set: {
+          'documents.rc': {
+            previewUrl: 'https://example.test/rc.jpg',
+            secureUrl: 'https://example.test/rc.jpg',
+            uploaded: true,
+            identifyNumber: target.license_plate_number,
+            expiryDate: '2030-01-31',
+          },
+        },
+      },
+    );
     const baseBody = {
       vehicle_type_id: target.vehicle_type_id,
       car_brand: target.car_brand,
@@ -203,8 +220,8 @@ const run = async () => {
     await FleetVehicle.updateOne(
       { _id: target.id },
       {
-        $unset: { 'documents.fitness_certificate': '', fuel_type: '', model_year: '', fitness_valid_till: '' },
-        $set: { status: before.status },
+        $unset: { fuel_type: '', model_year: '', fitness_valid_till: '' },
+        $set: { status: before.status, documents: before.documents || {} },
       },
     );
 
