@@ -69,6 +69,7 @@ import { buildRentalTrackingSnapshot, listActiveRentalTrackingBookings } from '.
 import { sendEmail } from '../../services/mailService.js';
 import { getActivePaymentGateway, normalizePaymentSettingsPayload } from '../../services/paymentGatewayService.js';
 import { signAccessToken } from '../../services/tokenService.js';
+import { resolveDriverProfileImage } from '../../driver/services/driverBannerService.js';
 import {
   ADMIN_PERMISSIONS,
   SUPERADMIN_PERMISSION,
@@ -4883,7 +4884,12 @@ export const createDriver = async (payload = {}, currentAdmin = null) => {
     vehicleRecord,
   );
   const vehicleIconType = vehicleType;
-  const profilePicture = String(payload.profile_picture || payload.profilePicture || '').trim();
+  const rawProfilePicture = String(payload.profile_picture || payload.profilePicture || '').trim();
+  // A pasted/uploaded image arrives as a data URL: host it and store the URL,
+  // never the base64 itself. URLs an admin enters are kept as they are.
+  const profilePicture = /^data:/i.test(rawProfilePicture)
+    ? await resolveDriverProfileImage(rawProfilePicture)
+    : rawProfilePicture;
   const status = String(
     payload.status || (payload.approve === false ? 'pending' : 'approved'),
   )

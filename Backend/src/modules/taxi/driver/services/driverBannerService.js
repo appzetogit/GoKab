@@ -18,7 +18,7 @@ const currentUrlOf = (value) =>
  * Anything else — an arbitrary URL, a GIF, a video — is refused, so the stored
  * value always points at an image this server re-encoded.
  */
-const resolveDriverImage = async (value, { current = '', mediaType, label, invalidCode }) => {
+const resolveDriverImage = async (value, { current = '', mediaType, label, invalidCode, req = null }) => {
   if (value === undefined) return undefined;
   const raw = String(value ?? '').trim();
   if (!raw) return '';
@@ -41,7 +41,9 @@ const resolveDriverImage = async (value, { current = '', mediaType, label, inval
   }
 
   try {
-    const stored = await mediaService.uploadMedia(raw, mediaType);
+    // `req` lets the stored URL use the request's host when STORAGE_BASE_URL
+    // is not configured, instead of a localhost fallback.
+    const stored = await mediaService.uploadMedia(raw, mediaType, '', req);
     return stored.url;
   } catch (error) {
     if (error instanceof ApiError) throw error;
@@ -51,13 +53,14 @@ const resolveDriverImage = async (value, { current = '', mediaType, label, inval
 };
 
 /** Profile banner: no crop, aspect ratio kept, at most 1600px wide. */
-export const resolveDriverBanner = (value, { current = '' } = {}) =>
-  resolveDriverImage(value, { current, mediaType: 'banners', label: 'Banner', invalidCode: 'INVALID_BANNER' });
+export const resolveDriverBanner = (value, { current = '', req = null } = {}) =>
+  resolveDriverImage(value, { current, req, mediaType: 'banners', label: 'Banner', invalidCode: 'INVALID_BANNER' });
 
 /** Profile photo: square-cropped like other driver photos. */
-export const resolveDriverProfileImage = (value, { current = '' } = {}) =>
+export const resolveDriverProfileImage = (value, { current = '', req = null } = {}) =>
   resolveDriverImage(value, {
     current,
+    req,
     mediaType: 'drivers',
     label: 'Profile image',
     invalidCode: 'INVALID_PROFILE_IMAGE',
