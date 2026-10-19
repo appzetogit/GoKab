@@ -18,6 +18,33 @@ const MESSAGE_RATE_WINDOW_MS = 60 * 1000;
 
 export const getLeadRoom = (conversationId) => `lead_${conversationId}`;
 
+const participantKey = (role, id) => `${role}:${String(id)}`;
+
+/** Names and photos for a set of lead participants, keyed by `role:id`. */
+const loadParticipantProfiles = async (participants = []) => {
+  const idsOf = (role) => [
+    ...new Set(participants.filter((item) => item.role === role).map((item) => String(item.id))),
+  ];
+  const driverIds = idsOf('driver');
+  const userIds = idsOf('user');
+
+  const [drivers, users] = await Promise.all([
+    driverIds.length ? Driver.find({ _id: { $in: driverIds } }).select('name profileImage').lean() : [],
+    userIds.length ? User.find({ _id: { $in: userIds } }).select('name profileImage').lean() : [],
+  ]);
+
+  const profiles = new Map();
+  for (const [role, rows] of [['driver', drivers], ['user', users]]) {
+    for (const row of rows) {
+      profiles.set(participantKey(role, row._id), {
+        name: String(row.name || '').trim(),
+        profile_image: String(row.profileImage || '').trim(),
+      });
+    }
+  }
+  return profiles;
+};
+
 const assertLeadStillOpen = (ride) => {
   if (ride.origin === 'driver_created') {
     if (ride.publish?.status !== 'open') {
@@ -182,22 +209,32 @@ const buildContactResponse = async ({ ride, contact, target, fee, permissions, s
 
 const notifyLeadInterest = async ({ ride, target, requesterDriverId, conversationId }) => {
   const requester = await Driver.findById(requesterDriverId).select('name').lean();
-  const title = `${requester?.name || 'A driver'} is interested in your ride`;
+  const requesterName = String(requester?.name || '').trim();
+  const title = `${requesterName || 'A driver'} is interested in your ride`;
   const body = `${ride.pickupAddress || 'Pickup'} → ${ride.dropAddress || 'Drop'}`;
+  // FCM data values must be flat strings, so the push carries the sender as
+  // separate keys while the socket payload gets the `sender` object.
   const data = {
     type: 'lead_interest',
     rideId: String(ride._id),
     conversationId: String(conversationId),
+    name: requesterName,
+    senderId: String(requesterDriverId),
+    senderRole: 'driver',
+  };
+  const socketPayload = {
+    ...data,
+    sender: { id: String(requesterDriverId), role: 'driver', name: requesterName },
   };
 
   if (target.role === 'driver') {
-    emitToRoom(getDriverRoom(target.id), 'lead:interest', data);
+    emitToRoom(getDriverRoom(target.id), 'lead:interest', socketPayload);
     await sendPushNotificationToEntities({ driverIds: [String(target.id)], title, body, data }).catch(() => {});
     return;
   }
 
   if (target.id) {
-    emitToRoom(getUserRoom(target.id), 'lead:interest', data);
+    emitToRoom(getUserRoom(target.id), 'lead:interest', socketPayload);
     await sendPushNotificationToEntities({ userIds: [String(target.id)], title, body, data }).catch(() => {});
   }
 };
@@ -227,27 +264,61 @@ export const listLeadConversations = async ({ role, entityId, page = 1, limit = 
     LeadConversation.countDocuments(filter),
   ]);
 
-  const rides = await Ride.find({ _id: { $in: conversations.map((item) => item.ride_id) } })
-    .select('pickupAddress dropAddress publish status fare')
-    .lean();
+  const isMe = (participant) => participant.role === role && String(participant.id) === String(entityId);
+  const otherPartyOf = (conversation) => (conversation.participants || []).find((participant) => !isMe(participant));
+  const myLastReadAtOf = (conversation) =>
+    (conversation.participants || []).find(isMe)?.last_read_at || null;
+
+  const [rides, profiles, unreadCounts] = await Promise.all([
+    Ride.find({ _id: { $in: conversations.map((item) => item.ride_id) } })
+      .select('pickupAddress dropAddress publish status fare')
+      .lean(),
+    loadParticipantProfiles(conversations.map(otherPartyOf).filter(Boolean)),
+    // Messages from anyone else since this participant last opened the
+    // thread; one indexed count per conversation, at most 50 per page.
+    Promise.all(
+      conversations.map((conversation) => {
+        const lastReadAt = myLastReadAtOf(conversation);
+        return LeadMessage.countDocuments({
+          conversation_id: conversation._id,
+          sender_id: { $ne: new mongoose.Types.ObjectId(String(entityId)) },
+          ...(lastReadAt ? { createdAt: { $gt: lastReadAt } } : {}),
+        });
+      }),
+    ),
+  ]);
   const rideMap = new Map(rides.map((ride) => [String(ride._id), ride]));
 
   return {
-    results: conversations.map((conversation) => {
+    results: conversations.map((conversation, index) => {
       const ride = rideMap.get(String(conversation.ride_id));
+      const otherParty = otherPartyOf(conversation);
+      const otherProfile = otherParty ? profiles.get(participantKey(otherParty.role, otherParty.id)) : null;
       return {
         id: String(conversation._id),
+        ride_id: String(conversation.ride_id),
         ride: ride
           ? {
               id: String(ride._id),
               pickup: ride.pickupAddress || '',
               drop: ride.dropAddress || '',
               amount: ride.publish?.driver_payout || ride.fare,
+              fare: ride.fare,
               status: ride.status,
+            }
+          : null,
+        other_party: otherParty
+          ? {
+              role: otherParty.role,
+              id: String(otherParty.id),
+              name: otherProfile?.name || '',
+              profile_image: otherProfile?.profile_image || '',
             }
           : null,
         last_message: conversation.last_message || '',
         last_message_at: conversation.last_message_at,
+        my_last_read_at: myLastReadAtOf(conversation),
+        unread_count: unreadCounts[index],
         closed: Boolean(conversation.closed),
       };
     }),
@@ -267,7 +338,7 @@ export const listLeadMessages = async ({ conversationId, role, entityId, before,
   const messages = await LeadMessage.find(filter).sort({ createdAt: -1 }).limit(safeLimit).lean();
 
   await LeadConversation.updateOne(
-    { _id: conversation._id, 'participants.role': role, 'participants.id': entityId },
+    { _id: conversation._id, participants: { $elemMatch: { role, id: entityId } } },
     { $set: { 'participants.$.last_read_at': new Date() } },
   );
 
@@ -323,11 +394,15 @@ export const postLeadMessage = async ({ conversationId, role, entityId, message,
   conversation.last_message_at = created.createdAt;
   await conversation.save();
 
+  const senderProfiles = await loadParticipantProfiles([{ role, id: entityId }]);
+  const senderName = senderProfiles.get(participantKey(role, entityId))?.name || '';
+
   const payload = {
     id: String(created._id),
     conversationId: String(conversation._id),
     senderRole: role,
     senderId: String(entityId),
+    sender: { id: String(entityId), role, name: senderName },
     message: text,
     createdAt: created.createdAt,
     clientMessageId,
@@ -368,7 +443,7 @@ export const markLeadConversationRead = async ({ conversationId, role, entityId 
   assertParticipant(conversation, { role, id: entityId });
 
   await LeadConversation.updateOne(
-    { _id: conversation._id, 'participants.role': role, 'participants.id': entityId },
+    { _id: conversation._id, participants: { $elemMatch: { role, id: entityId } } },
     { $set: { 'participants.$.last_read_at': new Date() } },
   );
 

@@ -270,6 +270,7 @@ export const settlePublishedRide = async ({ rideId, collectedBy, confirmedBy = '
           'escrow.collected_by': collectedBy,
           'escrow.collected_confirmed_by': confirmedBy,
           'escrow.settled_at': new Date(),
+          'escrow.awaiting_platform_payment_since': null,
           'escrow.dispute_until': new Date(
             Date.now() + Math.max(0, Number(settings.escrow_dispute_window_hours || 24)) * 3600 * 1000,
           ),
@@ -385,6 +386,52 @@ export const settlePublishedRide = async ({ rideId, collectedBy, confirmedBy = '
   return result;
 };
 
+const PAID_COLLECTION_STATUSES = ['paid', 'captured', 'completed'];
+
+/**
+ * Whether the platform has actually received this ride's fare: a rider
+ * payment recorded by the ride-completion endpoints (Razorpay, verified
+ * against the gateway, or the rider's wallet) or the driver's payment QR once
+ * Razorpay reports it paid. The recorded amount must cover the fare.
+ */
+export const hasVerifiedPlatformPayment = (ride) => {
+  const collection = ride?.driverPaymentCollection || {};
+  const paid =
+    Boolean(collection.paidAt) ||
+    PAID_COLLECTION_STATUSES.includes(String(collection.status || '').trim().toLowerCase());
+  return paid && round2(collection.amount) + 0.001 >= round2(ride?.fare);
+};
+
+/**
+ * Settles a ride that was completed as collected by the platform, but only
+ * once its payment is verified. Returns null (and moves no money) while the
+ * payment is still outstanding, so it is safe to call from every place a
+ * payment can land and from the cron retry.
+ */
+export const settleAwaitingPlatformEscrow = async (rideId) => {
+  const ride = await Ride.findOne({
+    _id: rideId,
+    status: 'completed',
+    'escrow.state': 'held',
+    'escrow.collected_by': 'platform',
+    'escrow.awaiting_platform_payment_since': { $ne: null },
+  })
+    .select('_id fare driverPaymentCollection')
+    .lean();
+
+  if (!ride || !hasVerifiedPlatformPayment(ride)) {
+    return null;
+  }
+
+  try {
+    return await settlePublishedRide({ rideId: ride._id, collectedBy: 'platform', confirmedBy: 'system' });
+  } catch (error) {
+    // Another caller (the other payment path or the cron) settled it first.
+    if (error?.code === 'ESCROW_STATE_INVALID') return null;
+    throw error;
+  }
+};
+
 /**
  * Unwinds an escrow that will never complete — cancelled, expired or
  * unassigned. Nothing changes hands; both holds simply go back.
@@ -400,6 +447,7 @@ export const releasePublishedRide = async ({ rideId, reason = '', penaltyFrom = 
         $set: {
           'escrow.state': 'released',
           'escrow.released_at': new Date(),
+          'escrow.awaiting_platform_payment_since': null,
         },
       },
       { new: true, session },

@@ -60,6 +60,7 @@ const driverRegistrationSessionSchema = new mongoose.Schema(
       passwordHash: { type: String, default: '', select: false },
       // Hosted at the personal step, so the session never holds a base64 blob.
       bannerImage: { type: String, default: '' },
+      profileImage: { type: String, default: '' },
     },
     referralCode: {
       type: String,

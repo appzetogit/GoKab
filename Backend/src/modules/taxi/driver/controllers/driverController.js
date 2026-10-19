@@ -28,6 +28,9 @@ import { RentalBookingRequest } from "../../admin/models/RentalBookingRequest.js
 import { CustomerBiometricProfile } from "../../admin/models/CustomerBiometricProfile.js";
 import { AdminBusinessSetting } from "../../admin/models/AdminBusinessSetting.js";
 import { Notification } from "../../admin/promotions/models/Notification.js";
+import { NotificationRead } from "../models/NotificationRead.js";
+import { settleAwaitingPlatformEscrow } from "../services/escrowService.js";
+import { mediaService } from "../../../../services/media.service.js";
 import { FleetVehicle } from "../../admin/models/FleetVehicle.js";
 import { buildAssignedByPayload } from "../../services/networkNotificationService.js";
 import {
@@ -124,6 +127,11 @@ const MAX_EMERGENCY_CONTACTS = 5;
 const EMERGENCY_CONTACT_NAME_REGEX = /^[A-Za-z]+(?:[ .'-][A-Za-z]+)*$/;
 const DRIVER_NAME_REGEX = /^[A-Za-z]+(?:[ .'-][A-Za-z]+)*$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const DRIVER_GENDERS = new Map([
+  ["male", "Male"],
+  ["female", "Female"],
+  ["other", "Other"],
+]);
 const RAZORPAY_QR_MAX_AMOUNT = 500000;
 const IST_OFFSET_MS = 330 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1679,6 +1687,14 @@ const refreshDriverPaymentCollection = async (ride) => {
   ride.driverPaymentCollection = nextCollection;
   await ride.save();
 
+  // A published ride completed as collected by the platform settles once
+  // Razorpay confirms the QR was paid. The cron retries if this fails.
+  if (isPaid) {
+    await settleAwaitingPlatformEscrow(ride._id).catch((error) =>
+      console.error(`[driverController] escrow settlement after QR payment on ${ride._id} failed:`, error?.message || error),
+    );
+  }
+
   return serializeDriverPaymentCollection(nextCollection);
 };
 
@@ -2804,8 +2820,10 @@ const ensureServiceCenterStaffTargetAccess = async (req, staffId = "") => {
   return { access, center, staff };
 };
 
-const serializeDriverNotification = (item = {}) => ({
+const serializeDriverNotification = (item = {}, readAt = null) => ({
   id: String(item._id || ""),
+  isRead: Boolean(readAt),
+  readAt: readAt || null,
   title: String(item.push_title || "").trim(),
   body: String(item.message || "").trim(),
   image: String(item.image || "").trim(),
@@ -3164,6 +3182,8 @@ const buildCurrentDriverProfile = async (driver) => {
   await driver.populate("zoneId", "name");
   const vehicleIconUrl = await resolveVehicleMapIcon(driver.vehicleTypeId);
   const todaySummary = await syncDriverTodaySummaryDocument(driver);
+  // Lifetime count of trips this driver actually drove to completion.
+  const totalRides = await Ride.countDocuments({ driverId: driver._id, status: RIDE_STATUS.COMPLETED });
 
   return {
     id: driver._id,
@@ -3175,6 +3195,7 @@ const buildCurrentDriverProfile = async (driver) => {
     profileImage: driver.profileImage || "",
     bannerImage: driver.bannerImage || "",
     gender: driver.gender,
+    total_rides: totalRides,
     vehicleType: driver.vehicleType,
     vehicleTypeId: driver.vehicleTypeId,
     vehicleIconType: driver.vehicleIconType,
@@ -3238,16 +3259,24 @@ export const getDriverEmergencyContacts = async (req, res) => {
   });
 };
 
-export const getDriverNotifications = async (req, res) => {
+const DRIVER_NOTIFICATION_LIMIT = 100;
+
+// Read state is kept per account (see NotificationRead), and drivers and
+// owners share this inbox, so both the account and its role are needed.
+const resolveNotificationAccount = async (req) => {
   const isOwner = String(req.auth?.role || "").toLowerCase() === "owner";
   const account = isOwner
-    ? await Owner.findById(req.auth.sub).lean()
-    : await Driver.findById(req.auth.sub).lean();
+    ? await Owner.findById(req.auth.sub).select("_id service_location_id").lean()
+    : await Driver.findById(req.auth.sub).select("_id service_location_id").lean();
 
   if (!account) {
     throw new ApiError(404, isOwner ? "Owner not found" : "Driver not found");
   }
 
+  return { account, accountRole: isOwner ? "owner" : "driver" };
+};
+
+const buildDriverNotificationQuery = (account) => {
   const serviceLocationId = account.service_location_id || null;
   const query = {
     status: "sent",
@@ -3262,17 +3291,107 @@ export const getDriverNotifications = async (req, res) => {
     ];
   }
 
-  const notifications = await Notification.find(query)
+  return query;
+};
+
+const listVisibleDriverNotifications = (account) =>
+  Notification.find(buildDriverNotificationQuery(account))
     .sort({ sent_at: -1, createdAt: -1 })
-    .limit(100)
+    .limit(DRIVER_NOTIFICATION_LIMIT)
     .lean();
+
+export const getDriverNotifications = async (req, res) => {
+  const { account, accountRole } = await resolveNotificationAccount(req);
+  const notifications = await listVisibleDriverNotifications(account);
+
+  const reads = notifications.length
+    ? await NotificationRead.find({
+      account_role: accountRole,
+      account_id: account._id,
+      notification_id: { $in: notifications.map((item) => item._id) },
+    })
+      .select("notification_id read_at")
+      .lean()
+    : [];
+  const readAtById = new Map(reads.map((row) => [String(row.notification_id), row.read_at]));
 
   res.json({
     success: true,
     data: {
-      results: notifications.map(serializeDriverNotification),
+      results: notifications.map((item) =>
+        serializeDriverNotification(item, readAtById.get(String(item._id)) || null),
+      ),
     },
   });
+};
+
+export const markDriverNotificationRead = async (req, res) => {
+  const notificationId = String(req.params.id || "").trim();
+
+  if (!mongoose.isValidObjectId(notificationId)) {
+    throw new ApiError(404, "Notification not found", null, "NOTIFICATION_NOT_FOUND");
+  }
+
+  const { account, accountRole } = await resolveNotificationAccount(req);
+  const notification = await Notification.findOne({
+    ...buildDriverNotificationQuery(account),
+    _id: notificationId,
+  })
+    .select("_id")
+    .lean();
+
+  if (!notification) {
+    throw new ApiError(404, "Notification not found", null, "NOTIFICATION_NOT_FOUND");
+  }
+
+  // Marking an already-read notification keeps its original read time.
+  const read = await NotificationRead.findOneAndUpdate(
+    { account_role: accountRole, account_id: account._id, notification_id: notification._id },
+    { $setOnInsert: { read_at: new Date() } },
+    { upsert: true, returnDocument: "after" },
+  ).lean();
+
+  res.json({
+    success: true,
+    data: { id: String(notification._id), readAt: read.read_at },
+  });
+};
+
+export const markAllDriverNotificationsRead = async (req, res) => {
+  const { account, accountRole } = await resolveNotificationAccount(req);
+  const notifications = await listVisibleDriverNotifications(account);
+
+  if (!notifications.length) {
+    res.json({ success: true, data: { updated: 0 } });
+    return;
+  }
+
+  const notificationIds = notifications.map((item) => item._id);
+  const alreadyRead = await NotificationRead.find({
+    account_role: accountRole,
+    account_id: account._id,
+    notification_id: { $in: notificationIds },
+  })
+    .select("notification_id")
+    .lean();
+  const readIds = new Set(alreadyRead.map((row) => String(row.notification_id)));
+  const unreadIds = notificationIds.filter((id) => !readIds.has(String(id)));
+
+  if (unreadIds.length) {
+    const now = new Date();
+    await NotificationRead.bulkWrite(
+      unreadIds.map((notificationId) => ({
+        updateOne: {
+          filter: { account_role: accountRole, account_id: account._id, notification_id: notificationId },
+          update: { $setOnInsert: { read_at: now } },
+          upsert: true,
+        },
+      })),
+      { ordered: false },
+    );
+  }
+
+  res.json({ success: true, data: { updated: unreadIds.length } });
 };
 
 export const getDriverScheduledRides = async (req, res) => {
@@ -3784,6 +3903,16 @@ export const updateCurrentDriver = async (req, res) => {
     driver.email = email;
   }
 
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, "gender")) {
+    // Same three values registration offers; stored the way registration
+    // stores them, so the profile and onboarding never disagree on casing.
+    const gender = DRIVER_GENDERS.get(String(req.body.gender || "").trim().toLowerCase());
+    if (!gender) {
+      throw new ApiError(422, "Gender must be Male, Female or Other", { options: [...DRIVER_GENDERS.values()] }, "INVALID_GENDER");
+    }
+    driver.gender = gender;
+  }
+
   if (Object.prototype.hasOwnProperty.call(req.body || {}, "profileImage")) {
     driver.profileImage = String(req.body.profileImage || "").trim();
   }
@@ -3899,20 +4028,82 @@ export const requestDriverAccountDeletion = async (req, res) => {
   });
 };
 
+const DOCUMENT_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const DOCUMENT_IMAGE_DATA_URL = /^data:image\/(?:jpeg|jpg|png|webp);base64,/i;
+// Matches the keys documents are stored under (template field keys).
+const DOCUMENT_KEY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+// A URL is only accepted as-is when this server already hosts it (an image
+// uploaded through the app's upload endpoint earlier): never an arbitrary
+// link someone wants shown to the admin as a "document".
+const isOwnStorageUrl = (value, req) => {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (!parsed.pathname.startsWith("/images/")) return false;
+
+  const ownHosts = new Set([String(req.get("host") || "").toLowerCase()]);
+  const configuredBase = String(process.env.STORAGE_BASE_URL || "").trim();
+  if (configuredBase) {
+    try {
+      ownHosts.add(new URL(configuredBase).host.toLowerCase());
+    } catch {
+      // A malformed STORAGE_BASE_URL just doesn't add a host.
+    }
+  }
+  return ownHosts.has(parsed.host.toLowerCase());
+};
+
+/**
+ * PATCH /drivers/documents/:documentKey
+ *
+ * Body: `{ document: { dataUrl, fileName?, identifyNumber?, expiryDate? } }`.
+ * `dataUrl` is a JPEG, PNG or WebP data URL of at most 5 MB; the server
+ * re-encodes and hosts it. Instead of `dataUrl` the app may send `url` /
+ * `previewUrl`, but only for an image this server already hosts. The document
+ * always goes back to pending review.
+ */
 export const updateCurrentDriverDocument = async (req, res) => {
   const documentKey = String(req.params.documentKey || "").trim();
-  const document = req.body?.document || {};
+  const document = req.body?.document && typeof req.body.document === "object" ? req.body.document : {};
 
   if (!documentKey) {
     throw new ApiError(400, "Document key is required");
   }
 
-  const previewUrl = String(
-    document.previewUrl || document.secureUrl || document.url || "",
-  ).trim();
+  if (!DOCUMENT_KEY_PATTERN.test(documentKey)) {
+    throw new ApiError(422, "Invalid document key", null, "INVALID_DOCUMENT_KEY");
+  }
 
-  if (!previewUrl) {
-    throw new ApiError(400, "Uploaded document image URL is required");
+  const dataUrl = String(document.dataUrl || document.data_url || "").trim();
+  const hostedUrl = String(document.previewUrl || document.secureUrl || document.url || "").trim();
+
+  let previewUrl = "";
+  if (dataUrl) {
+    if (!DOCUMENT_IMAGE_DATA_URL.test(dataUrl)) {
+      throw new ApiError(422, "Document must be a JPEG, PNG or WebP image sent as a data URL", null, "INVALID_DOCUMENT_IMAGE");
+    }
+    const decodedBytes = Math.floor((dataUrl.length - dataUrl.indexOf(",") - 1) * 0.75);
+    if (decodedBytes > DOCUMENT_IMAGE_MAX_BYTES) {
+      throw new ApiError(400, "Document image must be 5 MB or smaller", { max_bytes: DOCUMENT_IMAGE_MAX_BYTES }, "IMAGE_TOO_LARGE");
+    }
+    try {
+      previewUrl = (await mediaService.uploadMedia(dataUrl, "documents", "", req)).url;
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      // sharp throws on bytes that only claim to be an image.
+      throw new ApiError(422, "Document image could not be read", null, "INVALID_DOCUMENT_IMAGE");
+    }
+  } else if (hostedUrl) {
+    if (!isOwnStorageUrl(hostedUrl, req)) {
+      throw new ApiError(422, "Send the document as a data URL", null, "INVALID_DOCUMENT_IMAGE");
+    }
+    previewUrl = hostedUrl;
+  } else {
+    throw new ApiError(400, "document.dataUrl is required", null, "FIELD_REQUIRED");
   }
 
   const driver = await Driver.findById(req.auth.sub);
@@ -3930,12 +4121,27 @@ export const updateCurrentDriverDocument = async (req, res) => {
     "",
   ).trim().toLowerCase();
 
+  // Only these details come from the client; review state, URLs and anything
+  // else are set here, never copied from the request.
+  const fileName = String(document.fileName || documentKey).trim().slice(0, 120) || documentKey;
+  const clientDetails = {};
+  if (document.identifyNumber !== undefined || document.identify_number !== undefined) {
+    clientDetails.identifyNumber = String(document.identifyNumber ?? document.identify_number ?? "").trim().slice(0, 64);
+  }
+  if (document.expiryDate !== undefined || document.expiry_date !== undefined) {
+    const rawExpiry = String(document.expiryDate ?? document.expiry_date ?? "").trim();
+    if (rawExpiry && Number.isNaN(new Date(rawExpiry).getTime())) {
+      throw new ApiError(422, "expiryDate must be a valid date", null, "INVALID_DATE");
+    }
+    clientDetails.expiryDate = rawExpiry;
+  }
+
   const updatedDocument = {
     ...(typeof existingDocument === "object" ? existingDocument : {}),
-    ...(typeof document === "object" ? document : {}),
+    ...clientDetails,
     key: documentKey,
-    fileName: String(document.fileName || documentKey).trim(),
-    fileNames: [String(document.fileName || documentKey).trim()],
+    fileName,
+    fileNames: [fileName],
     uploaded: true,
     uploadedAt: new Date().toISOString(),
     previewUrl,
@@ -7847,6 +8053,8 @@ export const addOwnerVehicle = async (req, res) => {
 
   const { vehicleTypeId, make, model, number, color, rcFile, documents, usage_type: usageType } =
     req.body;
+  // Validated before any document is uploaded, so a bad year wastes nothing.
+  const vehicleSpecs = readFleetVehicleSpecs(req.body);
 
   if (!vehicleTypeId || !mongoose.isValidObjectId(vehicleTypeId)) {
     throw new ApiError(400, "A valid vehicle type is required", null, "FIELD_REQUIRED");
@@ -7940,6 +8148,7 @@ export const addOwnerVehicle = async (req, res) => {
     car_model: String(model).trim(),
     license_plate_number: normalizedPlate,
     car_color: String(color).trim(),
+    ...vehicleSpecs,
     usage_type: normalizedUsageType,
     status: "pending",
     active: true,
@@ -7980,12 +8189,85 @@ export const addOwnerVehicle = async (req, res) => {
       car_model: populated.car_model,
       license_plate_number: populated.license_plate_number,
       car_color: populated.car_color,
+      ...serializeFleetVehicleSpecs(populated),
       status: populated.status,
       active: populated.active,
       createdAt: populated.createdAt,
     },
   });
 };
+
+const FLEET_VEHICLE_FUEL_TYPES = ["petrol", "diesel", "cng", "electric", "hybrid", "lpg"];
+const FITNESS_DOCUMENT_KEY = /fitness/i;
+
+const hasBodyField = (body, ...keys) =>
+  keys.some((key) => Object.prototype.hasOwnProperty.call(body || {}, key));
+
+/**
+ * The optional My Vehicles details (fuel, model year, fitness date), read
+ * from snake_case or camelCase keys. Only fields present in the body are
+ * returned, so an edit that omits one leaves it unchanged; '' or null clears.
+ */
+const readFleetVehicleSpecs = (body = {}) => {
+  const specs = {};
+
+  if (hasBodyField(body, "fuel_type", "fuelType")) {
+    const fuelType = String(body.fuel_type ?? body.fuelType ?? "").trim().toLowerCase();
+    if (fuelType && !FLEET_VEHICLE_FUEL_TYPES.includes(fuelType)) {
+      throw new ApiError(422, "Unknown fuel type", { options: FLEET_VEHICLE_FUEL_TYPES }, "INVALID_FUEL_TYPE");
+    }
+    specs.fuel_type = fuelType;
+  }
+
+  if (hasBodyField(body, "model_year", "modelYear")) {
+    const raw = body.model_year ?? body.modelYear;
+    if (raw === null || String(raw).trim() === "") {
+      specs.model_year = null;
+    } else {
+      const year = Number(raw);
+      const latestYear = new Date().getFullYear() + 1;
+      if (!Number.isInteger(year) || year < 1980 || year > latestYear) {
+        throw new ApiError(422, `Model year must be between 1980 and ${latestYear}`, null, "INVALID_MODEL_YEAR");
+      }
+      specs.model_year = year;
+    }
+  }
+
+  if (hasBodyField(body, "fitness_valid_till", "fitnessValidTill")) {
+    const raw = String(body.fitness_valid_till ?? body.fitnessValidTill ?? "").trim();
+    if (!raw) {
+      specs.fitness_valid_till = null;
+    } else {
+      const date = new Date(raw);
+      if (Number.isNaN(date.getTime())) {
+        throw new ApiError(422, "fitness_valid_till must be a valid date", null, "INVALID_DATE");
+      }
+      specs.fitness_valid_till = date;
+    }
+  }
+
+  return specs;
+};
+
+// A fitness certificate uploaded against an admin document template is the
+// better source than a typed date; fall back to the typed one.
+const resolveFitnessValidTill = (vehicle = {}) => {
+  const documentExpiries = Object.entries(vehicle.documents || {})
+    .filter(([key]) => FITNESS_DOCUMENT_KEY.test(key))
+    .map(([, value]) => new Date(value?.expiryDate || value?.expiry_date || ""))
+    .filter((date) => !Number.isNaN(date.getTime()));
+
+  if (documentExpiries.length) {
+    return new Date(Math.max(...documentExpiries.map((date) => date.getTime())));
+  }
+  return vehicle.fitness_valid_till || null;
+};
+
+const serializeFleetVehicleSpecs = (vehicle = {}) => ({
+  fuel_type: vehicle.fuel_type || "",
+  model_year: vehicle.model_year ?? null,
+  fitness_valid_till: resolveFitnessValidTill(vehicle),
+});
 
 export const getOwnerFleetVehicles = async (req, res) => {
   const owner = await resolveAuthenticatedOwner(req);
@@ -7995,8 +8277,21 @@ export const getOwnerFleetVehicles = async (req, res) => {
   // reachable state for a driver who simply hasn't added a vehicle yet — not
   // an access-control failure. An empty list is the correct answer; a 403
   // here reads as "you're not allowed", which stopped being true.
+  // The plan's vehicle cap for a driver-run organisation; null means no cap
+  // (owner accounts, or a tier whose max_vehicles is 0).
+  let maxVehiclesAllowed = null;
+  if (req.auth?.role === "driver") {
+    const { getDriverPermissions } = await import("../../services/driverCategoryService.js");
+    const permissions = await getDriverPermissions(req.auth.sub);
+    const maxVehicles = Math.max(0, Number(permissions.tier?.max_vehicles ?? 0));
+    maxVehiclesAllowed = maxVehicles > 0 ? maxVehicles : null;
+  }
+
   if (!owner?._id) {
-    return res.json({ success: true, data: { results: [] } });
+    return res.json({
+      success: true,
+      data: { results: [], max_vehicles_allowed: maxVehiclesAllowed, vehicles_count: 0 },
+    });
   }
 
   const vehicles = await FleetVehicle.find({
@@ -8036,6 +8331,7 @@ export const getOwnerFleetVehicles = async (req, res) => {
         car_model: vehicle.car_model || "",
         license_plate_number: vehicle.license_plate_number || "",
         car_color: vehicle.car_color || "",
+        ...serializeFleetVehicleSpecs(vehicle),
         usage_type: vehicle.usage_type || "private",
         usage_type_verified: Boolean(vehicle.usage_type_verified),
         status: vehicle.status || "pending",
@@ -8057,6 +8353,8 @@ export const getOwnerFleetVehicles = async (req, res) => {
         createdAt: vehicle.createdAt,
         updatedAt: vehicle.updatedAt,
       })),
+      max_vehicles_allowed: maxVehiclesAllowed,
+      vehicles_count: vehicles.length,
     },
   });
 };
@@ -8167,6 +8465,9 @@ export const updateOwnerFleetVehicle = async (req, res) => {
   }
 
   await assertPlateAvailable({ plate: number, excludeId: vehicle._id });
+
+  // Descriptive details only: changing them does not re-open verification.
+  const vehicleSpecs = readFleetVehicleSpecs(req.body);
 
   // Optional on update so existing clients that don't send it keep working;
   // changing it re-opens verification because the permit has to be re-checked.
@@ -8333,6 +8634,7 @@ export const updateOwnerFleetVehicle = async (req, res) => {
   vehicle.car_model = model;
   vehicle.license_plate_number = number;
   vehicle.car_color = color;
+  Object.assign(vehicle, vehicleSpecs);
   if (nextUsageType && nextUsageType !== vehicle.usage_type) {
     vehicle.usage_type = nextUsageType;
     vehicle.usage_type_verified = false;
@@ -8386,6 +8688,7 @@ export const updateOwnerFleetVehicle = async (req, res) => {
       car_model: populated.car_model || "",
       license_plate_number: populated.license_plate_number || "",
       car_color: populated.car_color || "",
+      ...serializeFleetVehicleSpecs(populated),
       usage_type: populated.usage_type || "private",
       usage_type_verified: Boolean(populated.usage_type_verified),
       status: populated.status || "pending",

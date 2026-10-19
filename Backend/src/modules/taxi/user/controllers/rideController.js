@@ -8,6 +8,7 @@ import { resolveConfiguredGatewayCredentials } from '../../services/paymentGatew
 import { Driver } from '../../driver/models/Driver.js';
 import { WalletTransaction } from '../../driver/models/WalletTransaction.js';
 import { applyDriverWalletAdjustment, serializeDriverWallet } from '../../driver/services/walletService.js';
+import { settleAwaitingPlatformEscrow } from '../../driver/services/escrowService.js';
 import { RIDE_LIVE_STATUS, RIDE_STATUS } from '../../constants/index.js';
 import {
   acceptRideBidAssignment,
@@ -92,6 +93,18 @@ const ensureUserWallet = async (userId, session = null) => {
     { $setOnInsert: { userId, balance: 0, refundWallet: 0, transactions: [] } },
     { upsert: true, ...(session ? { session } : {}) },
   );
+};
+
+// A published ride completed as collected by the platform waits for this
+// payment before either driver is paid. The payment is already saved by the
+// time this runs, so a failure here must not fail the rider's request: the
+// network cron retries the settlement.
+const settleEscrowAfterRiderPayment = async (rideId) => {
+  try {
+    await settleAwaitingPlatformEscrow(rideId);
+  } catch (error) {
+    console.error(`[rideController] escrow settlement after payment on ${rideId} failed:`, error?.message || error);
+  }
 };
 
 const isDriverCollectionPaid = (ride = {}) =>
@@ -376,10 +389,28 @@ export const getMyActiveRide = async (req, res) => {
     entityId: req.auth.sub,
   });
 
-  res.json({
-    success: true,
-    data: ride ? serializeRideRealtime(ride) : null,
-  });
+  if (!ride) {
+    res.json({ success: true, data: null });
+    return;
+  }
+
+  const data = serializeRideRealtime(ride);
+
+  // The acceptor's trip screen needs the escrow state to know whether to ask
+  // who collected the fare (completion fails with COLLECTED_BY_REQUIRED
+  // otherwise). Wallet holds are between the two drivers, so only drivers see
+  // them; `ride:state` on the socket is shared with the rider and stays as is.
+  if (req.auth.role === 'driver' && ride.origin === 'driver_created') {
+    data.origin = ride.origin;
+    data.is_secure = ride.publish?.is_secure !== false;
+    data.escrow = {
+      state: ride.escrow?.state || 'none',
+      publisher_hold: Number(ride.escrow?.publisher_hold || 0),
+      acceptor_hold: Number(ride.escrow?.acceptor_hold || 0),
+    };
+  }
+
+  res.json({ success: true, data });
 };
 
 export const listMyRides = async (req, res) => {
@@ -572,6 +603,16 @@ export const verifyRazorpayRideCompletion = async (req, res) => {
     keySecret,
   });
 
+  // The signature only proves this payment belongs to this order. The order
+  // must also be the one created for this ride and this rider, or a paid order
+  // for one ride could be replayed to settle another with the same total.
+  if (
+    String(order?.notes?.rideId || '') !== rideId ||
+    String(order?.notes?.userId || '') !== String(req.auth.sub)
+  ) {
+    throw new ApiError(400, 'This payment was not made for this ride', null, 'PAYMENT_ORDER_MISMATCH');
+  }
+
   const paymentAmounts = buildCompletionAmounts(ride, tipAmount);
   const verifiedTotalCharge = roundMoney(Number(order?.amount || 0) / 100);
   if (verifiedTotalCharge <= 0) {
@@ -624,6 +665,7 @@ export const verifyRazorpayRideCompletion = async (req, res) => {
     });
 
     await session.commitTransaction();
+    await settleEscrowAfterRiderPayment(rideId);
 
     if (result.walletResult?.transaction) {
       emitToDriver(liveRide.driverId, 'driver:wallet:updated', {
@@ -714,6 +756,7 @@ export const payRideCompletionWithWallet = async (req, res) => {
     });
 
     await session.commitTransaction();
+    await settleEscrowAfterRiderPayment(rideId);
 
     if (result.walletResult?.transaction) {
       emitToDriver(ride.driverId, 'driver:wallet:updated', {

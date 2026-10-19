@@ -2154,15 +2154,44 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
     throw new ApiError(422, 'Unsecure rides are cash only', null, 'UNSECURE_RIDE_CASH_ONLY');
   }
 
-  if (nextStatus === RIDE_LIVE_STATUS.COMPLETED && ride.escrow?.state === 'held') {
-    escrowCollectedBy =
-      String(collectedBy || '').trim() || (requestedPaymentMethod === 'online' ? 'platform' : '');
+  // Everything this function handles is past acceptance, so the payment method
+  // is locked: a driver relabelling a cash fare as online would be credited
+  // (or paid out by the platform) for money the platform never received. The
+  // one change allowed is falling back to cash, which only ever leaves the
+  // driver owing commission — never the platform owing the driver.
+  const lockedPaymentMethod = normalizeRidePaymentMethod(ride.paymentMethod);
+  if (requestedPaymentMethod !== lockedPaymentMethod && requestedPaymentMethod !== 'cash') {
+    throw new ApiError(
+      409,
+      'The payment method cannot be changed after the ride is accepted',
+      { paymentMethod: lockedPaymentMethod },
+      'PAYMENT_METHOD_LOCKED',
+    );
+  }
 
-    if (!['publisher', 'driver', 'platform'].includes(escrowCollectedBy)) {
+  if (nextStatus === RIDE_LIVE_STATUS.COMPLETED && ride.escrow?.state === 'held') {
+    // Only an online ride can have been collected by the platform. Choosing it
+    // does not pay anyone yet: the escrow stays held until a verified online
+    // payment for this ride arrives (see settleAwaitingPlatformEscrow).
+    const platformCanCollect = requestedPaymentMethod === 'online';
+    const collectedByOptions = platformCanCollect ? ['publisher', 'driver', 'platform'] : ['publisher', 'driver'];
+
+    escrowCollectedBy = String(collectedBy || '').trim() || (platformCanCollect ? 'platform' : '');
+
+    if (escrowCollectedBy === 'platform' && !platformCanCollect) {
+      throw new ApiError(
+        422,
+        'The platform did not collect this fare. Choose who collected it.',
+        { options: collectedByOptions },
+        'PLATFORM_COLLECTION_NOT_ALLOWED',
+      );
+    }
+
+    if (!collectedByOptions.includes(escrowCollectedBy)) {
       throw new ApiError(
         422,
         'Tell us who collected the fare before completing this ride',
-        { options: ['publisher', 'driver', 'platform'] },
+        { options: collectedByOptions },
         'COLLECTED_BY_REQUIRED',
       );
     }
@@ -2189,6 +2218,11 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
   if (nextStatus === RIDE_LIVE_STATUS.COMPLETED) {
     ride.completedAt = new Date();
+
+    if (escrowCollectedBy === 'platform') {
+      ride.escrow.collected_by = 'platform';
+      ride.escrow.awaiting_platform_payment_since = new Date();
+    }
 
     const normalizedRiderRating = Math.round(Number(riderRating));
     if (
@@ -2221,7 +2255,12 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
     // A published ride is settled between the two drivers, not against platform
     // commission: whoever physically took the customer's cash pays the other.
     // Running the normal commission settlement as well would double-charge.
-    if (escrowCollectedBy) {
+    if (escrowCollectedBy === 'platform') {
+      // Settles when the payment is verified. If the rider had somehow paid
+      // already, this settles right away.
+      const { settleAwaitingPlatformEscrow } = await import('../driver/services/escrowService.js');
+      walletUpdate = await settleAwaitingPlatformEscrow(ride._id);
+    } else if (escrowCollectedBy) {
       const { settlePublishedRide } = await import('../driver/services/escrowService.js');
       walletUpdate = await settlePublishedRide({
         rideId: ride._id,

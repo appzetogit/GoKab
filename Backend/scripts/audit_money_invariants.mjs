@@ -17,6 +17,7 @@
  */
 
 import mongoose from 'mongoose';
+import { payRideAsRider } from './smoke_pay_ride_as_rider.mjs';
 
 const API = process.env.AUDIT_API || 'http://127.0.0.1:4000/api/v1';
 const DB_URI = process.env.AUDIT_DB_URI || 'mongodb://127.0.0.1:27031/gokab?replicaSet=rs0';
@@ -117,7 +118,8 @@ const run = async () => {
       method: 'POST',
       token: rameshToken,
       body: {
-        customer: { name: `Churn ${i}`, phone: `91000001${String(i).padStart(2, '0')}` },
+        // Platform settlement needs an app customer (the seeded rider).
+        customer: { name: `Churn ${i}`, phone: outcome === 'platform' ? '9100000001' : `91000001${String(i).padStart(2, '0')}` },
         pickup: { coordinates: INDORE, address: 'Vijay Nagar, Indore' },
         drop: { coordinates: BHOPAL, address: 'MP Nagar, Bhopal' },
         fare: 5000,
@@ -165,6 +167,11 @@ const run = async () => {
     await step('arriving');
     await step('started');
     await step('completed', { collectedBy: outcome });
+    if (outcome === 'platform') {
+      // The platform only pays out once the rider's payment is verified.
+      const paid = await payRideAsRider({ api, rideId });
+      if (paid.status !== 201) console.log(`  platform: rider payment failed -> ${JSON.stringify(paid.json)}`);
+    }
     console.log(`  ${outcome}: completed, collected by ${outcome}`);
   }
 

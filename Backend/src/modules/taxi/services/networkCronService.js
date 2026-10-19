@@ -3,7 +3,7 @@ import { FleetVehicle } from '../admin/models/FleetVehicle.js';
 import { Driver } from '../driver/models/Driver.js';
 import { RIDE_LIVE_STATUS, RIDE_STATUS } from '../constants/index.js';
 import { expirePublishedRides } from '../driver/services/feedService.js';
-import { releasePublishedRide } from '../driver/services/escrowService.js';
+import { releasePublishedRide, settleAwaitingPlatformEscrow } from '../driver/services/escrowService.js';
 import {
   notifyAssignmentUnacknowledged,
   notifyScheduledRideReminder,
@@ -47,6 +47,9 @@ export const releaseOrphanedEscrow = async () => {
     'escrow.state': 'held',
     status: { $in: [RIDE_STATUS.CANCELLED, RIDE_STATUS.COMPLETED] },
     updatedAt: { $lt: cutoff },
+    // Completed as collected by the platform and still waiting for the
+    // payment: held on purpose, settled by settlePaidPlatformEscrows.
+    'escrow.awaiting_platform_payment_since': null,
   })
     .select('_id status')
     .limit(100)
@@ -68,6 +71,39 @@ export const releaseOrphanedEscrow = async () => {
   }
 
   return { released };
+};
+
+/**
+ * Safety net for platform-collected rides: settles any whose payment has been
+ * verified but whose settlement did not run (the server stopped, or the
+ * settlement call failed, right after the payment was saved). Rides still
+ * waiting for payment are skipped by settleAwaitingPlatformEscrow itself.
+ */
+export const settlePaidPlatformEscrows = async () => {
+  const waiting = await Ride.find({
+    status: RIDE_STATUS.COMPLETED,
+    'escrow.state': 'held',
+    'escrow.collected_by': 'platform',
+    'escrow.awaiting_platform_payment_since': { $ne: null },
+    $or: [
+      { 'driverPaymentCollection.paidAt': { $ne: null } },
+      { 'driverPaymentCollection.status': { $in: ['paid', 'captured', 'completed'] } },
+    ],
+  })
+    .select('_id')
+    .limit(100)
+    .lean();
+
+  let settled = 0;
+  for (const ride of waiting) {
+    try {
+      if (await settleAwaitingPlatformEscrow(ride._id)) settled += 1;
+    } catch (error) {
+      console.error(`[networkCron] Failed to settle paid platform escrow on ${ride._id}:`, error.message);
+    }
+  }
+
+  return { platformSettled: settled };
 };
 
 /**
@@ -285,6 +321,7 @@ export const runNetworkMaintenance = async () => {
     // starve the rest.
     const pickupReminders = await runGuarded('pickupReminders', () => sendScheduledRideReminders());
     const nudges = await runGuarded('unacknowledgedNudges', () => sendUnacknowledgedAssignmentNudges());
+    const platformSettlements = await runGuarded('platformSettlements', () => settlePaidPlatformEscrows());
 
     let documentReminders = {};
     if (Date.now() - lastDocumentSweepAt >= DOCUMENT_SWEEP_INTERVAL_MS) {
@@ -292,7 +329,15 @@ export const runNetworkMaintenance = async () => {
       documentReminders = await runGuarded('documentReminders', () => sendVehicleDocumentExpiryReminders());
     }
 
-    return { ...expired, ...orphans, ...finalized, ...pickupReminders, ...nudges, ...documentReminders };
+    return {
+      ...expired,
+      ...orphans,
+      ...finalized,
+      ...pickupReminders,
+      ...nudges,
+      ...platformSettlements,
+      ...documentReminders,
+    };
   } catch (error) {
     console.error('[networkCron] Maintenance pass failed:', error.message);
     return { error: error.message };
