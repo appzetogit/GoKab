@@ -496,6 +496,18 @@ const driverSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: {},
     },
+    // The driver's own weekly earnings goal (Earnings screen). 0 = no goal.
+    earningsGoal: {
+      weeklyTarget: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      updatedAt: {
+        type: Date,
+        default: null,
+      },
+    },
     incentiveTracking: {
       currentOnlineStartedAt: {
         type: Date,
