@@ -70,6 +70,7 @@ import { sendEmail } from '../../services/mailService.js';
 import { getActivePaymentGateway, normalizePaymentSettingsPayload } from '../../services/paymentGatewayService.js';
 import { signAccessToken } from '../../services/tokenService.js';
 import { resolveDriverProfileImage } from '../../driver/services/driverBannerService.js';
+import { hostProfileImageInput } from '../../services/profileImageService.js';
 import {
   ADMIN_PERMISSIONS,
   SUPERADMIN_PERMISSION,
@@ -3501,7 +3502,7 @@ export const createUser = async (payload) => {
   const password = String(payload.password || '');
   const passwordConfirmation = String(payload.password_confirmation ?? payload.confirmPassword ?? '');
   const gender = String(payload.gender || '').trim().toLowerCase();
-  const profileImage = String(payload.profileImage || '').trim();
+  const profileImage = await hostProfileImageInput(payload.profileImage);
 
   if (!name) throw new ApiError(400, 'User name is required');
   if (!/^\d{10}$/.test(phone)) throw new ApiError(400, 'A valid 10-digit phone number is required');
@@ -3600,7 +3601,7 @@ export const updateUser = async (id, payload) => {
       throw new ApiError(400, 'A valid gender is required');
     }
   }
-  if (payload.profileImage !== undefined) update.profileImage = String(payload.profileImage || '').trim();
+  if (payload.profileImage !== undefined) update.profileImage = await hostProfileImageInput(payload.profileImage);
   if (payload.wallet_balance !== undefined) update.wallet_balance = Number(payload.wallet_balance || 0);
   if (payload.active !== undefined) {
     update.active = Boolean(payload.active);

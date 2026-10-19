@@ -35,6 +35,7 @@ import { applyDriverWalletAdjustment } from '../../driver/services/walletService
 import { assertNoOutstandingUserDues, emitToDriver } from '../../services/dispatchService.js';
 import { sendPushNotificationToEntities } from '../../services/pushNotificationService.js';
 import { buildRentalTrackingSnapshot, updateUserRentalTracking } from '../../services/rentalTrackingService.js';
+import { hostProfileImageInput } from '../../services/profileImageService.js';
 import { listDriverServiceLocations } from '../../driver/services/serviceLocationService.js';
 import { listServiceStores } from '../../admin/services/adminService.js';
 import {
@@ -1712,7 +1713,8 @@ export const registerUser = async (req, res) => {
     email,
     countryCode,
     gender,
-    profileImage,
+    // Hosted only now, after the signup session and conflicts are checked.
+    profileImage: await hostProfileImageInput(profileImage, { req }),
     governmentIdProof,
     referrer,
   });
@@ -1858,7 +1860,8 @@ export const signupUser = async (req, res) => {
     email,
     countryCode,
     gender,
-    profileImage,
+    // Hosted only now, after the signup session and conflicts are checked.
+    profileImage: await hostProfileImageInput(profileImage, { req }),
     governmentIdProof,
     referrer,
   });
@@ -2034,7 +2037,7 @@ export const updateCurrentUser = async (req, res) => {
   }
 
   if (Object.prototype.hasOwnProperty.call(req.body || {}, 'profileImage')) {
-    user.profileImage = toCleanString(req.body.profileImage);
+    user.profileImage = await hostProfileImageInput(toCleanString(req.body.profileImage), { req });
   }
 
   await user.save();
