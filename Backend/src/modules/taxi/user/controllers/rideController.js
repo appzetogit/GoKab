@@ -359,10 +359,14 @@ export const createRide = async (req, res) => {
 };
 
 export const getRideById = async (req, res) => {
-  await ensureRideParticipantAccess({
+  // The publisher of a driver-created ride may open it from My Rides >
+  // Published, including before anyone takes it. Read-only: the socket room
+  // and ride chat still use the participant-only check.
+  const access = await ensureRideParticipantAccess({
     rideId: req.params.rideId,
     role: req.auth.role,
     entityId: req.auth.sub,
+    allowCreator: true,
   });
 
   const ride = await getRideDetails(req.params.rideId);
@@ -373,6 +377,10 @@ export const getRideById = async (req, res) => {
     const data = ride.toJSON();
     data.publisher = await loadPublisherCardForRide(ride);
     data.is_secure = ride.publish?.is_secure !== false;
+    if (access.$locals.viewerIsCreatorOnly) {
+      // The chat is between the rider and the driver who took the ride.
+      delete data.messages;
+    }
     res.json({ success: true, data });
     return;
   }
