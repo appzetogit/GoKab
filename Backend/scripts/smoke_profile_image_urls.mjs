@@ -132,6 +132,23 @@ const run = async () => {
     check('--clear-broken clears the unreadable photo', (await Driver.findById(suresh._id).lean()).profileImage === '');
     const again = runMigration();
     check('nothing left to convert afterwards', /Drivers with a base64 image: 0/.test(again), again);
+
+    console.log('\n4  Rider photo: PATCH /users/me');
+    const { User } = await import('../src/modules/taxi/user/models/User.js');
+    const { signAccessToken } = await import('../src/modules/taxi/services/tokenService.js');
+    const rider = await User.findOne({ phone: '9100000001' }).lean();
+    const riderToken = signAccessToken({ sub: String(rider._id), role: 'user' });
+    const riderSaved = await api('/users/me', { method: 'PATCH', token: riderToken, body: { profileImage: goodDataUrl } });
+    const riderUrl = (await User.findById(rider._id).lean()).profileImage || '';
+    check('rider data URL stored as a hosted URL', riderSaved.status === 200
+      && /^https?:\/\/.+\/images\/users\/.+\.webp$/.test(riderUrl), `${riderSaved.status} ${riderUrl.slice(0, 80)}`);
+    const riderBroken = await api('/users/me', { method: 'PATCH', token: riderToken, body: { profileImage: truncatedDataUrl } });
+    check('rider truncated JPEG refused (INVALID_PROFILE_IMAGE)', riderBroken.status === 422
+      && riderBroken.json?.code === 'INVALID_PROFILE_IMAGE', JSON.stringify(riderBroken.json));
+    const riderUrlKept = await api('/users/me', { method: 'PATCH', token: riderToken, body: { profileImage: riderUrl } });
+    check('a plain URL is still accepted for riders', riderUrlKept.status === 200
+      && (await User.findById(rider._id).lean()).profileImage === riderUrl);
+    await User.updateOne({ _id: rider._id }, { $set: { profileImage: rider.profileImage || '' } });
   } finally {
     await Driver.updateOne(
       { _id: ramesh._id },
