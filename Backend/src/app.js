@@ -47,6 +47,11 @@ export const createApp = () => {
 
   const storageBaseDir = process.env.STORAGE_BASE_DIR || (process.platform === 'win32' ? path.resolve('./var/storage') : '/var/storage');
   app.use('/images', express.static(storageBaseDir));
+  // The same files under /api/images: on gokab.in nginx sends only /api/* to
+  // this server and answers every other path (/images included) with the
+  // website's index.html, so uploaded files are only reachable through /api.
+  // New asset URLs use this path (see getPublicUrl in storage.util.js).
+  app.use('/api/images', express.static(storageBaseDir));
 
   app.get('/health', (_req, res) => {
     res.json({ success: true, message: 'Taxi backend is healthy' });
