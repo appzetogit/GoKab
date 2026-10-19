@@ -12,7 +12,7 @@ import {
 } from '../services/feedService.js';
 import { getLiveMapSnapshot } from '../../services/liveMapService.js';
 import { openEscrowDispute, reportUnsecureRide } from '../services/escrowService.js';
-import { getEarningsSummary, listCommissionEarnings } from '../services/earningsService.js';
+import { getEarningsSummary, listCommissionEarnings, setWeeklyEarningsGoal } from '../services/earningsService.js';
 import { addContact, listContacts, listWorkedWith, removeContact } from '../services/contactService.js';
 import {
   listLeadConversations,
@@ -316,6 +316,16 @@ export const reportUnsecureRideController = asyncHandler(async (req, res) => {
 // ---------------------------------------------------------------------------
 // Earnings split: rides driven vs commission on published rides
 // ---------------------------------------------------------------------------
+
+export const setEarningsGoalController = asyncHandler(async (req, res) => {
+  res.json({
+    success: true,
+    data: await setWeeklyEarningsGoal({
+      driverId: req.auth.sub,
+      targetAmount: req.body?.target_amount ?? req.body?.targetAmount,
+    }),
+  });
+});
 
 export const earningsSummaryController = asyncHandler(async (req, res) => {
   res.json({
