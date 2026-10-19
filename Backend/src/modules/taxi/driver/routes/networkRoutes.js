@@ -13,6 +13,7 @@ import {
   disputeEscrowController,
   reportUnsecureRideController,
   earningsSummaryController,
+  setEarningsGoalController,
   commissionEarningsController,
   workedWithController,
   listContactsController,
@@ -130,6 +131,7 @@ networkRouter.delete('/contacts/:contactId', driverOnly, asyncHandler(removeCont
 
 // Earnings split (any category: a Lower driver still earns from rides they drive).
 networkRouter.get('/earnings/summary', driverOnly, asyncHandler(earningsSummaryController));
+networkRouter.put('/earnings/goal', driverOnly, asyncHandler(setEarningsGoalController));
 networkRouter.get('/earnings/commissions', driverOnly, asyncHandler(commissionEarningsController));
 
 networkRouter.get('/feed', driverOnly, asyncHandler(getFeedController));
