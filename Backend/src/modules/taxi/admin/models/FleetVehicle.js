@@ -48,6 +48,22 @@ const fleetVehicleSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    // Optional details the owner enters for the My Vehicles screen.
+    fuel_type: {
+      type: String,
+      enum: ['petrol', 'diesel', 'cng', 'electric', 'hybrid', 'lpg', ''],
+      default: '',
+    },
+    model_year: {
+      type: Number,
+      default: null,
+    },
+    // Typed by the owner. A fitness document with an expiry date, when the
+    // admin has a template for one, takes precedence (see serializer).
+    fitness_valid_till: {
+      type: Date,
+      default: null,
+    },
     // Commercial (yellow plate / permit) vs private. Prime and Middle drivers
     // must hold at least one of each, so this drives category eligibility.
     usage_type: {
