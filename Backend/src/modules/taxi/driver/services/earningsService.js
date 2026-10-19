@@ -163,17 +163,111 @@ const loadCommissionRows = async (driverId, window, { skip = 0, limit = 0 } = {}
   );
 };
 
-export const getEarningsSummary = async ({ driverId, range, from, to }) => {
-  const window = resolveEarningsRange({ range, from, to });
+/**
+ * Minutes online per IST day, from the per-day totals written when the driver
+ * goes offline (`incentiveTracking.dailyActivity`, last 120 days) plus the
+ * session still running, split at IST midnight the same way.
+ */
+const onlineMinutesByDay = (tracking = {}, now = new Date()) => {
+  const minutes = new Map();
+  const add = (key, value) => minutes.set(key, (minutes.get(key) || 0) + value);
+
+  for (const item of Array.isArray(tracking.dailyActivity) ? tracking.dailyActivity : []) {
+    if (item?.date) add(String(item.date), Math.max(0, Number(item.activeMinutes || 0)));
+  }
+
+  const startedAt = tracking.currentOnlineStartedAt ? new Date(tracking.currentOnlineStartedAt) : null;
+  if (startedAt && !Number.isNaN(startedAt.getTime()) && startedAt < now) {
+    let cursor = startedAt;
+    while (cursor < now) {
+      const nextDay = new Date(istDayStart(cursor).getTime() + DAY_MS);
+      const segmentEnd = nextDay < now ? nextDay : now;
+      add(istDayKey(cursor), (segmentEnd.getTime() - cursor.getTime()) / 60000);
+      cursor = segmentEnd;
+    }
+  }
+
+  return minutes;
+};
+
+/** 00:00 IST Monday of the current week, and the Monday after. */
+const currentIstWeek = (now = new Date()) => {
+  const todayStart = istDayStart(now);
+  const weekday = new Date(todayStart.getTime() + IST_OFFSET_MS).getUTCDay();
+  const from = new Date(todayStart.getTime() - ((weekday + 6) % 7) * DAY_MS);
+  return { from, to: new Date(from.getTime() + 7 * DAY_MS) };
+};
+
+const totalEarningsIn = async (driverId, window) => {
   const [driven, commissions] = await Promise.all([
     findDrivenRides(driverId, window),
     loadCommissionRows(driverId, window),
   ]);
+  const rideEarnings = driven.reduce((sum, ride) => sum + rideEarningFor(ride, driverId), 0);
+  const commissionEarnings = commissions.reduce((sum, row) => sum + row.net_earned, 0);
+  return round2(rideEarnings + commissionEarnings);
+};
+
+const buildWeeklyGoal = async (driverId, weeklyTarget) => {
+  const target = round2(Math.max(0, Number(weeklyTarget || 0)));
+  if (!target) return null;
+
+  const week = currentIstWeek();
+  const achieved = await totalEarningsIn(driverId, week);
+  return {
+    target_amount: target,
+    achieved_amount: achieved,
+    remaining_amount: round2(Math.max(0, target - achieved)),
+    progress_percent: Math.min(100, Math.round((achieved / target) * 100)),
+    week_start: week.from,
+    week_end: week.to,
+  };
+};
+
+/** Sets (or, with 0 / null, clears) the driver's weekly earnings goal. */
+export const setWeeklyEarningsGoal = async ({ driverId, targetAmount }) => {
+  const raw = targetAmount === null || targetAmount === undefined || String(targetAmount).trim() === ''
+    ? 0
+    : Number(targetAmount);
+  if (!Number.isFinite(raw) || raw < 0 || raw > 10_000_000) {
+    throw new ApiError(422, 'target_amount must be a number between 0 and 10000000', null, 'INVALID_TARGET_AMOUNT');
+  }
+
+  const target = round2(raw);
+  const updated = await Driver.findByIdAndUpdate(
+    driverId,
+    { $set: { 'earningsGoal.weeklyTarget': target, 'earningsGoal.updatedAt': new Date() } },
+    { returnDocument: 'after' },
+  )
+    .select('_id')
+    .lean();
+  if (!updated) throw new ApiError(404, 'Driver not found', null, 'DRIVER_NOT_FOUND');
+
+  return { weekly_goal: await buildWeeklyGoal(driverId, target) };
+};
+
+export const getEarningsSummary = async ({ driverId, range, from, to }) => {
+  const window = resolveEarningsRange({ range, from, to });
+  const [driven, commissions, driver] = await Promise.all([
+    findDrivenRides(driverId, window),
+    loadCommissionRows(driverId, window),
+    Driver.findById(driverId)
+      .select('incentiveTracking.dailyActivity incentiveTracking.currentOnlineStartedAt earningsGoal')
+      .lean(),
+  ]);
+  const onlineByDay = onlineMinutesByDay(driver?.incentiveTracking || {});
 
   const days = new Map();
   for (let t = istDayStart(window.from).getTime(); t < window.to.getTime(); t += DAY_MS) {
     const key = istDayKey(t);
-    days.set(key, { date: key, ride_earnings: 0, commission_earnings: 0, rides: 0, commission_rides: 0 });
+    days.set(key, {
+      date: key,
+      ride_earnings: 0,
+      commission_earnings: 0,
+      rides: 0,
+      commission_rides: 0,
+      online_minutes: Math.round(onlineByDay.get(key) || 0),
+    });
   }
   const bucket = (date) => days.get(istDayKey(date));
 
@@ -207,6 +301,9 @@ export const getEarningsSummary = async ({ driverId, range, from, to }) => {
     total_earnings: round2(rideEarnings + commissionEarnings),
     rides: driven.length,
     commission_rides: commissions.length,
+    // Whole-day totals, so a custom range starting mid-day counts that day.
+    online_minutes: [...days.values()].reduce((sum, day) => sum + day.online_minutes, 0),
+    weekly_goal: await buildWeeklyGoal(driverId, driver?.earningsGoal?.weeklyTarget),
     daily: [...days.values()],
   };
 };
