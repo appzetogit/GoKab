@@ -31,7 +31,8 @@ const loadRideMeta = async (ride) => {
     isPublished: Boolean(ride.publish?.is_published),
     driverName: driver?.name || '',
     driverPhone: driver?.phone || '',
-    vehicleNumber: driver?.vehicleNumber || '',
+    // The vehicle chosen for the ride, else the driver's own.
+    vehicleNumber: ride.assignment?.vehicle?.number || driver?.vehicleNumber || '',
     pickup: ride.pickupAddress || '',
     drop: ride.dropAddress || '',
   };
@@ -150,7 +151,7 @@ export const getLiveMapSnapshot = async (driverId) => {
   const rides = await Ride.find(filter)
     .select(
       '_id driverId liveStatus status pickupAddress dropAddress lastDriverLocation dropLocation ' +
-        'organization_owner_id created_by_driver_id publish',
+        'organization_owner_id created_by_driver_id publish assignment.vehicle',
     )
     .lean();
 
@@ -171,7 +172,7 @@ export const getLiveMapSnapshot = async (driverId) => {
         driverId: ride.driverId ? String(ride.driverId) : null,
         name: rideDriver?.name || '',
         phone: rideDriver?.phone || '',
-        vehicleNumber: rideDriver?.vehicleNumber || '',
+        vehicleNumber: ride.assignment?.vehicle?.number || rideDriver?.vehicleNumber || '',
         // The label describes *who is driving*, not who sold the ride. A ride
         // created under the owner's organisation but picked up off the network
         // is being run by an outsider, and the map has to say so.

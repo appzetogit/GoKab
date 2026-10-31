@@ -22,11 +22,18 @@ import {
   notifyNetworkRideCancelled,
 } from '../../services/networkNotificationService.js';
 import { getDriverPermissions } from '../../services/driverCategoryService.js';
+import { emitToRoom, getFeedRoom } from '../../services/dispatchService.js';
 import { buildPublisherCard, PUBLISHER_DRIVER_FIELDS } from './publisherCardService.js';
 import { isSavedContact } from './contactService.js';
 import { holdForPublishedRide, releasePublishedRide } from './escrowService.js';
 import { parseIsSecure } from './feedService.js';
 import { getWalletSnapshot } from './walletService.js';
+import {
+  resolveRideVehicle,
+  resolveVehicleSelection,
+  rideVehicleSetFields,
+} from './rideVehicleService.js';
+import { FleetVehicle } from '../../admin/models/FleetVehicle.js';
 
 const ASSIGNABLE_STATUSES = new Set([RIDE_STATUS.SEARCHING]);
 
@@ -131,9 +138,9 @@ const validateAssignTarget = async ({ permissions, driverId, targetDriverId, rid
  *    not back there. A scheduled assignment never claims `isOnRide` (a driver
  *    can hold several future bookings), so it only needs the ride-side guard.
  */
-const applyAssignment = async ({ ride, target, byDriverId, scheduledForLater, targetType = 'fleet', split = null }) => {
+const applyAssignment = async ({ ride, target, byDriverId, scheduledForLater, targetType = 'fleet', split = null, vehicle = null }) => {
   if (targetType === 'contact') {
-    return applyContactAssignment({ ride, target, byDriverId, scheduledForLater, split });
+    return applyContactAssignment({ ride, target, byDriverId, scheduledForLater, split, vehicle });
   }
 
   if (!scheduledForLater) {
@@ -160,6 +167,7 @@ const applyAssignment = async ({ ride, target, byDriverId, scheduledForLater, ta
         'assignment.assigned_by_driver_id': byDriverId,
         'assignment.assigned_at': assignedAt,
         'assignment.acknowledged_at': null,
+        ...rideVehicleSetFields(vehicle),
         'reminders.pickup_sent_at': null,
         'reminders.owner_pickup_sent_at': null,
         'reminders.unacknowledged_sent_at': null,
@@ -246,7 +254,7 @@ const assertCanFundSecureSplit = async (driver, split) => {
  * escrow holds commit together or not at all — a failed hold must not leave the
  * contact assigned to a ride with nothing frozen behind it.
  */
-const applyContactAssignment = async ({ ride, target, byDriverId, scheduledForLater, split }) => {
+const applyContactAssignment = async ({ ride, target, byDriverId, scheduledForLater, split, vehicle = null }) => {
   const session = await mongoose.startSession();
   try {
     session.startTransaction();
@@ -279,6 +287,7 @@ const applyContactAssignment = async ({ ride, target, byDriverId, scheduledForLa
           'assignment.assigned_by_driver_id': byDriverId,
           'assignment.assigned_at': assignedAt,
           'assignment.acknowledged_at': null,
+          ...rideVehicleSetFields(vehicle),
           'publish.total_fare': split.total,
           'publish.owner_commission': split.commission,
           'publish.driver_payout': split.payout,
@@ -442,7 +451,10 @@ export const updateOrganization = async ({ driverId, companyName }) => {
   };
 };
 
-export const serializeNetworkRide = (ride, { assignedDriver = null, assignedBy = null, publisher = null } = {}) => ({
+export const serializeNetworkRide = (
+  ride,
+  { assignedDriver = null, assignedBy = null, publisher = null, applicants = null, vehicleWarnings = null } = {},
+) => ({
   id: String(ride._id),
   status: ride.status,
   liveStatus: ride.liveStatus,
@@ -483,12 +495,20 @@ export const serializeNetworkRide = (ride, { assignedDriver = null, assignedBy =
           id: String(assignedDriver._id),
           name: assignedDriver.name,
           phone: assignedDriver.phone,
-          vehicleNumber: assignedDriver.vehicleNumber || '',
+          vehicleNumber: resolveRideVehicle(ride, assignedDriver)?.number || assignedDriver.vehicleNumber || '',
           isOnline: Boolean(assignedDriver.isOnline),
           isOnRide: Boolean(assignedDriver.isOnRide),
         }
       : null,
   },
+  // The vehicle this ride runs with: the one chosen at assign time, else the
+  // assigned driver's own. Null while nobody is assigned.
+  vehicle: resolveRideVehicle(ride, assignedDriver),
+  ...(vehicleWarnings ? { vehicle_warnings: vehicleWarnings } : {}),
+  // Pending requests for a published ride; only filled for the publisher.
+  ...(applicants
+    ? { applicants_count: applicants.count, requests: applicants.requests }
+    : {}),
   publish: {
     status: ride.publish?.status || 'none',
     total_fare: ride.publish?.total_fare || 0,
@@ -559,6 +579,24 @@ export const createDriverRide = async ({ driverId, payload }) => {
   const contactSplit = assignTarget?.targetType === 'contact' ? parseContactSplit({ fare, body: payload }) : null;
   if (contactSplit) await assertCanFundSecureSplit(driver, contactSplit);
 
+  // The app has sent a vehicle *label* ("bike") as `vehicleTypeId`; only a real
+  // catalogue id may set the ride's type, anything else falls back to the
+  // driver's own (a label belongs in `vehicle.type`). Without this every
+  // create from that build failed with 400 "vehicleTypeId is invalid".
+  const vehicleTypeId = mongoose.isValidObjectId(payload?.vehicleTypeId)
+    ? payload.vehicleTypeId
+    : driver.vehicleTypeId;
+
+  // The vehicle choice is validated before the ride exists, like the target.
+  const vehicleSelection = assignTarget
+    ? await resolveVehicleSelection({
+        body: payload,
+        creatorPermissions: permissions,
+        assignee: assignTarget.target,
+        ride: { vehicleTypeId },
+      })
+    : null;
+
   // If the customer happens to have an app account, link the ride to it so they
   // get in-app tracking instead of an SMS.
   const appUser = await User.findOne({ phone: customerPhone }).select('_id').lean();
@@ -583,7 +621,7 @@ export const createDriverRide = async ({ driverId, payload }) => {
     fare,
     estimatedDistanceMeters: payload?.estimatedDistanceMeters,
     estimatedDurationMinutes: payload?.estimatedDurationMinutes,
-    vehicleTypeId: payload?.vehicleTypeId || driver.vehicleTypeId,
+    vehicleTypeId,
     paymentMethod: payload?.paymentMethod || 'cash',
     serviceType: payload?.serviceType || 'ride',
     service_location_id: driver.service_location_id,
@@ -614,6 +652,7 @@ export const createDriverRide = async ({ driverId, payload }) => {
   try {
     ({ updated } = await applyAssignment({
       ride, target, byDriverId: driverId, scheduledForLater, targetType, split: contactSplit,
+      vehicle: vehicleSelection?.vehicle || null,
     }));
   } catch (error) {
     // e.g. the contact can't fund their side of a secure split.
@@ -631,6 +670,7 @@ export const createDriverRide = async ({ driverId, payload }) => {
   return serializeNetworkRide(updated, {
     assignedDriver: target,
     assignedBy: buildAssignedByPayload(assignmentContext),
+    vehicleWarnings: vehicleSelection?.warnings || [],
   });
 };
 
@@ -676,8 +716,16 @@ export const assignRide = async ({ driverId, rideId, targetDriverId, body = {}, 
   const split = targetType === 'contact' ? parseContactSplit({ fare: ride.fare, body }) : null;
   if (split) await assertCanFundSecureSplit(permissions.driver, split);
 
+  const { vehicle, warnings } = await resolveVehicleSelection({
+    body,
+    creatorPermissions: permissions,
+    assignee: target,
+    ride,
+    excludeRideId: ride._id,
+  });
+
   const { updated, reason } = await applyAssignment({
-    ride, target, byDriverId: driverId, scheduledForLater, targetType, split,
+    ride, target, byDriverId: driverId, scheduledForLater, targetType, split, vehicle,
   });
 
   if (!updated) {
@@ -692,6 +740,7 @@ export const assignRide = async ({ driverId, rideId, targetDriverId, body = {}, 
   return serializeNetworkRide(updated, {
     assignedDriver: target,
     assignedBy: buildAssignedByPayload(assignmentContext),
+    vehicleWarnings: warnings,
   });
 };
 
@@ -736,6 +785,7 @@ export const unassignRide = async ({ driverId, rideId, reason = '' }) => {
         'assignment.assigned_by_driver_id': null,
         'assignment.assigned_at': null,
         'assignment.acknowledged_at': null,
+        ...rideVehicleSetFields(null),
         'reminders.pickup_sent_at': null,
         'reminders.owner_pickup_sent_at': null,
         'reminders.unacknowledged_sent_at': null,
@@ -790,6 +840,14 @@ export const reassignRide = async ({ driverId, rideId, targetDriverId, reason = 
   if (preValidated.targetType === 'contact') {
     await assertCanFundSecureSplit(permissions.driver, parseContactSplit({ fare: ride.fare, body }));
   }
+  // Same for the vehicle: a bad choice must fail before the driver is removed.
+  await resolveVehicleSelection({
+    body,
+    creatorPermissions: permissions,
+    assignee: preValidated.target,
+    ride,
+    excludeRideId: ride._id,
+  });
 
   await unassignRide({ driverId, rideId, reason: reason || 'Reassigned' });
   return assignRide({ driverId, rideId, targetDriverId, body, preValidated });
@@ -829,6 +887,7 @@ export const rejectAssignment = async ({ driverId, rideId, reason = '' }) => {
         acceptedAt: null,
         'assignment.mode': 'dispatch',
         'assignment.acknowledged_at': null,
+        ...rideVehicleSetFields(null),
         'reminders.pickup_sent_at': null,
         'reminders.owner_pickup_sent_at': null,
         'reminders.unacknowledged_sent_at': null,
@@ -884,7 +943,9 @@ export const acknowledgeAssignment = async ({ driverId, rideId }) => {
     throw new ApiError(403, 'This ride is not assigned to you', null, 'NOT_RIDE_DRIVER');
   }
 
-  const driver = await Driver.findById(driverId).select('name phone vehicleNumber isOnline isOnRide').lean();
+  const driver = await Driver.findById(driverId)
+    .select('name phone vehicleNumber vehicleMake vehicleModel vehicleType vehicleColor assignedFleetVehicleId isOnline isOnRide')
+    .lean();
 
   if (ride.assignment?.acknowledged_at) {
     return serializeForAssignedDriver(ride, driver);
@@ -962,6 +1023,18 @@ export const cancelDriverRide = async ({ driverId, rideId, reason = '' }) => {
   if (previousDriverId) await releaseDriverIfIdle(previousDriverId);
   await notifyNetworkRideCancelled({ ride: updated, reason });
 
+  // Off the feed, conversations closed, applicants told.
+  if (ride.publish?.status === 'open') {
+    emitToRoom(getFeedRoom(ride.service_location_id), 'feed:driver:removed', {
+      rideId: String(ride._id),
+      reason: 'CANCELLED',
+    });
+  }
+  const { closeLeadConversationsForRide } = await import('./feedService.js');
+  const { rejectPendingRequestsForRide } = await import('./rideRequestService.js');
+  await closeLeadConversationsForRide(ride._id, 'CANCELLED').catch(() => {});
+  await rejectPendingRequestsForRide({ ride: updated, reason: 'ride_cancelled' }).catch(() => {});
+
   return serializeNetworkRide(updated);
 };
 
@@ -997,7 +1070,7 @@ export const listNetworkRides = async ({ driverId, scope = 'created', status = '
   const driverIds = rides.map((ride) => ride.driverId).filter(Boolean);
   const drivers = driverIds.length
     ? await Driver.find({ _id: { $in: driverIds } })
-        .select('name phone vehicleNumber isOnline isOnRide')
+        .select('name phone vehicleNumber vehicleMake vehicleModel vehicleType vehicleColor assignedFleetVehicleId isOnline isOnRide')
         .lean()
     : [];
   const driverMap = new Map(drivers.map((driver) => [String(driver._id), driver]));
@@ -1023,6 +1096,16 @@ export const listNetworkRides = async ({ driverId, scope = 'created', status = '
   const identityDriverMap = new Map(identityDrivers.map((driver) => [String(driver._id), driver]));
   const ownerMap = new Map(owners.map((owner) => [String(owner._id), owner]));
 
+  // The publisher's own open rides show who asked for them.
+  let applicantsByRide = new Map();
+  if (scope !== 'assigned_to_me') {
+    const { loadApplicantsForRides } = await import('./rideRequestService.js');
+    applicantsByRide = await loadApplicantsForRides(
+      rides.filter((ride) => ride.publish?.status === 'open'),
+      { withRequests: 5 },
+    );
+  }
+
   return {
     results: rides.map((ride) => {
       const assignerId = ride.assignment?.assigned_by_driver_id || ride.created_by_driver_id || null;
@@ -1040,6 +1123,10 @@ export const listNetworkRides = async ({ driverId, scope = 'created', status = '
           ride.created_by_driver_id ? identityDriverMap.get(String(ride.created_by_driver_id)) : null,
           ride.organization_owner_id ? ownerMap.get(String(ride.organization_owner_id)) : null,
         ),
+        applicants:
+          scope !== 'assigned_to_me'
+            ? applicantsByRide.get(String(ride._id)) || { count: 0, requests: [] }
+            : null,
       });
     }),
     pagination: {
@@ -1084,9 +1171,10 @@ export const listUpcomingRides = async ({ driverId, page = 1, limit = 20 }) => {
   const identityIds = Array.from(new Set([...assignerIds, ...creatorIds].map(String)));
   const ownerIds = rides.map((ride) => ride.organization_owner_id).filter(Boolean);
 
-  const [identityDrivers, owners] = await Promise.all([
+  const [identityDrivers, owners, me_] = await Promise.all([
     identityIds.length ? Driver.find({ _id: { $in: identityIds } }).select(`phone ${PUBLISHER_DRIVER_FIELDS}`).lean() : [],
     ownerIds.length ? Owner.find({ _id: { $in: ownerIds } }).select('company_name owner_name name').lean() : [],
+    Driver.findById(me).select('vehicleNumber vehicleMake vehicleModel vehicleType vehicleColor assignedFleetVehicleId').lean(),
   ]);
   const identityMap = new Map(identityDrivers.map((driver) => [String(driver._id), driver]));
   const ownerMap = new Map(owners.map((owner) => [String(owner._id), owner]));
@@ -1132,6 +1220,8 @@ export const listUpcomingRides = async ({ driverId, page = 1, limit = 20 }) => {
         },
         is_secure: isNetwork ? ride.publish?.is_secure !== false : null,
         escrow_state: ride.escrow?.state || 'none',
+        // The vehicle to take on this ride (chosen by the owner, else my own).
+        vehicle: resolveRideVehicle(ride, me_),
         publisher: isNetwork
           ? buildPublisherCard(
               identityMap.get(String(ride.created_by_driver_id)),
@@ -1154,7 +1244,7 @@ export const getFleetAvailability = async (driverId) => {
   const permissions = await getDriverPermissions(driverId);
   const ownerId = permissions.driver.owner_id;
 
-  if (!ownerId) return { results: [] };
+  if (!ownerId) return { results: [], vehicles: [] };
 
   const drivers = await Driver.find({ owner_id: ownerId, deletedAt: null, approve: true })
     .select('name phone vehicleNumber vehicleType isOnline isOnRide location assignedFleetVehicleId')
@@ -1171,7 +1261,42 @@ export const getFleetAvailability = async (driverId) => {
   ]);
   const upcomingMap = new Map(upcoming.map((row) => [String(row._id), row.count]));
 
+  // The organisation's vehicles for the "which vehicle" picker, greyed out
+  // while one is out on (or booked for) a live ride.
+  const fleetVehicles = await FleetVehicle.find({ owner_id: ownerId, active: true })
+    .select('car_brand car_model license_plate_number car_color status vehicle_type_id')
+    .lean();
+  const plates = fleetVehicles.map((vehicle) => String(vehicle.license_plate_number || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase());
+  const busyRides = plates.length
+    ? await Ride.find({
+        'assignment.vehicle.number': { $in: plates },
+        status: { $in: [RIDE_STATUS.ACCEPTED, RIDE_STATUS.ONGOING] },
+      })
+        .select('assignment.vehicle.number scheduledAt status')
+        .lean()
+    : [];
+  const busyByPlate = new Map();
+  for (const ride of busyRides) {
+    const plate = ride.assignment?.vehicle?.number;
+    const entry = busyByPlate.get(plate) || { on_ride: false, booked_until: null };
+    if (ride.status === RIDE_STATUS.ONGOING || !ride.scheduledAt) entry.on_ride = true;
+    if (ride.scheduledAt && (!entry.booked_until || ride.scheduledAt > entry.booked_until)) {
+      entry.booked_until = ride.scheduledAt;
+    }
+    busyByPlate.set(plate, entry);
+  }
+
   return {
+    vehicles: fleetVehicles.map((vehicle, index) => ({
+      vehicle_id: String(vehicle._id),
+      number: plates[index],
+      model: [vehicle.car_brand, vehicle.car_model].filter(Boolean).join(' '),
+      color: vehicle.car_color || '',
+      status: vehicle.status || 'pending',
+      selectable: vehicle.status === 'approved',
+      on_ride: busyByPlate.get(plates[index])?.on_ride || false,
+      booked_until: busyByPlate.get(plates[index])?.booked_until || null,
+    })),
     results: drivers.map((driver) => ({
       driverId: String(driver._id),
       name: driver.name,

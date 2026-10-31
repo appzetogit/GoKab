@@ -21,6 +21,9 @@ export const DEFAULT_DRIVER_NETWORK_SETTINGS = Object.freeze({
   call_mode: 'reveal',
   live_location_emit_interval_ms: 4000,
   cancel_penalty_after_accept: 0,
+  // Published rides go to a driver the publisher approves (request → approve)
+  // instead of the first driver to tap Accept.
+  feed_requires_approval: true,
 });
 
 export const getTipSettings = async () => {

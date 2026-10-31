@@ -746,6 +746,27 @@ const rideSchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
+      // The vehicle this ride runs with, chosen when it is assigned (the
+      // driver's own, one of the organisation's fleet vehicles, or a custom
+      // one). A per-ride copy: the driver's profile is never changed, and the
+      // copy survives the fleet vehicle being edited or deleted later. Empty
+      // (number '') means "use the driver's current vehicle".
+      vehicle: {
+        source: {
+          type: String,
+          enum: ['driver_default', 'fleet', 'custom', null],
+          default: null,
+        },
+        fleet_vehicle_id: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'TaxiFleetVehicle',
+          default: null,
+        },
+        number: { type: String, default: '', trim: true },
+        model: { type: String, default: '', trim: true },
+        type: { type: String, default: '', trim: true },
+        color: { type: String, default: '', trim: true },
+      },
       history: {
         type: [
           {
@@ -931,5 +952,10 @@ rideSchema.index({ origin: 1, 'publish.status': 1, service_location_id: 1, creat
 rideSchema.index({ status: 1, driverId: 1, service_location_id: 1, createdAt: -1 });
 rideSchema.index({ organization_owner_id: 1, status: 1 });
 rideSchema.index({ created_by_driver_id: 1, status: 1, createdAt: -1 });
+// "All Rides" list: created-by queries sorted by time without a status
+// equality, and the per-vehicle busy check.
+rideSchema.index({ created_by_driver_id: 1, createdAt: -1 });
+rideSchema.index({ driverId: 1, status: 1, createdAt: -1 });
+rideSchema.index({ 'assignment.vehicle.number': 1, status: 1 }, { partialFilterExpression: { 'assignment.vehicle.number': { $type: 'string', $gt: '' } } });
 
 export const Ride = mongoose.models.TaxiRide || mongoose.model('TaxiRide', rideSchema);

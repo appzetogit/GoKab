@@ -2,6 +2,7 @@ import { Driver } from '../driver/models/Driver.js';
 import { Owner } from '../admin/models/Owner.js';
 import { User } from '../user/models/User.js';
 import { sendPushNotificationToEntities } from './pushNotificationService.js';
+import { resolveRideVehicle } from '../driver/services/rideVehicleService.js';
 import {
   emitToRoom,
   getAdminRoom,
@@ -29,7 +30,7 @@ export const buildNetworkRideContext = async (ride) => {
   const [assignedDriver, creatorDriver, organization, separateAssignerDriver] = await Promise.all([
     ride.driverId
       ? Driver.findById(ride.driverId)
-          .select('name phone profileImage rating vehicleNumber vehicleColor vehicleMake vehicleModel vehicleType')
+          .select('name phone profileImage rating vehicleNumber vehicleColor vehicleMake vehicleModel vehicleType assignedFleetVehicleId')
           .lean()
       : null,
     ride.created_by_driver_id
@@ -43,6 +44,8 @@ export const buildNetworkRideContext = async (ride) => {
 
   const ownerName =
     safe(organization?.owner_name) || safe(organization?.name) || safe(creatorDriver?.name, 'Owner');
+  // The vehicle chosen for this ride wins over the driver's own.
+  const rideVehicle = resolveRideVehicle(ride, assignedDriver);
 
   return {
     assignedDriver,
@@ -53,8 +56,9 @@ export const buildNetworkRideContext = async (ride) => {
     orgName: safe(organization?.company_name, 'GoKab'),
     ownerName,
     driverName: safe(assignedDriver?.name, 'Driver'),
-    vehicleNumber: safe(assignedDriver?.vehicleNumber),
-    vehicleLabel: describeVehicle(assignedDriver),
+    vehicleNumber: safe(rideVehicle?.number || assignedDriver?.vehicleNumber),
+    vehicleLabel: safe(rideVehicle?.model) || describeVehicle(assignedDriver),
+    vehicleColor: safe(rideVehicle?.color || assignedDriver?.vehicleColor),
   };
 };
 
@@ -120,7 +124,7 @@ export const notifyNetworkAssignment = async (ride) => {
           vehicle: {
             number: context.vehicleNumber,
             label: context.vehicleLabel,
-            color: safe(context.assignedDriver.vehicleColor),
+            color: context.vehicleColor,
           },
         }
       : null,
@@ -168,6 +172,8 @@ export const notifyNetworkAssignment = async (ride) => {
       },
       scheduledAt: ride.scheduledAt,
       amount: ride.publish?.driver_payout || ride.fare,
+      // The vehicle to bring for this ride.
+      vehicle: { number: context.vehicleNumber, label: context.vehicleLabel, color: context.vehicleColor },
     };
 
     if (ride.userId) {
@@ -179,7 +185,9 @@ export const notifyNetworkAssignment = async (ride) => {
     await sendPushNotificationToEntities({
       driverIds: [String(ride.driverId)],
       title: `New ride assigned by ${context.ownerName}`,
-      body: `${context.orgName} · Pickup: ${safe(ride.pickupAddress, 'see app')}`,
+      body:
+        `${context.orgName} · Pickup: ${safe(ride.pickupAddress, 'see app')}` +
+        (context.vehicleNumber ? ` · Vehicle: ${context.vehicleLabel} (${context.vehicleNumber})` : ''),
       data: { type: 'network_ride_assigned', rideId: String(ride._id) },
     }).catch((error) => console.error('[networkNotification] driver push failed:', error.message));
   }
@@ -578,4 +586,101 @@ export const notifyVehicleStatusChanged = async ({ driverId, vehicleId, status, 
         : 'Your added vehicle was rejected. Check the app for details.',
     data: { type: 'vehicle_status_changed', vehicle_id: String(vehicleId), status: normalizedStatus, reason },
   }).catch(() => {});
+};
+
+// ---------------------------------------------------------------------------
+// Ride requests (a driver asks the publisher for a published ride)
+// ---------------------------------------------------------------------------
+
+const REQUEST_REJECTION_TEXT = {
+  publisher_rejected: 'The publisher chose someone else.',
+  ride_taken: 'The ride was given to another driver.',
+  ride_expired: 'The ride expired before anyone was chosen.',
+  ride_cancelled: 'The ride was cancelled.',
+  insufficient_wallet: 'Your wallet did not have enough balance for the escrow hold.',
+  driver_unavailable: 'Your account is not available to take rides right now.',
+};
+
+export const requestRejectionText = (reason) => REQUEST_REJECTION_TEXT[reason] || 'Your request was not accepted.';
+
+const routeText = (ride) => `${safe(ride.pickupAddress, 'Pickup')} → ${safe(ride.dropAddress, 'Drop')}`;
+
+/** Publisher: a driver asked for their published ride. */
+export const notifyRideRequestReceived = async ({ ride, request, applicantsCount }) => {
+  const snapshot = request.snapshot || {};
+  const vehicle = snapshot.vehicle || {};
+  const publisherId = String(ride.created_by_driver_id);
+
+  emitToRoom(getDriverRoom(publisherId), 'feed:request:received', {
+    rideId: String(ride._id),
+    applicant: {
+      driverId: String(request.driver_id),
+      name: safe(snapshot.name),
+      rating: snapshot.rating ?? null,
+      vehicleModel: safe(vehicle.model),
+      vehicleNumber: safe(vehicle.number),
+    },
+    note: safe(request.note),
+    applicants_count: applicantsCount,
+  });
+
+  const details = [
+    snapshot.rating ? `★ ${Number(snapshot.rating).toFixed(1)}` : '',
+    [safe(vehicle.model), safe(vehicle.number)].filter(Boolean).join(' '),
+  ].filter(Boolean).join(', ');
+
+  await sendPushNotificationToEntities({
+    driverIds: [publisherId],
+    title: 'New request for your ride',
+    body: `${safe(snapshot.name, 'A driver')}${details ? ` (${details})` : ''} wants your ${routeText(ride)} ride`,
+    data: {
+      type: 'ride_request_received',
+      rideId: String(ride._id),
+      driverId: String(request.driver_id),
+      applicantsCount: String(applicantsCount),
+    },
+  }).catch((error) => console.error('[networkNotification] request received push failed:', error.message));
+};
+
+/** Publisher: a driver withdrew their pending request (badge refresh only). */
+export const notifyRideRequestWithdrawn = ({ ride, driverId, applicantsCount }) => {
+  emitToRoom(getDriverRoom(String(ride.created_by_driver_id)), 'feed:request:withdrawn', {
+    rideId: String(ride._id),
+    driverId: String(driverId),
+    applicants_count: applicantsCount,
+  });
+};
+
+/** Applicant: the publisher gave them the ride. */
+export const notifyRideRequestApproved = async ({ ride, driverId, publisherName }) => {
+  emitToRoom(getDriverRoom(String(driverId)), 'feed:request:approved', { rideId: String(ride._id) });
+
+  await sendPushNotificationToEntities({
+    driverIds: [String(driverId)],
+    title: 'Request approved!',
+    body: `${safe(publisherName, 'The publisher')} gave you the ${routeText(ride)} ride`,
+    data: { type: 'ride_request_approved', rideId: String(ride._id) },
+  }).catch((error) => console.error('[networkNotification] request approved push failed:', error.message));
+};
+
+/** Applicants: their pending request is over (rejected, ride taken/expired/cancelled). */
+export const notifyRideRequestsRejected = async ({ ride, driverIds, reason, reasonText = '' }) => {
+  const ids = [...new Set((driverIds || []).map(String))];
+  if (!ids.length) return;
+
+  const text = reasonText || requestRejectionText(reason);
+  for (const id of ids) {
+    emitToRoom(getDriverRoom(id), 'feed:request:rejected', {
+      rideId: String(ride._id),
+      reason,
+      reason_text: text,
+    });
+  }
+
+  await sendPushNotificationToEntities({
+    driverIds: ids,
+    title: 'Ride request not accepted',
+    body: `Your request for ${routeText(ride)} wasn't accepted. ${text}`,
+    data: { type: 'ride_request_rejected', rideId: String(ride._id), reason },
+  }).catch((error) => console.error('[networkNotification] request rejected push failed:', error.message));
 };

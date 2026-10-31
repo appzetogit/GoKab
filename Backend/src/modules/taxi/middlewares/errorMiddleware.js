@@ -45,6 +45,15 @@ export const errorHandler = (error, _req, res, _next) => {
     });
   }
 
+  // A malformed id in a path or body is the caller's mistake, not a crash.
+  if (error.name === 'CastError') {
+    return res.status(400).json({
+      success: false,
+      message: `${error.path || 'id'} is invalid`,
+      code: 'INVALID_ID',
+    });
+  }
+
   if (error.code === 11000) {
     return res.status(409).json({
       success: false,
@@ -58,5 +67,7 @@ export const errorHandler = (error, _req, res, _next) => {
     message: error.message || 'Internal server error',
     code: error instanceof ApiError ? error.code || undefined : undefined,
     details: error instanceof ApiError ? error.details : undefined,
+    // Per-field messages for form validation (e.g. bills), keyed by request field.
+    ...(error instanceof ApiError && error.fields ? { fields: error.fields } : {}),
   });
 };
