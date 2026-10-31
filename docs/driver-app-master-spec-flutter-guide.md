@@ -335,6 +335,7 @@ Errors:
 | `ZERO_TOTAL` | 422 | |
 | `BILL_RIDE_FORBIDDEN` | 403 | `rideId` isn't your ride |
 | `RATE_LIMITED` | 429 | 60/min, 500/day |
+| `PAYLOAD_TOO_LARGE` | 413 | Body over 100 KB (create) / 2 MB (import) — split the import into smaller calls |
 
 `fields` is at the **top level** of the error body, next to `code`.
 

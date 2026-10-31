@@ -21,7 +21,7 @@ import { applyPromoToRideInTransaction, releasePromoForCancelledRide } from './p
 import { findZoneByPickup } from './matchingService.js';
 import { getTipSettings } from './appSettingsService.js';
 import { getBidRideSettings } from './transportSettingsService.js';
-import { withRideVehicle } from '../driver/services/rideVehicleService.js';
+import { resolveRideVehicle, withRideVehicle } from '../driver/services/rideVehicleService.js';
 
 // Booking a ride releases whatever the rider had queued in `currentRideId`, but
 // two bookings only actually conflict when both would be live at the same time.
@@ -1646,7 +1646,7 @@ const serializeDriverHistoryExtras = (ride, entityId) => {
             id: String(ride.driverId._id),
             name: ride.driverId.name || '',
             phone: ride.driverId.phone || '',
-            vehicleNumber: ride.driverId.vehicleNumber || '',
+            vehicleNumber: resolveRideVehicle(ride, ride.driverId)?.number || ride.driverId.vehicleNumber || '',
           }
         : null,
     split:
@@ -2023,7 +2023,6 @@ const listDriverRideHistory = async ({ entityId, limit, page, category, from, to
 const buildDriverListExtras = async (rides, me) => {
   const { buildAssignedByPayload } = await import('./networkNotificationService.js');
   const { buildPublisherCard, PUBLISHER_DRIVER_FIELDS } = await import('../driver/services/publisherCardService.js');
-  const { resolveRideVehicle } = await import('../driver/services/rideVehicleService.js');
   const { getDriverPermissions } = await import('./driverCategoryService.js');
   const { loadApplicantsForRides } = await import('../driver/services/rideRequestService.js');
 

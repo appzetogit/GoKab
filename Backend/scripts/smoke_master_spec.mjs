@@ -402,6 +402,7 @@ const run = async () => {
     const publisherRow = (await api('/rides?role=published&limit=100', { token: rameshToken })).json?.data?.results?.find((row) => row.id === rideA);
     check('OTP hidden from the publisher of a ride someone else drives', publisherRow && publisherRow.otp === '', short(publisherRow?.otp));
     check("...but the driving driver still sees it", Boolean(assignedRow?.otp));
+    check('driven_by shows the ride vehicle, not the profile one', publisherRow?.driven_by?.vehicleNumber === approvedRide.assignment.vehicle.number, short(publisherRow?.driven_by));
     const search = await api('/rides?role=all&q=vijay%20nagar&limit=100', { token: rameshToken });
     check('q matches pickup (case-insensitive)', (search.json?.data?.results || []).length > 0
       && search.json.data.results.every((row) => /vijay nagar/i.test(row.pickupAddress) || /vijay nagar/i.test(row.dropAddress) || true));
@@ -456,6 +457,8 @@ const run = async () => {
     check('discount > subtotal → 422 DISCOUNT_EXCEEDS_SUBTOTAL', bigDiscount.json?.code === 'DISCOUNT_EXCEEDS_SUBTOTAL');
     const sameAddr = await api('/drivers/bills', { method: 'POST', token: vikasToken, body: { ...billBody, dropAddress: 'vijay nagar, indore' } });
     check('pickup == drop → 422 fields.dropAddress', sameAddr.json?.fields?.dropAddress, short(sameAddr.json));
+    const huge = await api('/drivers/bills', { method: 'POST', token: vikasToken, body: { ...billBody, companyGst: 'x'.repeat(150 * 1024) } });
+    check('bill body over 100 KB → 413 PAYLOAD_TOO_LARGE', huge.status === 413 && huge.json?.code === 'PAYLOAD_TOO_LARGE', short(huge.json));
     const badPhone = await api('/drivers/bills', { method: 'POST', token: vikasToken, body: { ...billBody, customerPhone: '5876543210' } });
     check('bad phone → 422 fields.customerPhone', badPhone.json?.fields?.customerPhone, short(badPhone.json));
     const foreignRide = await api('/drivers/bills', { method: 'POST', token: mohanToken, body: { ...billBody, rideId: rideA } });

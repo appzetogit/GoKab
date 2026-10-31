@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { ApiError } from '../../../../utils/ApiError.js';
 import { asyncHandler } from '../../../../utils/asyncHandler.js';
 import { authenticate } from '../../middlewares/authMiddleware.js';
 import { createBill, deleteBill, getBill, importBills, listBills } from '../services/billService.js';
@@ -11,6 +12,13 @@ export const billRouter = Router();
 
 const driverOnly = authenticate(['driver']);
 
+// The app-wide JSON parser allows 10 MB (uploads); a bill is a few KB.
+const maxBody = (bytes) => (req, res, next) => {
+  const size = Number(req.headers['content-length']) || Buffer.byteLength(JSON.stringify(req.body || {}));
+  if (size > bytes) return next(new ApiError(413, 'Request is too large', { limit: bytes }, 'PAYLOAD_TOO_LARGE'));
+  return next();
+};
+
 const pageMeta = ({ page, limit, total }) => ({
   page,
   limit,
@@ -21,6 +29,7 @@ const pageMeta = ({ page, limit, total }) => ({
 billRouter.post(
   '/bills',
   driverOnly,
+  maxBody(100 * 1024),
   asyncHandler(async (req, res) => {
     const { bill, created } = await createBill({ driverId: req.auth.sub, body: req.body || {} });
     res.status(created ? 201 : 200).json({ success: true, message: created ? 'Bill saved' : 'Bill already saved', data: bill });
@@ -31,6 +40,7 @@ billRouter.post(
 billRouter.post(
   '/bills/import',
   driverOnly,
+  maxBody(2 * 1024 * 1024),
   asyncHandler(async (req, res) => {
     res.json({ success: true, data: await importBills({ driverId: req.auth.sub, bills: req.body?.bills }) });
   }),
