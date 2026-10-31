@@ -10,6 +10,11 @@ import {
   listDriverLeadMessagesController,
   postDriverLeadMessageController,
   acceptFeedRideController,
+  requestFeedRideController,
+  withdrawFeedRideRequestController,
+  listRideApplicantsController,
+  approveRideApplicantController,
+  rejectRideApplicantController,
   disputeEscrowController,
   reportUnsecureRideController,
   earningsSummaryController,
@@ -136,6 +141,22 @@ networkRouter.get('/earnings/commissions', driverOnly, asyncHandler(commissionEa
 
 networkRouter.get('/feed', driverOnly, asyncHandler(getFeedController));
 networkRouter.post('/feed/rides/:rideId/accept', driverOnly, asyncHandler(acceptFeedRideController));
+// Published rides: request, then the publisher approves one applicant. Not
+// tier-gated: any driver may ask, and a publisher keeps control of a ride they
+// published even after a downgrade (the service checks ownership).
+networkRouter.post('/feed/rides/:rideId/request', driverOnly, asyncHandler(requestFeedRideController));
+networkRouter.delete('/feed/rides/:rideId/request', driverOnly, asyncHandler(withdrawFeedRideRequestController));
+networkRouter.get('/network/rides/:rideId/applicants', driverOnly, asyncHandler(listRideApplicantsController));
+networkRouter.post(
+  '/network/rides/:rideId/applicants/:driverId/approve',
+  driverOnly,
+  asyncHandler(approveRideApplicantController),
+);
+networkRouter.post(
+  '/network/rides/:rideId/applicants/:driverId/reject',
+  driverOnly,
+  asyncHandler(rejectRideApplicantController),
+);
 
 // Lead contact & chat.
 networkRouter.post('/feed/rides/:rideId/contact', driverOnly, asyncHandler(contactLeadController));

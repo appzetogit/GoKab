@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { safeEqualHex } from '../../services/razorpaySecurity.js';
 import { loadPublisherCardForRide } from '../../driver/services/publisherCardService.js';
+import { resolveRideVehicle, withRideVehicle } from '../../driver/services/rideVehicleService.js';
 import mongoose from 'mongoose';
 import { ApiError } from '../../../../utils/ApiError.js';
 import { normalizePoint } from '../../../../utils/geo.js';
@@ -377,6 +378,9 @@ export const getRideById = async (req, res) => {
     const data = ride.toJSON();
     data.publisher = await loadPublisherCardForRide(ride);
     data.is_secure = ride.publish?.is_secure !== false;
+    // The vehicle chosen for this ride, on its own and on the driver card.
+    data.vehicle = resolveRideVehicle(ride, ride.driverId?._id ? ride.driverId : null);
+    if (data.driverId && typeof data.driverId === 'object') data.driverId = withRideVehicle(ride, data.driverId);
     if (access.$locals.viewerIsCreatorOnly) {
       // The chat is between the rider and the driver who took the ride.
       delete data.messages;
@@ -416,6 +420,7 @@ export const getMyActiveRide = async (req, res) => {
       publisher_hold: Number(ride.escrow?.publisher_hold || 0),
       acceptor_hold: Number(ride.escrow?.acceptor_hold || 0),
     };
+    data.vehicle = resolveRideVehicle(ride, ride.driverId?._id ? ride.driverId : null);
   }
 
   res.json({ success: true, data });
@@ -433,6 +438,10 @@ export const listMyRides = async (req, res) => {
     status: req.query.status,
     // `role` here is the driver's side of the ride, not the auth role.
     rideRole: req.query.role,
+    explicitRole: req.query.role !== undefined,
+    origin: req.query.origin,
+    q: req.query.q,
+    includeCounts: String(req.query.include_counts ?? '1') !== '0',
   });
 
   res.json({
@@ -441,6 +450,7 @@ export const listMyRides = async (req, res) => {
       results: history.results,
       total: history.pagination.total,
       pagination: history.pagination,
+      ...(history.counts ? { counts: history.counts } : {}),
     },
   });
 };

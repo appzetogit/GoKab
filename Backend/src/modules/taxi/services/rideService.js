@@ -7,6 +7,7 @@ import { AdminBusinessSetting } from '../admin/models/AdminBusinessSetting.js';
 import { SetPrice } from '../admin/models/SetPrice.js';
 import { Vehicle } from '../admin/models/Vehicle.js';
 import { Driver } from '../driver/models/Driver.js';
+import { Owner } from '../admin/models/Owner.js';
 import { WalletTransaction } from '../driver/models/WalletTransaction.js';
 import { incrementDriverTodaySummaryForCompletedRide } from '../driver/services/driverTodaySummaryService.js';
 import { applyDriverWalletAdjustment, ensureDriverWalletCanAcceptRide, previewRideCommission, settleCompletedRideWallet } from '../driver/services/walletService.js';
@@ -20,6 +21,7 @@ import { applyPromoToRideInTransaction, releasePromoForCancelledRide } from './p
 import { findZoneByPickup } from './matchingService.js';
 import { getTipSettings } from './appSettingsService.js';
 import { getBidRideSettings } from './transportSettingsService.js';
+import { withRideVehicle } from '../driver/services/rideVehicleService.js';
 
 // Booking a ride releases whatever the rider had queued in `currentRideId`, but
 // two bookings only actually conflict when both would be live at the same time.
@@ -1498,7 +1500,8 @@ export const serializeRideRealtime = (ride) => ({
       }
     : null,
   user: ride.userId,
-  driver: ride.driverId,
+  // The driver card shows the vehicle chosen for this ride, if one was.
+  driver: withRideVehicle(ride, ride.driverId),
   messages: (ride.messages || []).slice(-30).map((message) => ({
     id: String(message._id),
     senderRole: message.senderRole,
@@ -1656,18 +1659,483 @@ const serializeDriverHistoryExtras = (ride, entityId) => {
   };
 };
 
+/** One ride in a history list; the fields every caller of GET /rides has always had. */
+const serializeHistoryItem = (ride, { role, entityId }) => ({
+  rideId: String(ride._id),
+  deliveryId: ride.deliveryId?._id ? String(ride.deliveryId._id) : ride.deliveryId ? String(ride.deliveryId) : null,
+  type: ride.serviceType || 'ride',
+  serviceType: ride.serviceType || 'ride',
+  status: ride.status,
+  liveStatus: ride.liveStatus,
+  fare: ride.fare,
+  baseFare: Number(ride.baseFare || ride.fare || 0),
+  bookingMode: ride.bookingMode || 'normal',
+  biddingStatus: ride.biddingStatus || 'none',
+  bidStepAmount: Number(ride.bidStepAmount || DEFAULT_BID_STEP_AMOUNT),
+  bidFloorFare: Number(ride.bidFloorFare ?? ride.baseFare ?? ride.fare ?? 0),
+  userMaxBidFare: Number(ride.userMaxBidFare || ride.fare || 0),
+  bidCeilingMaxFare: Number(ride.bidCeilingMaxFare || ride.userMaxBidFare || ride.fare || 0),
+  acceptedBidId: ride.acceptedBidId ? String(ride.acceptedBidId) : null,
+  estimatedDistanceMeters: ride.estimatedDistanceMeters || 0,
+  estimatedDurationMinutes: ride.estimatedDurationMinutes || 0,
+  paymentMethod: ride.paymentMethod,
+  otp: historyOtpFor(ride, { role, entityId }),
+  parcel: ride.deliveryId?.parcel || ride.parcel || null,
+  intercity: ride.intercity || null,
+  pricingSnapshot: ride.pricingSnapshot || null,
+  commissionAmount: ride.commissionAmount,
+  driverEarnings: ride.driverEarnings,
+  vehicleIconType: ride.vehicleIconType,
+  // Keep history responses light; giant data URLs can stall the activity screen.
+  vehicleIconUrl: String(ride.vehicleIconUrl || '').startsWith('data:') ? '' : (ride.vehicleIconUrl || ''),
+  pickupLocation: ride.pickupLocation,
+  pickupAddress: ride.pickupAddress || '',
+  dropLocation: ride.dropLocation,
+  dropAddress: ride.dropAddress || '',
+  scheduledAt: ride.scheduledAt || null,
+  acceptedAt: ride.acceptedAt,
+  arrivedAt: ride.arrivedAt,
+  startedAt: ride.startedAt,
+  completedAt: ride.completedAt,
+  feedback: ride.feedback || null,
+  createdAt: ride.createdAt,
+  updatedAt: ride.updatedAt,
+  user: role === 'driver' || role === 'owner' ? (ride.userId || null) : null,
+  driver: role === 'user' || role === 'owner' ? (ride.driverId || null) : null,
+  ...(role === 'driver' ? serializeDriverHistoryExtras(ride, entityId) : {}),
+});
+
+/**
+ * The pickup OTP is the rider's proof that the right driver turned up: only
+ * the rider and the driver actually driving may see it. Owners and
+ * publishers of a ride someone else drives get ''.
+ */
+const historyOtpFor = (ride, { role, entityId }) => {
+  if (role === 'user') return ride.otp || '';
+  if (role !== 'driver') return '';
+  const drivenBy = ride.driverId?._id || ride.driverId || null;
+  return drivenBy && String(drivenBy) === String(entityId) ? ride.otp || '' : '';
+};
+
 const HISTORY_STATUSES = new Set(['all', RIDE_STATUS.COMPLETED, RIDE_STATUS.CANCELLED]);
 const HISTORY_DRIVER_ROLES = new Set(['driven', 'published', 'all']);
 
-export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, page = 1, category = 'all', from, to, status = 'all', rideRole = 'driven' }) => {
+const HISTORY_ORIGINS = new Set(['all', 'customer_app', 'driver_created']);
+
+const parseHistoryOrigin = (origin) => {
+  const normalized = String(origin || 'all').trim().toLowerCase();
+  if (!HISTORY_ORIGINS.has(normalized)) {
+    throw new ApiError(422, "origin must be 'all', 'customer_app' or 'driver_created'", { origin }, 'INVALID_ORIGIN');
+  }
+  return normalized;
+};
+
+// Rides booked before `origin` existed are customer bookings.
+const historyOriginClause = (origin) =>
+  origin === 'driver_created'
+    ? { origin: 'driver_created' }
+    : origin === 'customer_app'
+      ? { origin: { $ne: 'driver_created' } }
+      : null;
+
+// ---------------------------------------------------------------------------
+// Driver "All Rides": live + finished, customer + network, one paged list
+// ---------------------------------------------------------------------------
+
+const DRIVER_LIST_STATUSES = new Set(['all', 'upcoming', 'ongoing', 'completed', 'cancelled']);
+const DRIVER_LIST_ROLES = new Set(['driven', 'published', 'created', 'assigned', 'all']);
+const UPCOMING_STATUSES = [RIDE_STATUS.SEARCHING, RIDE_STATUS.ACCEPTED];
+const LIVE_STATUSES = [RIDE_STATUS.SEARCHING, RIDE_STATUS.ACCEPTED, RIDE_STATUS.ONGOING];
+const MAX_QUERY_LENGTH = 60;
+
+const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The same buckets as `category` on the old history list, as one clause. */
+const historyCategoryClause = (category) => {
+  const normalized = String(category || 'all').trim().toLowerCase();
+  if (normalized === 'rides') return { serviceType: 'ride', scheduledAt: null };
+  if (normalized === 'parcels') {
+    return {
+      serviceType: 'parcel',
+      scheduledAt: null,
+      'parcel.isOutstation': { $ne: true },
+      'parcel.deliveryScope': { $ne: 'outstation' },
+    };
+  }
+  if (normalized === 'outstation') {
+    return {
+      scheduledAt: null,
+      $or: [
+        { serviceType: 'intercity' },
+        { serviceType: 'parcel', $or: [{ 'parcel.isOutstation': true }, { 'parcel.deliveryScope': 'outstation' }] },
+      ],
+    };
+  }
+  if (normalized === 'scheduled') return { scheduledAt: { $ne: null } };
+  return null;
+};
+
+const driverRoleClause = (role, me) => {
+  switch (role) {
+    case 'driven':
+      return { driverId: me };
+    case 'published':
+      return { created_by_driver_id: me, driverId: { $ne: me } };
+    case 'created':
+      return { created_by_driver_id: me };
+    case 'assigned':
+      return { driverId: me, origin: 'driver_created', created_by_driver_id: { $ne: me } };
+    default:
+      return { $or: [{ driverId: me }, { created_by_driver_id: me }] };
+  }
+};
+
+const driverStatusClause = (status) => {
+  if (status === 'upcoming') return { status: { $in: UPCOMING_STATUSES } };
+  if (status === 'ongoing') return { status: RIDE_STATUS.ONGOING };
+  if (status === 'completed') return { status: RIDE_STATUS.COMPLETED };
+  if (status === 'cancelled') return { status: RIDE_STATUS.CANCELLED };
+  return null;
+};
+
+/** Search: pickup, drop, customer name/phone (app or walk-in), ride id suffix. */
+const driverSearchClause = async (q) => {
+  const term = String(q ?? '').trim();
+  if (!term) return null;
+  if (term.length > MAX_QUERY_LENGTH) {
+    throw new ApiError(422, `q must be at most ${MAX_QUERY_LENGTH} characters`, null, 'INVALID_QUERY');
+  }
+  const pattern = new RegExp(escapeRegex(term), 'i');
+  const users = await User.find({ $or: [{ name: pattern }, { phone: pattern }] }).select('_id').limit(200).lean();
+  const clauses = [
+    { pickupAddress: pattern },
+    { dropAddress: pattern },
+    { 'offline_customer.name': pattern },
+    { 'offline_customer.phone': pattern },
+    ...(users.length ? [{ userId: { $in: users.map((user) => user._id) } }] : []),
+  ];
+  if (/^[a-f0-9]{4,24}$/i.test(term)) {
+    clauses.push({ $expr: { $regexMatch: { input: { $toString: '$_id' }, regex: `${term.toLowerCase()}$` } } });
+  }
+  return { $or: clauses };
+};
+
+/** ongoing → 0, upcoming → 1, finished → 2: the "live first" order of status=all. */
+const BUCKET_RANK = {
+  $switch: {
+    branches: [
+      { case: { $eq: ['$status', RIDE_STATUS.ONGOING] }, then: 0 },
+      { case: { $in: ['$status', UPCOMING_STATUSES] }, then: 1 },
+    ],
+    default: 2,
+  },
+};
+
+const BUCKET_NAME = {
+  $switch: {
+    branches: [
+      { case: { $eq: ['$status', RIDE_STATUS.ONGOING] }, then: 'ongoing' },
+      { case: { $in: ['$status', UPCOMING_STATUSES] }, then: 'upcoming' },
+      { case: { $eq: ['$status', RIDE_STATUS.COMPLETED] }, then: 'completed' },
+      { case: { $eq: ['$status', RIDE_STATUS.CANCELLED] }, then: 'cancelled' },
+    ],
+    default: 'other',
+  },
+};
+
+// Within a bucket: upcoming soonest first (immediate rides, no scheduledAt,
+// first of all); ongoing and finished newest first. One ascending key.
+const toMillis = (field, fallback) => ({ $toLong: { $ifNull: [field, fallback] } });
+const SORT_KEY = {
+  $switch: {
+    branches: [
+      { case: { $in: ['$status', UPCOMING_STATUSES] }, then: toMillis('$scheduledAt', new Date(0)) },
+      { case: { $eq: ['$status', RIDE_STATUS.ONGOING] }, then: { $multiply: [-1, toMillis('$startedAt', '$updatedAt')] } },
+    ],
+    default: { $multiply: [-1, toMillis('$createdAt', new Date(0))] },
+  },
+};
+
+const DRIVER_HISTORY_PROJECTION = {
+  messages: 0,
+  routePoints: 0,
+  'assignment.history': 0,
+  'publish.reports': 0,
+};
+
+const permissionsFor = (ride, me, plan) => {
+  const mine = String(me);
+  const isCreator = String(ride.created_by_driver_id || '') === mine;
+  const isDriver = String(ride.driverId?._id || ride.driverId || '') === mine;
+  const isNetwork = ride.origin === 'driver_created';
+  const unassigned = ride.status === RIDE_STATUS.SEARCHING && !ride.driverId;
+  const publishStatus = ride.publish?.status || 'none';
+  const notStarted =
+    ride.status === RIDE_STATUS.ACCEPTED &&
+    ![RIDE_LIVE_STATUS.STARTED, RIDE_LIVE_STATUS.COMPLETED].includes(ride.liveStatus);
+  const escrowBlocksRemoval = ride.escrow?.state === 'held' && ride.assignment?.target_type !== 'contact';
+  const canCreate = Boolean(plan?.can_create_rides);
+  const canPublish = Boolean(plan?.can_publish_rides);
+
+  return {
+    can_assign: isNetwork && isCreator && canCreate && unassigned && ['none', 'cancelled', 'expired'].includes(publishStatus),
+    can_unassign: isNetwork && isCreator && canCreate && Boolean(ride.driverId) && notStarted && !escrowBlocksRemoval,
+    can_reassign: isNetwork && isCreator && canCreate && Boolean(ride.driverId) && notStarted && !escrowBlocksRemoval,
+    can_publish: isNetwork && isCreator && canPublish && unassigned && publishStatus !== 'open',
+    can_unpublish: isNetwork && isCreator && canPublish && unassigned && publishStatus === 'open',
+    can_review_requests: isNetwork && isCreator && unassigned && publishStatus === 'open',
+    can_cancel: isNetwork && isCreator && canCreate && ![RIDE_STATUS.COMPLETED, RIDE_STATUS.CANCELLED].includes(ride.status),
+    can_acknowledge: isNetwork && isDriver && !isCreator && ride.status === RIDE_STATUS.ACCEPTED && !ride.assignment?.acknowledged_at,
+    can_decline: isNetwork && isDriver && !isCreator && notStarted,
+  };
+};
+
+const listDriverRideHistory = async ({ entityId, limit, page, category, from, to, status, rideRole, origin, q, includeCounts, explicitRole }) => {
+  const dateRangeClause = buildHistoryDateRangeClause({ from, to });
+
+  const normalizedStatus = String(status || 'all').trim().toLowerCase();
+  if (!DRIVER_LIST_STATUSES.has(normalizedStatus)) {
+    throw new ApiError(
+      422,
+      "status must be 'all', 'upcoming', 'ongoing', 'completed' or 'cancelled'",
+      { status },
+      'INVALID_STATUS',
+    );
+  }
+  const normalizedRole = String(rideRole || 'driven').trim().toLowerCase();
+  if (!DRIVER_LIST_ROLES.has(normalizedRole)) {
+    throw new ApiError(
+      422,
+      "role must be 'driven', 'published', 'created', 'assigned' or 'all'",
+      { role: rideRole },
+      'INVALID_ROLE',
+    );
+  }
+  const normalizedOrigin = parseHistoryOrigin(origin);
+  const searchClause = await driverSearchClause(q);
+
+  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  const safePage = Math.max(Number(page) || 1, 1);
+  const me = new mongoose.Types.ObjectId(String(entityId));
+
+  // from/to only narrow finished rides: an upcoming ride booked for next month
+  // must still show under a "this month" period.
+  const dateClause = dateRangeClause
+    ? normalizedStatus === 'upcoming' || normalizedStatus === 'ongoing'
+      ? null
+      : normalizedStatus === 'all'
+        ? { $or: [{ status: { $in: LIVE_STATUSES } }, dateRangeClause] }
+        : dateRangeClause
+    : null;
+
+  const baseClauses = [driverRoleClause(normalizedRole, me), historyCategoryClause(category), searchClause, dateClause].filter(Boolean);
+  const originClause = historyOriginClause(normalizedOrigin);
+  const statusClause = driverStatusClause(normalizedStatus);
+  const itemMatch = { $and: [...baseClauses, originClause, statusClause].filter(Boolean) };
+
+  // Old builds (no role/origin/q/live status sent) keep the newest-first order
+  // they always had; the new list is "live first" for status=all.
+  const usesNewList =
+    explicitRole || normalizedOrigin !== 'all' || Boolean(searchClause) || ['upcoming', 'ongoing'].includes(normalizedStatus);
+  const sort =
+    normalizedStatus === 'upcoming' || normalizedStatus === 'ongoing' || (normalizedStatus === 'all' && usesNewList)
+      ? { bucket_rank: 1, sort_key: 1, createdAt: -1, _id: -1 }
+      : { createdAt: -1, _id: -1 };
+
+  const [facet] = await Ride.aggregate([
+    { $match: itemMatch },
+    { $addFields: { bucket_rank: BUCKET_RANK, sort_key: SORT_KEY } },
+    { $sort: sort },
+    {
+      $facet: {
+        items: [{ $skip: (safePage - 1) * safeLimit }, { $limit: safeLimit }, { $project: DRIVER_HISTORY_PROJECTION }],
+        total: [{ $count: 'n' }],
+      },
+    },
+  ]).allowDiskUse(true);
+
+  const rides = facet?.items || [];
+  const total = facet?.total?.[0]?.n || 0;
+
+  // Chip badges: status counts ignore the status filter, origin counts the
+  // origin filter, so each chip shows what tapping it would return.
+  let counts = null;
+  if (includeCounts) {
+    const [countFacet] = await Ride.aggregate([
+      { $match: baseClauses.length ? { $and: baseClauses } : {} },
+      {
+        $facet: {
+          byStatus: [
+            ...(originClause ? [{ $match: originClause }] : []),
+            { $group: { _id: BUCKET_NAME, n: { $sum: 1 } } },
+          ],
+          byOrigin: [
+            ...(statusClause ? [{ $match: statusClause }] : []),
+            { $group: { _id: { $cond: [{ $eq: ['$origin', 'driver_created'] }, 'driver_created', 'customer_app'] }, n: { $sum: 1 } } },
+          ],
+        },
+      },
+    ]);
+    const statusCounts = Object.fromEntries((countFacet?.byStatus || []).map((row) => [row._id, row.n]));
+    const originCounts = Object.fromEntries((countFacet?.byOrigin || []).map((row) => [row._id, row.n]));
+    counts = {
+      all: Object.values(statusCounts).reduce((sum, n) => sum + n, 0),
+      upcoming: statusCounts.upcoming || 0,
+      ongoing: statusCounts.ongoing || 0,
+      completed: statusCounts.completed || 0,
+      cancelled: statusCounts.cancelled || 0,
+      customer_app: originCounts.customer_app || 0,
+      driver_created: originCounts.driver_created || 0,
+    };
+  }
+
+  await Ride.populate(rides, [
+    { path: 'userId', select: 'name phone profileImage' },
+    {
+      path: 'driverId',
+      select: 'name phone profileImage rating vehicleNumber vehicleMake vehicleModel vehicleType vehicleColor assignedFleetVehicleId',
+    },
+  ]);
+
+  const extras = await buildDriverListExtras(rides, me);
+
+  return {
+    results: rides.map((ride) => ({
+      ...serializeHistoryItem(ride, { role: 'driver', entityId }),
+      ...extras(ride),
+    })),
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+      hasNextPage: safePage * safeLimit < total,
+      hasPrevPage: safePage > 1,
+    },
+    ...(counts ? { counts } : {}),
+  };
+};
+
+/**
+ * Everything a fleet card needs, batched for the whole page: who assigned
+ * it, the publisher card, the vehicle, applicants and the action buttons.
+ */
+const buildDriverListExtras = async (rides, me) => {
+  const { buildAssignedByPayload } = await import('./networkNotificationService.js');
+  const { buildPublisherCard, PUBLISHER_DRIVER_FIELDS } = await import('../driver/services/publisherCardService.js');
+  const { resolveRideVehicle } = await import('../driver/services/rideVehicleService.js');
+  const { getDriverPermissions } = await import('./driverCategoryService.js');
+  const { loadApplicantsForRides } = await import('../driver/services/rideRequestService.js');
+
+  const network = rides.filter((ride) => ride.origin === 'driver_created');
+  const identityIds = [
+    ...new Set(
+      network.flatMap((ride) => [ride.assignment?.assigned_by_driver_id, ride.created_by_driver_id]).filter(Boolean).map(String),
+    ),
+  ];
+  const ownerIds = [...new Set(network.map((ride) => ride.organization_owner_id).filter(Boolean).map(String))];
+  const myOpenRides = network.filter(
+    (ride) => String(ride.created_by_driver_id) === String(me) && ride.publish?.status === 'open',
+  );
+
+  const [identityDrivers, owners, plan, applicantsByRide] = await Promise.all([
+    identityIds.length ? Driver.find({ _id: { $in: identityIds } }).select(`phone ${PUBLISHER_DRIVER_FIELDS}`).lean() : [],
+    ownerIds.length ? Owner.find({ _id: { $in: ownerIds } }).select('company_name owner_name name').lean() : [],
+    network.some((ride) => String(ride.created_by_driver_id) === String(me)) ? getDriverPermissions(me) : null,
+    loadApplicantsForRides(myOpenRides, { withRequests: 5 }),
+  ]);
+  const identityMap = new Map(identityDrivers.map((driver) => [String(driver._id), driver]));
+  const ownerMap = new Map(owners.map((owner) => [String(owner._id), owner]));
+  const now = Date.now();
+
+  return (ride) => {
+    const isNetwork = ride.origin === 'driver_created';
+    const driverDoc = ride.driverId && typeof ride.driverId === 'object' && ride.driverId._id ? ride.driverId : null;
+    const drivenByMe = String(driverDoc?._id || ride.driverId || '') === String(me);
+    const createdByMe = String(ride.created_by_driver_id || '') === String(me);
+    const assignerId = isNetwork ? ride.assignment?.assigned_by_driver_id || ride.created_by_driver_id || null : null;
+    const organization = ride.organization_owner_id ? ownerMap.get(String(ride.organization_owner_id)) : null;
+    const applicants = applicantsByRide.get(String(ride._id));
+
+    return {
+      id: String(ride._id),
+      my_side: createdByMe ? 'created' : drivenByMe && isNetwork ? 'assigned' : 'driven',
+      is_overdue: Boolean(
+        ride.scheduledAt && UPCOMING_STATUSES.includes(ride.status) && new Date(ride.scheduledAt).getTime() < now,
+      ),
+      notes: ride.network_notes || '',
+      customer: {
+        name: ride.userId?.name || ride.offline_customer?.name || '',
+        phone: ride.userId?.phone || ride.offline_customer?.phone || '',
+      },
+      assignment: {
+        mode: ride.assignment?.mode || 'dispatch',
+        target_type: ride.assignment?.target_type || null,
+        assigned_at: ride.assignment?.assigned_at || null,
+        acknowledged_at: ride.assignment?.acknowledged_at || null,
+        assigned_by: assignerId
+          ? buildAssignedByPayload({
+              assignerId,
+              assignerDriver: identityMap.get(String(assignerId)),
+              organization,
+              creatorDriver: ride.created_by_driver_id ? identityMap.get(String(ride.created_by_driver_id)) : null,
+            })
+          : null,
+      },
+      publish: isNetwork
+        ? {
+            status: ride.publish?.status || 'none',
+            is_secure: ride.publish?.is_secure !== false,
+            total_fare: Number(ride.publish?.total_fare || 0),
+            driver_payout: Number(ride.publish?.driver_payout || 0),
+            owner_commission: Number(ride.publish?.owner_commission || 0),
+            expires_at: ride.publish?.expires_at || null,
+          }
+        : null,
+      escrow: isNetwork
+        ? {
+            state: ride.escrow?.state || 'none',
+            awaiting_payment: Boolean(ride.escrow?.awaiting_platform_payment_since),
+          }
+        : null,
+      assigned_driver:
+        driverDoc && !drivenByMe
+          ? {
+              id: String(driverDoc._id),
+              name: driverDoc.name || '',
+              phone: driverDoc.phone || '',
+              vehicleNumber: resolveRideVehicle(ride, driverDoc)?.number || '',
+            }
+          : null,
+      publisher: isNetwork
+        ? buildPublisherCard(ride.created_by_driver_id ? identityMap.get(String(ride.created_by_driver_id)) : null, organization)
+        : null,
+      amount_for_you: String(ride.publish?.taken_by_driver_id || '') === String(me) ? Number(ride.publish?.driver_payout || 0) : null,
+      vehicle: resolveRideVehicle(ride, driverDoc),
+      ...(applicants ? { applicants_count: applicants.count, requests: applicants.requests } : {}),
+      permissions: permissionsFor(ride, me, plan),
+    };
+  };
+};
+
+export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, page = 1, category = 'all', from, to, status = 'all', rideRole = 'driven', origin = 'all', q, includeCounts = true, explicitRole = false }) => {
   if (!['user', 'driver', 'owner'].includes(role)) {
     throw new ApiError(403, 'Only riders, drivers, and fleet owners can access ride history');
   }
 
+  // Drivers get the unified "All Rides" list (live + history, created/assigned).
+  if (role === 'driver') {
+    return listDriverRideHistory({ entityId, limit, page, category, from, to, status, rideRole, origin, q, includeCounts, explicitRole });
+  }
+
   // Parsed before any query so a bad range fails fast with 422, never as a 500.
   const dateRangeClause = buildHistoryDateRangeClause({ from, to });
+  const originClause = historyOriginClause(parseHistoryOrigin(origin));
 
-  const normalizedStatus = String(status || 'all').trim().toLowerCase();
+  // Riders and owners keep the history statuses; the driver-only live
+  // statuses are ignored rather than rejected, so shared clients don't break.
+  let normalizedStatus = String(status || 'all').trim().toLowerCase();
+  if (normalizedStatus === 'upcoming' || normalizedStatus === 'ongoing') normalizedStatus = 'all';
   if (!HISTORY_STATUSES.has(normalizedStatus)) {
     throw new ApiError(422, "status must be 'completed', 'cancelled' or 'all'", { status }, 'INVALID_STATUS');
   }
@@ -1736,6 +2204,9 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
   }
   if (roleClauses.length) {
     query.$and = [...(query.$and || []), ...roleClauses];
+  }
+  if (originClause) {
+    query.$and = [...(query.$and || []), originClause];
   }
   if (normalizedStatus !== 'all') {
     query.status = normalizedStatus;
@@ -1818,50 +2289,7 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
   ]);
 
   return {
-    results: rides.map((ride) => ({
-    rideId: String(ride._id),
-    deliveryId: ride.deliveryId?._id ? String(ride.deliveryId._id) : ride.deliveryId ? String(ride.deliveryId) : null,
-    type: ride.serviceType || 'ride',
-    serviceType: ride.serviceType || 'ride',
-    status: ride.status,
-    liveStatus: ride.liveStatus,
-    fare: ride.fare,
-    baseFare: Number(ride.baseFare || ride.fare || 0),
-    bookingMode: ride.bookingMode || 'normal',
-    biddingStatus: ride.biddingStatus || 'none',
-    bidStepAmount: Number(ride.bidStepAmount || DEFAULT_BID_STEP_AMOUNT),
-    bidFloorFare: Number(ride.bidFloorFare ?? ride.baseFare ?? ride.fare ?? 0),
-    userMaxBidFare: Number(ride.userMaxBidFare || ride.fare || 0),
-    bidCeilingMaxFare: Number(ride.bidCeilingMaxFare || ride.userMaxBidFare || ride.fare || 0),
-    acceptedBidId: ride.acceptedBidId ? String(ride.acceptedBidId) : null,
-    estimatedDistanceMeters: ride.estimatedDistanceMeters || 0,
-    estimatedDurationMinutes: ride.estimatedDurationMinutes || 0,
-    paymentMethod: ride.paymentMethod,
-    otp: ride.otp || '',
-    parcel: ride.deliveryId?.parcel || ride.parcel || null,
-    intercity: ride.intercity || null,
-    pricingSnapshot: ride.pricingSnapshot || null,
-    commissionAmount: ride.commissionAmount,
-    driverEarnings: ride.driverEarnings,
-    vehicleIconType: ride.vehicleIconType,
-    // Keep history responses light; giant data URLs can stall the activity screen.
-    vehicleIconUrl: String(ride.vehicleIconUrl || '').startsWith('data:') ? '' : (ride.vehicleIconUrl || ''),
-    pickupLocation: ride.pickupLocation,
-    pickupAddress: ride.pickupAddress || '',
-    dropLocation: ride.dropLocation,
-    dropAddress: ride.dropAddress || '',
-    scheduledAt: ride.scheduledAt || null,
-    acceptedAt: ride.acceptedAt,
-    arrivedAt: ride.arrivedAt,
-    startedAt: ride.startedAt,
-    completedAt: ride.completedAt,
-    feedback: ride.feedback || null,
-    createdAt: ride.createdAt,
-    updatedAt: ride.updatedAt,
-    user: role === 'driver' || role === 'owner' ? (ride.userId || null) : null,
-    driver: role === 'user' || role === 'owner' ? (ride.driverId || null) : null,
-    ...(role === 'driver' ? serializeDriverHistoryExtras(ride, entityId) : {}),
-    })),
+    results: rides.map((ride) => serializeHistoryItem(ride, { role, entityId })),
     pagination: {
       page: safePage,
       limit: safeLimit,

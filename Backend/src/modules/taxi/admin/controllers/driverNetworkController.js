@@ -62,7 +62,17 @@ export const updateNetworkSettingsController = asyncHandler(async (req, res) => 
   // create a setting nothing reads.
   for (const [key, value] of Object.entries(req.body || {})) {
     if (!(key in DEFAULT_DRIVER_NETWORK_SETTINGS)) continue;
-    next[key] = typeof DEFAULT_DRIVER_NETWORK_SETTINGS[key] === 'number' ? Number(value) : value;
+    const defaultValue = DEFAULT_DRIVER_NETWORK_SETTINGS[key];
+    if (typeof defaultValue === 'number') {
+      next[key] = Number(value);
+    } else if (typeof defaultValue === 'boolean') {
+      // A form posts "false"; stored as a string it would read as true.
+      next[key] = typeof value === 'boolean'
+        ? value
+        : !['false', '0', 'no', 'off', ''].includes(String(value).trim().toLowerCase());
+    } else {
+      next[key] = value;
+    }
   }
 
   await AdminBusinessSetting.updateOne(

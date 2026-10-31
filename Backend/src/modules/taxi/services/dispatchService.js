@@ -806,6 +806,15 @@ const releaseEscrowAfterCancel = async (ride, { penaltyFrom = null, reason = 'ri
   }
 };
 
+const closeListingAfterCancel = async (ride) => {
+  try {
+    const { closePublishedListingForCancelledRide } = await import('../driver/services/feedService.js');
+    await closePublishedListingForCancelledRide(ride);
+  } catch (error) {
+    console.error('[dispatchService] closing the published listing failed:', error.message);
+  }
+};
+
 export const cancelRideByAdmin = async (rideId) => {
   stopDispatchFlow(rideId);
 
@@ -852,6 +861,8 @@ export const cancelRideByAdmin = async (rideId) => {
   ]);
 
   await releaseEscrowAfterCancel(ride, { reason: 'cancelled_by_admin' });
+  // A published driver-created ride also leaves the feed, and its applicants are told.
+  await closeListingAfterCancel(ride);
   emitCustomerFeedEvent(ride, 'feed:customer:removed', { reason: 'CANCELLED' });
 
   emitToRoom(getUserRoom(ride.userId), 'rideCancelled', {
@@ -942,6 +953,8 @@ export const cancelRideByUser = async ({ rideId, userId }) => {
   }
 
   await releaseEscrowAfterCancel(ride, { reason: 'cancelled_by_user' });
+  // A published driver-created ride also leaves the feed, and its applicants are told.
+  await closeListingAfterCancel(ride);
   emitCustomerFeedEvent(ride, 'feed:customer:removed', { reason: 'CANCELLED' });
 
   emitToRoom(getUserRoom(ride.userId), 'rideCancelled', {

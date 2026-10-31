@@ -26,6 +26,7 @@ import {
 } from '../../services/networkNotificationService.js';
 import { applyDriverWalletAdjustment, getWalletSnapshot } from './walletService.js';
 import { buildPublisherCard, PUBLISHER_DRIVER_FIELDS } from './publisherCardService.js';
+import { driverDefaultVehicle, rideVehicleSetFields } from './rideVehicleService.js';
 
 const round2 = (value) => Math.round(Number(value || 0) * 100) / 100;
 
@@ -184,8 +185,34 @@ export const unpublishRide = async ({ driverId, rideId }) => {
     reason: 'UNPUBLISHED',
   });
   await closeLeadConversationsForRide(updated._id, 'UNPUBLISHED');
+  const { rejectPendingRequestsForRide } = await import('./rideRequestService.js');
+  await rejectPendingRequestsForRide({ ride: updated, reason: 'ride_cancelled' });
 
   return { unpublished: true };
+};
+
+/**
+ * Takes a ride off the feed when it is cancelled from anywhere (owner, admin,
+ * customer). The admin and customer paths used to leave `publish.status` open,
+ * so a cancelled ride stayed in the feed and could still be taken.
+ */
+export const closePublishedListingForCancelledRide = async (ride) => {
+  if (!ride?._id || ride.origin !== 'driver_created') return;
+
+  if (ride.publish?.status === 'open') {
+    await Ride.updateOne(
+      { _id: ride._id, 'publish.status': 'open' },
+      { $set: { 'publish.status': 'cancelled', 'publish.is_published': false } },
+    );
+    emitToRoom(getFeedRoom(ride.service_location_id), 'feed:driver:removed', {
+      rideId: String(ride._id),
+      reason: 'CANCELLED',
+    });
+  }
+
+  await closeLeadConversationsForRide(ride._id, 'CANCELLED');
+  const { rejectPendingRequestsForRide } = await import('./rideRequestService.js');
+  await rejectPendingRequestsForRide({ ride, reason: 'ride_cancelled' });
 };
 
 // A city can hold thousands of drivers; a publish must not turn into an
@@ -251,7 +278,15 @@ export const closeLeadConversationsForRide = async (rideId, reason = 'RIDE_TAKEN
   }
 };
 
-export const serializeFeedItem = (ride, { lead_type, publisher = null, distanceFromMeKm = null, routeMatch = null, contact = null, accept = null, vehicle = null, vehicle_mismatch = false } = {}) => ({
+export const serializeFeedItem = (ride, { lead_type, publisher = null, distanceFromMeKm = null, routeMatch = null, contact = null, accept = null, vehicle = null, vehicle_mismatch = false, request = null } = {}) => ({
+  // Published rides are requested, then the publisher approves (driver tab only).
+  ...(request
+    ? {
+        has_requested: Boolean(request.status),
+        my_request_status: request.status || null,
+        applicants_count: request.applicantsCount ?? 0,
+      }
+    : {}),
   id: String(ride._id),
   lead_type,
   pickup: {
@@ -321,6 +356,10 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
           origin: 'driver_created',
           'publish.status': 'open',
           'publish.expires_at': { $gt: now },
+          // A cancelled ride can be left with publish.status open by older
+          // data; never offer it.
+          status: RIDE_STATUS.SEARCHING,
+          driverId: null,
           created_by_driver_id: { $ne: new mongoose.Types.ObjectId(String(driverId)) },
         };
 
@@ -423,6 +462,20 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
   // catalogue entry is simply mismatched, still sees the work.
   const myVehicleTypeId = String(driver.vehicleTypeId || '');
 
+  // My request on each published ride, and how many others asked for it.
+  let myRequestStates = new Map();
+  let applicantsByRide = new Map();
+  let requiresApproval = false;
+  if (tab !== 'customer' && paged.length) {
+    const { loadApplicantsForRides, loadMyRequestStates } = await import('./rideRequestService.js');
+    const settings = await getDriverNetworkSettings();
+    requiresApproval = readBooleanSetting(settings.feed_requires_approval, true);
+    [myRequestStates, applicantsByRide] = await Promise.all([
+      loadMyRequestStates(driverId, paged.map((item) => item.ride)),
+      loadApplicantsForRides(paged.map((item) => item.ride)),
+    ]);
+  }
+
   const results = paged.map(({ ride, routeMatch, distanceFromMeKm }) => {
     const publisherDriver = publisherMap.get(String(ride.created_by_driver_id));
     const organization = ownerMap.get(String(ride.organization_owner_id));
@@ -446,10 +499,19 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
         fee: alreadyContacted ? 0 : acceptFee,
         hold_required: holdRequired,
         wallet_available: wallet.available,
+        // Published rides: request instead of accept; the publisher approves.
+        ...(tab !== 'customer' ? { requires_approval: requiresApproval } : {}),
       },
       vehicle_mismatch: Boolean(
         ride.vehicleTypeId && myVehicleTypeId && String(ride.vehicleTypeId) !== myVehicleTypeId,
       ),
+      request:
+        tab !== 'customer'
+          ? {
+              status: myRequestStates.get(String(ride._id)) || null,
+              applicantsCount: applicantsByRide.get(String(ride._id))?.count ?? 0,
+            }
+          : null,
     });
   });
 
@@ -478,10 +540,75 @@ export const acceptFeedRide = async ({ driverId, rideId }) => {
     : acceptCustomerLead({ driverId, ride });
 };
 
+/**
+ * The one guarded write that hands a published ride to `driverId`: used by the
+ * publisher approving a request and by the legacy instant accept. Returns null
+ * when the ride is no longer open (taken, expired, unpublished, cancelled).
+ *
+ * `status: searching` is part of the guard: an admin or customer cancel used
+ * to leave `publish.status` open, and taking such a ride brought it back.
+ */
+export const claimPublishedRide = async ({ ride, driverId, approvedByDriverId = null, session, vehicle = null }) => {
+  const now = new Date();
+  const assignedBy = approvedByDriverId || ride.created_by_driver_id;
+
+  return Ride.findOneAndUpdate(
+    {
+      _id: ride._id,
+      'publish.status': 'open',
+      driverId: null,
+      status: RIDE_STATUS.SEARCHING,
+      'publish.expires_at': { $gt: now },
+      ...(approvedByDriverId ? { created_by_driver_id: approvedByDriverId } : {}),
+    },
+    {
+      $set: {
+        'publish.status': 'taken',
+        'publish.taken_by_driver_id': driverId,
+        'publish.taken_at': now,
+        driverId,
+        status: RIDE_STATUS.ACCEPTED,
+        liveStatus: RIDE_LIVE_STATUS.ACCEPTED,
+        acceptedAt: now,
+        'assignment.mode': 'published',
+        'assignment.assigned_by_driver_id': assignedBy,
+        'assignment.assigned_at': now,
+        ...rideVehicleSetFields(vehicle),
+      },
+      $push: {
+        'assignment.history': {
+          driver_id: driverId,
+          action: 'assigned',
+          by_driver_id: assignedBy,
+          at: now,
+        },
+      },
+    },
+    { new: true, session },
+  );
+};
+
 const acceptPublishedRide = async ({ driverId, ride }) => {
   if (String(ride.created_by_driver_id) === String(driverId)) {
     throw new ApiError(409, 'You published this ride', null, 'RIDE_NOT_OPEN');
   }
+
+  // Published rides go to whoever the publisher approves (POST
+  // /feed/rides/:id/request). Old app builds still call accept: they get a
+  // clear error instead of silently skipping the publisher's approval.
+  const settings = await getDriverNetworkSettings();
+  if (readBooleanSetting(settings.feed_requires_approval, true)) {
+    throw new ApiError(
+      409,
+      'Send a request instead — the publisher approves who gets this ride.',
+      null,
+      'APPROVAL_REQUIRED',
+    );
+  }
+
+  const taker = await Driver.findById(driverId)
+    .select('vehicleNumber vehicleMake vehicleModel vehicleType vehicleColor assignedFleetVehicleId')
+    .lean();
 
   const session = await mongoose.startSession();
   let claimed = null;
@@ -489,38 +616,7 @@ const acceptPublishedRide = async ({ driverId, ride }) => {
   try {
     session.startTransaction();
 
-    const now = new Date();
-    claimed = await Ride.findOneAndUpdate(
-      {
-        _id: ride._id,
-        'publish.status': 'open',
-        driverId: null,
-        'publish.expires_at': { $gt: now },
-      },
-      {
-        $set: {
-          'publish.status': 'taken',
-          'publish.taken_by_driver_id': driverId,
-          'publish.taken_at': now,
-          driverId,
-          status: RIDE_STATUS.ACCEPTED,
-          liveStatus: RIDE_LIVE_STATUS.ACCEPTED,
-          acceptedAt: now,
-          'assignment.mode': 'published',
-          'assignment.assigned_by_driver_id': ride.created_by_driver_id,
-          'assignment.assigned_at': now,
-        },
-        $push: {
-          'assignment.history': {
-            driver_id: driverId,
-            action: 'assigned',
-            by_driver_id: ride.created_by_driver_id,
-            at: now,
-          },
-        },
-      },
-      { new: true, session },
-    );
+    claimed = await claimPublishedRide({ ride, driverId, session, vehicle: driverDefaultVehicle(taker) });
 
     if (!claimed) {
       throw new ApiError(409, 'Another driver just took this ride', null, 'RIDE_ALREADY_TAKEN');
@@ -568,9 +664,20 @@ const acceptPublishedRide = async ({ driverId, ride }) => {
     }),
   );
   await afterCommit('closing lead conversations', () => closeLeadConversationsForRide(claimed._id, 'RIDE_TAKEN'));
+  await afterCommit('rejecting pending requests', async () => {
+    const { rejectPendingRequestsForRide } = await import('./rideRequestService.js');
+    await rejectPendingRequestsForRide({ ride: claimed, reason: 'ride_taken' });
+  });
   await afterCommit('assignment notification', () => notifyNetworkAssignment(claimed));
 
   return { accepted: true, rideId: String(claimed._id), escrow: secure ? 'held' : 'none', is_secure: secure };
+};
+
+/** Admin settings are stored as sent, so a boolean may arrive as "false". */
+export const readBooleanSetting = (value, fallback) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  return !['false', '0', 'no', 'off'].includes(String(value).trim().toLowerCase());
 };
 
 const acceptCustomerLead = async ({ driverId, ride }) => {
@@ -636,28 +743,38 @@ const acceptCustomerLead = async ({ driverId, ride }) => {
 /** Sweeps leads whose window has closed so the feed never shows a dead ride. */
 export const expirePublishedRides = async () => {
   const now = new Date();
-  const expired = await Ride.find({
+  const candidates = await Ride.find({
     'publish.status': 'open',
     'publish.expires_at': { $lte: now },
   })
-    .select('_id service_location_id created_by_driver_id')
+    .select('_id service_location_id created_by_driver_id pickupAddress dropAddress publish.published_at')
     .lean();
 
-  if (!expired.length) return { expired: 0 };
+  if (!candidates.length) return { expired: 0 };
 
-  await Ride.updateMany(
-    { _id: { $in: expired.map((ride) => ride._id) } },
-    { $set: { 'publish.status': 'expired', 'publish.is_published': false, 'assignment.mode': 'dispatch' } },
-  );
+  const { rejectPendingRequestsForRide } = await import('./rideRequestService.js');
+  let expiredCount = 0;
 
-  for (const ride of expired) {
+  for (const ride of candidates) {
+    // Guarded per ride: an unpublish + republish between the read above and
+    // this write must not expire the fresh listing.
+    const result = await Ride.updateOne(
+      { _id: ride._id, 'publish.status': 'open', 'publish.expires_at': { $lte: now } },
+      { $set: { 'publish.status': 'expired', 'publish.is_published': false, 'assignment.mode': 'dispatch' } },
+    );
+    if (!result.modifiedCount) continue;
+    expiredCount += 1;
+
     emitToRoom(getFeedRoom(ride.service_location_id), 'feed:driver:removed', {
       rideId: String(ride._id),
       reason: 'EXPIRED',
     });
     await notifyPublishedRideExpired(ride);
     await closeLeadConversationsForRide(ride._id, 'EXPIRED');
+    await rejectPendingRequestsForRide({ ride, reason: 'ride_expired' }).catch((error) =>
+      console.error('[feedService] rejecting requests on expiry failed:', error.message),
+    );
   }
 
-  return { expired: expired.length };
+  return { expired: expiredCount };
 };
