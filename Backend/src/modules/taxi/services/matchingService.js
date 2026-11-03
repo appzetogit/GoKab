@@ -241,7 +241,7 @@ const findDriversForZone = async ({
   // balance — without it every driver reads as balance 0 and the tier's debt
   // limit silently never applies.
   const selectedFields =
-    'name phone socketId vehicleTypeId vehicleType vehicleIconType vehicleNumber vehicleColor vehicleMake vehicleModel rating location zoneId service_location_id isOnline isOnRide routeBooking owner_id assignedFleetVehicleId wallet route_mode active_route_id driver_category';
+    'name phone socketId vehicleTypeId vehicleType vehicleIconType vehicleNumber vehicleColor vehicleMake vehicleModel rating location zoneId service_location_id isOnline isOnRide routeBooking owner_id is_self_drive_owner assignedFleetVehicleId wallet route_mode active_route_id driver_category';
 
   // Staleness only matters for drivers matched on their *live* position. A
   // route-booking driver is matched on their saved anchor point, which never

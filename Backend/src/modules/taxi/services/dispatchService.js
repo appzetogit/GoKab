@@ -7,6 +7,7 @@ import { Driver } from '../driver/models/Driver.js';
 import { WalletTransaction } from '../driver/models/WalletTransaction.js';
 import { applyDriverWalletAdjustment } from '../driver/services/walletService.js';
 import { matchDrivers, findZoneByPickup } from './matchingService.js';
+import { categoryOf, getTierPhases, phaseCategories, withoutTeamMembers } from './tierPhaseService.js';
 import {
   RIDE_LIVE_STATUS,
   RIDE_STATUS,
@@ -1225,6 +1226,103 @@ const getAttemptRadiusMeters = (baseDistanceMeters, attemptIndex) => {
   return Math.round(safeBaseDistance * growthMultiplier);
 };
 
+/**
+ * One phase of tiered dispatch. Every driver of the plans allowed in this phase
+ * is alerted at once (and the ride shows on their feed); drivers alerted in
+ * earlier phases stay free to accept. A phase nobody can serve is skipped at
+ * once, so an instant ride never waits minutes for plans that are not around.
+ */
+const dispatchTierPhase = async ({ ride, rideId, phaseIndex, phases, dispatchConfig }) => {
+  const phase = phases[phaseIndex];
+  const radius = getAttemptRadiusMeters(
+    dispatchConfig.baseDistanceMeters || dispatchConfig.maxDistanceMeters,
+    phaseIndex,
+  );
+  const dispatchVehicleTypeIds = getDispatchVehicleTypeIds(ride);
+  const dispatchState = getDispatchState(rideId);
+
+  await Ride.updateOne(
+    { _id: rideId, status: RIDE_STATUS.SEARCHING },
+    { $set: { tierPhaseIndex: phaseIndex, ...(phaseIndex === 0 ? { dispatchStartedAt: new Date() } : {}) } },
+  );
+
+  const { zone, drivers, searchRadiusMeters } = await matchDrivers(ride.pickupLocation.coordinates, {
+    maxDistance: radius,
+    vehicleTypeId: ride.vehicleTypeId,
+    vehicleTypeIds: dispatchVehicleTypeIds,
+    rideModuleCode: getRideModuleCode(ride),
+    paymentMethod: ride.paymentMethod,
+    dropCoords: ride.dropLocation?.coordinates || null,
+  });
+  const effectiveRadius = Number.isFinite(searchRadiusMeters) && searchRadiusMeters > 0
+    ? searchRadiusMeters
+    : radius;
+
+  const rejectedDriverIds = new Set(dispatchState.rejectedDriverIds);
+  const notifiedDriverIds = new Set(dispatchState.notifiedDriverIds);
+  const allowed = phaseCategories(phases, phaseIndex);
+  const targetDrivers = (await withoutTeamMembers(drivers)).filter((driver) => {
+    const driverId = String(driver._id);
+    return allowed.includes(categoryOf(driver)) && !rejectedDriverIds.has(driverId) && !notifiedDriverIds.has(driverId);
+  });
+  const nextNotifiedDriverIds = [
+    ...dispatchState.notifiedDriverIds,
+    ...targetDrivers.map((driver) => String(driver._id)),
+  ];
+
+  saveDispatchState(rideId, {
+    radiusIndex: phaseIndex,
+    driverIds: nextNotifiedDriverIds,
+    notifiedDriverIds: nextNotifiedDriverIds,
+    timer: null,
+  });
+
+  if (targetDrivers.length) {
+    // The card rings for a minute at most; the ride stays on the feed after that.
+    const remainingSeconds = phases.slice(phaseIndex).reduce((sum, item) => sum + item.minutes * 60, 0);
+    await emitRideRequestToDrivers({
+      ride,
+      targetDrivers,
+      zone,
+      effectiveRadius,
+      dispatchVehicleTypeIds,
+      dispatchConfig: {
+        ...dispatchConfig,
+        dispatchType: 'broadcast',
+        retryWindowSeconds: Math.min(remainingSeconds, 60),
+        maxAttempts: phases.length,
+      },
+      attemptIndex: phaseIndex,
+    });
+  }
+
+  emitToRoom(getUserRoom(ride.userId), 'rideSearchUpdate', {
+    rideId: String(ride._id),
+    status: ride.status,
+    radius: effectiveRadius,
+    dispatchType: 'broadcast',
+    attempt: phaseIndex + 1,
+    maxAttempts: phases.length,
+    matchedDrivers: targetDrivers.length,
+    totalNotifiedDrivers: nextNotifiedDriverIds.length,
+  });
+
+  const isLast = phaseIndex >= phases.length - 1;
+  const waitMs = targetDrivers.length || isLast ? phase.minutes * 60 * 1000 : 0;
+
+  if (isLast) {
+    const timer = setTimeout(() => {
+      closeRideAsUnmatched(rideId)
+        .catch((error) => console.error('Failed to mark ride unmatched', error))
+        .finally(() => stopDispatchFlow(rideId));
+    }, waitMs);
+    saveDispatchState(rideId, { timer });
+    return;
+  }
+
+  scheduleNextAttempt(rideId, phaseIndex + 1, waitMs);
+};
+
 const dispatchAttempt = async (rideId, attemptIndex = 0) => {
   const ride = await Ride.findById(rideId).populate('userId', 'name phone countryCode');
 
@@ -1235,6 +1333,11 @@ const dispatchAttempt = async (rideId, attemptIndex = 0) => {
 
   try {
     const dispatchConfig = await resolveTransportDispatchConfig();
+    const tierPhases = String(ride.bookingMode || 'normal') === 'normal' ? await getTierPhases() : null;
+    if (tierPhases) {
+      await dispatchTierPhase({ ride, rideId, phaseIndex: attemptIndex, phases: tierPhases, dispatchConfig });
+      return;
+    }
     const radius = getAttemptRadiusMeters(
       dispatchConfig.baseDistanceMeters || dispatchConfig.maxDistanceMeters,
       attemptIndex,
@@ -1391,7 +1494,7 @@ export const notifyLateAvailableDriver = async (driverId) => {
   }
 
   const driver = await Driver.findById(driverId)
-    .select('_id isOnline isOnRide wallet location zoneId vehicleTypeId vehicleType vehicleIconType');
+    .select('_id isOnline isOnRide wallet location zoneId vehicleTypeId vehicleType vehicleIconType driver_category owner_id is_self_drive_owner');
 
   if (!driver?.isOnline || driver?.isOnRide || driver?.wallet?.isBlocked || !driver?.location?.coordinates?.length) {
     return;
@@ -1413,6 +1516,18 @@ export const notifyLateAvailableDriver = async (driverId) => {
       dispatchState.notifiedDriverIds.includes(driverKey) ||
       dispatchState.rejectedDriverIds.includes(driverKey)
     ) {
+      continue;
+    }
+
+    // Same rules as the phased dispatch: no team members, and only plans the
+    // ride is currently open to.
+    if (ride.tierPhaseIndex != null) {
+      const phases = await getTierPhases();
+      if (phases && !phaseCategories(phases, ride.tierPhaseIndex).includes(categoryOf(driver))) {
+        continue;
+      }
+    }
+    if ((await withoutTeamMembers([driver])).length === 0) {
       continue;
     }
 

@@ -53,7 +53,7 @@ const toObjectId = (value, field) => {
  * has no ride document yet, so it passes those two fields from the raw
  * payload instead of a real `Ride`.
  */
-const validateAssignTarget = async ({ permissions, driverId, targetDriverId, ride, excludeRideId = null }) => {
+export const validateAssignTarget = async ({ permissions, driverId, targetDriverId, ride, excludeRideId = null }) => {
   const isSelfAssign = String(targetDriverId) === String(driverId);
 
   if (!isSelfAssign && !permissions.can_manage_fleet && !permissions.can_use_contacts) {

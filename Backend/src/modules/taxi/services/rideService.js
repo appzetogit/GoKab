@@ -21,6 +21,7 @@ import { applyPromoToRideInTransaction, releasePromoForCancelledRide } from './p
 import { findZoneByPickup } from './matchingService.js';
 import { getTipSettings } from './appSettingsService.js';
 import { getBidRideSettings } from './transportSettingsService.js';
+import { assertDriverMayTakeCustomerRide } from './tierPhaseService.js';
 import { resolveRideVehicle, withRideVehicle } from '../driver/services/rideVehicleService.js';
 
 // Booking a ride releases whatever the rider had queued in `currentRideId`, but
@@ -2359,6 +2360,7 @@ export const acceptRideAssignment = async ({ rideId, driverId }) => {
       }
 
       await ensureDriverWalletCanAcceptRide(driver, { session });
+      await assertDriverMayTakeCustomerRide(ride, driver);
 
       ride.driverId = driver._id;
       ride.status = RIDE_STATUS.ACCEPTED;

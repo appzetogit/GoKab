@@ -20,6 +20,7 @@ import {
   notifyRideAccepted,
 } from '../../services/dispatchService.js';
 import { acceptRideAssignment, isRideScheduledForFuture } from '../../services/rideService.js';
+import { categoryOf, getTierPhases, isRideOpenToCategory, withoutTeamMembers } from '../../services/tierPhaseService.js';
 import { holdForPublishedRide } from './escrowService.js';
 import {
   notifyNetworkAssignment,
@@ -379,10 +380,20 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
 
   // Over-fetch, because the corridor filter below runs in JS and can reject a
   // large share of a page.
-  const candidates = await Ride.find(baseFilter)
+  let candidates = await Ride.find(baseFilter)
     .sort({ createdAt: -1 })
     .limit(safeLimit * safePage * 3)
     .lean();
+
+  // Customer bookings follow the plan phases, and a team member never sees them:
+  // their lead takes the ride and assigns it.
+  if (tab === 'customer') {
+    const phases = await getTierPhases();
+    const isTeamMember = (await withoutTeamMembers([driver])).length === 0;
+    candidates = isTeamMember
+      ? []
+      : candidates.filter((ride) => isRideOpenToCategory(ride, categoryOf(driver), phases));
+  }
 
   // Riders' advertised trips ride along on the customer tab, until pickup time.
   if (tab === 'customer') {

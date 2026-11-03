@@ -81,6 +81,10 @@ const rideSchema = new mongoose.Schema(
     },
     // How many stops the rider expects on the way (count only, no addresses).
     stopCount: { type: Number, default: 0, min: 0, max: 3 },
+    // Phased dispatch: when the search started and which phase it is in now.
+    // null means the ride is not phase-gated (scheduled for later, bidding).
+    dispatchStartedAt: { type: Date, default: null },
+    tierPhaseIndex: { type: Number, default: null },
     // Why and by whom the ride was cancelled (rider's pick from the cancel sheet).
     cancellation: {
       by: { type: String, default: '', trim: true },

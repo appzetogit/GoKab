@@ -403,8 +403,14 @@ export const settleCompletedRideWallet = async ({ rideId }) => {
       return null;
     }
 
+    // A customer ride the lead handed to a team driver settles on the lead's
+    // wallet: they hold the contract, and how they pay their driver is their own.
+    const handedOver = ride.origin === 'customer_app'
+      && ride.assignment?.target_type === 'fleet'
+      && ride.assignment?.assigned_by_driver_id;
+
     const result = await applyDriverWalletAdjustment({
-      driverId: ride.driverId,
+      driverId: handedOver ? ride.assignment.assigned_by_driver_id : ride.driverId,
       rideId: ride._id,
       amount,
       type,
