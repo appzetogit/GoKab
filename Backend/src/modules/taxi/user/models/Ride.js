@@ -62,10 +62,15 @@ const rideSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    // Never a data: URL. The vehicle's own icon is stored as base64 on the
+    // vehicle record, and copying it onto the ride made every ride response
+    // (polled every 3 seconds by both apps) about 320 KB.
     vehicleIconUrl: {
       type: String,
       default: '',
       trim: true,
+      set: (value) => (typeof value === 'string' && value.startsWith('data:') ? '' : value),
+      get: (value) => (typeof value === 'string' && value.startsWith('data:') ? '' : value),
     },
     deliveryId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -957,7 +962,18 @@ const rideSchema = new mongoose.Schema(
       },
     },
   },
-  { timestamps: true },
+  {
+    timestamps: true,
+    toJSON: {
+      // Rides saved before the setter above still carry the base64 icon.
+      transform: (_doc, ret) => {
+        if (typeof ret.vehicleIconUrl === 'string' && ret.vehicleIconUrl.startsWith('data:')) {
+          ret.vehicleIconUrl = '';
+        }
+        return ret;
+      },
+    },
+  },
 );
 
 rideSchema.index({ userId: 1, createdAt: -1 });
