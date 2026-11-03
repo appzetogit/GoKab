@@ -8066,12 +8066,15 @@ export const addOwnerVehicle = async (req, res) => {
   }
 
   if (driverPermissions) {
-    const maxVehicles = Math.max(0, Number(driverPermissions.tier?.max_vehicles ?? 0));
+    const maxVehicles = Math.max(0, Number(driverPermissions.max_vehicles ?? 0));
     if (maxVehicles > 0) {
-      const usedVehicles = await FleetVehicle.countDocuments({
-        owner_id: owner._id,
-        active: true,
-      });
+      // The vehicle the driver registered with counts too: it lives on the driver,
+      // not in the fleet list, unless it was also added there.
+      const fleetPlates = (
+        await FleetVehicle.find({ owner_id: owner._id, active: true }).select('license_plate_number').lean()
+      ).map((item) => String(item.license_plate_number || '').toUpperCase().replace(/\s+/g, ''));
+      const primaryPlate = String(driverPermissions.driver?.vehicleNumber || '').toUpperCase().replace(/\s+/g, '');
+      const usedVehicles = fleetPlates.length + (primaryPlate && !fleetPlates.includes(primaryPlate) ? 1 : 0);
       if (usedVehicles >= maxVehicles) {
         throw new ApiError(
           403,
@@ -8316,7 +8319,7 @@ export const getOwnerFleetVehicles = async (req, res) => {
   if (req.auth?.role === "driver") {
     const { getDriverPermissions } = await import("../../services/driverCategoryService.js");
     const permissions = await getDriverPermissions(req.auth.sub);
-    const maxVehicles = Math.max(0, Number(permissions.tier?.max_vehicles ?? 0));
+    const maxVehicles = Math.max(0, Number(permissions.max_vehicles ?? 0));
     maxVehiclesAllowed = maxVehicles > 0 ? maxVehicles : null;
   }
 

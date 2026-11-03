@@ -229,6 +229,13 @@ export const releasePrimeSlot = async ({ driverId, session = null }) => {
   return { released: (result?.deletedCount || 0) > 0 };
 };
 
+/** Vehicles a plan may hold in total, the registration vehicle included. 0 = unlimited. */
+export const effectiveMaxVehicles = (tier) => {
+  const configured = Math.max(0, Number(tier?.max_vehicles ?? 0));
+  if (configured > 0) return configured;
+  return String(tier?.driver_category || 'lower') === 'lower' ? 1 : 0;
+};
+
 export const resolveTierPermissions = (tier) => ({
   can_create_rides: Boolean(tier?.can_create_rides),
   can_publish_rides: Boolean(tier?.can_publish_rides),
@@ -240,7 +247,7 @@ export const resolveTierPermissions = (tier) => ({
   requires_commercial_and_private: Boolean(tier?.requires_commercial_and_private),
   requires_commercial_at_purchase: Boolean(tier?.requires_commercial_at_purchase),
   max_routes: Math.max(0, Number(tier?.max_routes ?? 0)),
-  max_vehicles: Math.max(0, Number(tier?.max_vehicles ?? 0)),
+  max_vehicles: effectiveMaxVehicles(tier),
   max_fleet_drivers: Math.max(0, Number(tier?.max_fleet_drivers ?? 0)),
   customer_lead_contact_fee: Math.max(0, Number(tier?.customer_lead_contact_fee ?? 0)),
   driver_lead_contact_fee: Math.max(0, Number(tier?.driver_lead_contact_fee ?? 0)),
