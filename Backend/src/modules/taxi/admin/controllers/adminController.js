@@ -1022,10 +1022,35 @@ export const getSetPrices = asyncHandler(async (req, res) => {
   res.json({ success: true, ...data });
 });
 
-/** Public (rider app): the active fare tariffs, no admin scoping. */
+const PUBLIC_TARIFF_FIELDS = [
+  'base_price', 'base_distance', 'price_per_distance', 'time_price', 'waiting_charge',
+  'free_waiting_before', 'free_waiting_after', 'service_tax',
+  'enable_outstation_ride', 'support_outstation', 'outstation_base_price', 'outstation_base_distance',
+  'outstation_price_per_distance', 'outstation_time_price',
+  'enable_airport_ride', 'airport_surge', 'support_airport_fee',
+];
+const idOf = (ref) => (ref ? String(ref._id || ref.id || ref) : null);
+
+/**
+ * Public (rider app): the active fare tariffs, no admin scoping. `results` of
+ * listSetPrices has no rates, so they come from the raw rows (`paginator.data`,
+ * which also carries heavy populated vehicle art that is deliberately left out).
+ */
 export const getPublicSetPrices = asyncHandler(async (req, res) => {
-  const { results } = await adminService.listSetPrices({ scope: String(req.query?.scope || 'ride') });
-  res.json({ success: true, data: { results: results.filter((item) => Number(item.active) === 1) } });
+  const { results, paginator } = await adminService.listSetPrices({ scope: String(req.query?.scope || 'ride') });
+  const raw = new Map(paginator.data.map((item) => [String(item.id), item]));
+  const rows = results
+    .filter((item) => Number(item.active) === 1)
+    .map((item) => {
+      const source = raw.get(String(item.id)) || {};
+      return {
+        ...item,
+        zone_id: idOf(source.zone_id),
+        service_location_id: idOf(source.service_location_id),
+        ...Object.fromEntries(PUBLIC_TARIFF_FIELDS.map((key) => [key, source[key]])),
+      };
+    });
+  res.json({ success: true, data: { results: rows } });
 });
 export const createSetPrice = asyncHandler(async (req, res) =>
   ok(res, await adminService.createSetPrice(req.body, req.auth?.admin)),
