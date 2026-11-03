@@ -4,6 +4,13 @@ import { ApiError } from '../../../../utils/ApiError.js';
 import { asyncHandler } from '../../../../utils/asyncHandler.js';
 import { authenticate } from '../../middlewares/authMiddleware.js';
 import {
+  cancelUserBooking,
+  createBooking,
+  listDriverBookings,
+  listUserBookings,
+  respondToBooking,
+} from '../services/offerBookingService.js';
+import {
   createOfferWithOrder,
   deactivateDriverOffer,
   getPricingForAdmin,
@@ -73,6 +80,33 @@ offerModuleRouter.get(
       }),
     });
   }),
+);
+
+// ---- booking requests ----
+offerModuleRouter.post(
+  '/users/offers/:id/book',
+  authenticate(['user']),
+  asyncHandler(async (req, res) => ok(res, await createBooking({ userId: driverId(req), offerId: req.params.id, input: req.body }))),
+);
+offerModuleRouter.get(
+  '/users/offers/bookings/mine',
+  authenticate(['user']),
+  asyncHandler(async (req, res) => ok(res, { results: await listUserBookings(driverId(req)) })),
+);
+offerModuleRouter.patch(
+  '/users/offers/bookings/:id/cancel',
+  authenticate(['user']),
+  asyncHandler(async (req, res) => ok(res, await cancelUserBooking({ userId: driverId(req), bookingId: req.params.id }))),
+);
+offerModuleRouter.get(
+  '/drivers/offers/bookings',
+  authenticate(['driver']),
+  asyncHandler(async (req, res) => ok(res, { results: await listDriverBookings({ driverId: driverId(req), status: String(req.query.status || '') }) })),
+);
+offerModuleRouter.patch(
+  '/drivers/offers/bookings/:id',
+  authenticate(['driver']),
+  asyncHandler(async (req, res) => ok(res, await respondToBooking({ driverId: driverId(req), bookingId: req.params.id, status: req.body?.status }))),
 );
 
 // ---- admin ----
