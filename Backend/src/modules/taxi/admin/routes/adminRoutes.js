@@ -4,6 +4,10 @@ import {
   approveOwner,
   approveOwnerSignupFromDriver,
   createAirport,
+  createRailwayStation,
+  deleteRailwayStation,
+  getRailwayStations,
+  updateRailwayStation,
   createAdminAccount,
   createAdminBusBooking,
   createBusService,
@@ -380,6 +384,10 @@ adminRouter.get('/admin/airports', getAirports);
 adminRouter.post('/admin/airports', createAirport);
 adminRouter.patch('/admin/airports/:id', updateAirport);
 adminRouter.delete('/admin/airports/:id', deleteAirport);
+adminRouter.get('/admin/railway-stations', getRailwayStations);
+adminRouter.post('/admin/railway-stations', createRailwayStation);
+adminRouter.patch('/admin/railway-stations/:id', updateRailwayStation);
+adminRouter.delete('/admin/railway-stations/:id', deleteRailwayStation);
 adminRouter.get('/admin/bus-services', getBusServices);
 adminRouter.post('/admin/bus-services', createBusService);
 adminRouter.patch('/admin/bus-services/:id', updateBusService);

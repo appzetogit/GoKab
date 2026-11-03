@@ -1049,6 +1049,20 @@ export const deleteAirport = asyncHandler(async (req, res) => {
   ok(res, { deleted: true });
 });
 
+export const getRailwayStations = asyncHandler(async (req, res) =>
+  ok(res, { railway_stations: await adminService.listRailwayStations(req.auth?.admin) }),
+);
+export const createRailwayStation = asyncHandler(async (req, res) =>
+  ok(res, await adminService.createRailwayStation(req.body, req.auth?.admin)),
+);
+export const updateRailwayStation = asyncHandler(async (req, res) =>
+  ok(res, await adminService.updateRailwayStation(req.params.id, req.body, req.auth?.admin)),
+);
+export const deleteRailwayStation = asyncHandler(async (req, res) => {
+  await adminService.deleteRailwayStation(req.params.id, req.auth?.admin);
+  ok(res, { deleted: true });
+});
+
 export const getBusServices = asyncHandler(async (_req, res) =>
   ok(res, { results: await adminService.listBusServices() }),
 );

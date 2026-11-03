@@ -14,6 +14,7 @@ import { AdminAppSetting } from '../models/AdminAppSetting.js';
 import { createDefaultBusinessSettings } from '../data/defaultBusinessSettings.js';
 import { createDefaultAppSettings } from '../data/defaultAppSettings.js';
 import { Airport } from '../models/Airport.js';
+import { RailwayStation } from '../models/RailwayStation.js';
 import { BusService } from '../models/BusService.js';
 import { DriverNeededDocument } from '../models/DriverNeededDocument.js';
 import { GoodsType } from '../models/GoodsType.js';
@@ -2162,6 +2163,27 @@ const serializeAirport = (item) => ({
     : [],
   airport_surge: Number(item.airport_surge ?? 0),
   support_airport_fee: Number(item.support_airport_fee ?? 0),
+  status: item.status || (item.active === false ? 'inactive' : 'active'),
+  active: item.active !== false,
+  createdAt: item.createdAt,
+  updatedAt: item.updatedAt,
+});
+
+const serializeRailwayStation = (item) => ({
+  _id: item._id,
+  id: item._id,
+  name: item.name || '',
+  code: item.code || '',
+  service_location_id: item.service_location_id
+    ? {
+      _id: item.service_location_id._id || item.service_location_id,
+      name: item.service_location_id.service_location_name || item.service_location_id.name || '',
+      country: item.service_location_id.country || '',
+    }
+    : null,
+  address: item.address || '',
+  latitude: item.latitude,
+  longitude: item.longitude,
   status: item.status || (item.active === false ? 'inactive' : 'active'),
   active: item.active !== false,
   createdAt: item.createdAt,
@@ -8418,6 +8440,98 @@ export const updateServiceStore = async (id, payload, currentAdmin = null) => {
     }
     const item = await Airport.findByIdAndDelete(id);
     if (!item) throw new ApiError(404, 'Airport not found');
+    return true;
+  };
+
+  const populateRailwayStation = (id) =>
+    RailwayStation.findById(id).populate('service_location_id', 'name service_location_name country').lean();
+
+  export const listRailwayStations = async (currentAdmin = null) => {
+    if (currentAdmin) {
+      // ponytail: shares the airports permission; add a dedicated key if roles must differ.
+      assertAdminPermission(currentAdmin, 'airports.view', 'airports');
+    }
+    const query = currentAdmin ? buildServiceLocationScopeQuery(currentAdmin) : {};
+    const items = await RailwayStation.find(query)
+      .populate('service_location_id', 'name service_location_name country')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return items.map(serializeRailwayStation);
+  };
+
+  export const createRailwayStation = async (payload, currentAdmin = null) => {
+    if (!payload.name?.trim()) {
+      throw new ApiError(400, 'Railway station name is required');
+    }
+    if (!payload.service_location_id) {
+      throw new ApiError(400, 'Service location is required');
+    }
+    if (currentAdmin) {
+      assertAdminPermission(currentAdmin, 'airports.view', 'airports');
+      assertServiceLocationAccess(currentAdmin, payload.service_location_id);
+    }
+
+    const latitude = toNullableNumber(payload.latitude);
+    const longitude = toNullableNumber(payload.longitude);
+    const status = payload.status || (normalizeBoolean(payload.active ?? true) ? 'active' : 'inactive');
+
+    const item = await RailwayStation.create({
+      name: String(payload.name).trim(),
+      code: String(payload.code || '').trim().toUpperCase(),
+      service_location_id: toObjectId(payload.service_location_id),
+      address: String(payload.address || '').trim(),
+      latitude,
+      longitude,
+      location: latitude !== null && longitude !== null ? { type: 'Point', coordinates: [longitude, latitude] } : undefined,
+      status,
+      active: status === 'active',
+    });
+
+    return serializeRailwayStation(await populateRailwayStation(item._id));
+  };
+
+  export const updateRailwayStation = async (id, payload, currentAdmin = null) => {
+    const item = await RailwayStation.findById(id);
+    if (!item) throw new ApiError(404, 'Railway station not found');
+    if (currentAdmin) {
+      assertAdminPermission(currentAdmin, 'airports.view', 'airports');
+      assertServiceLocationAccess(currentAdmin, item.service_location_id);
+    }
+
+    if (payload.name !== undefined) item.name = String(payload.name || '').trim();
+    if (payload.code !== undefined) item.code = String(payload.code || '').trim().toUpperCase();
+    if (payload.service_location_id !== undefined) {
+      if (currentAdmin && payload.service_location_id) {
+        assertServiceLocationAccess(currentAdmin, payload.service_location_id);
+      }
+      item.service_location_id = payload.service_location_id ? toObjectId(payload.service_location_id) : null;
+    }
+    if (payload.address !== undefined) item.address = String(payload.address || '').trim();
+    if (payload.latitude !== undefined) item.latitude = toNullableNumber(payload.latitude);
+    if (payload.longitude !== undefined) item.longitude = toNullableNumber(payload.longitude);
+    if (payload.status !== undefined || payload.active !== undefined) {
+      item.status = payload.status || (normalizeBoolean(payload.active) ? 'active' : 'inactive');
+      item.active = item.status === 'active';
+    }
+
+    item.location =
+      item.latitude !== null && item.longitude !== null
+        ? { type: 'Point', coordinates: [item.longitude, item.latitude] }
+        : undefined;
+
+    await item.save();
+    return serializeRailwayStation(await populateRailwayStation(item._id));
+  };
+
+  export const deleteRailwayStation = async (id, currentAdmin = null) => {
+    const existing = await RailwayStation.findById(id).select('service_location_id').lean();
+    if (!existing) throw new ApiError(404, 'Railway station not found');
+    if (currentAdmin) {
+      assertAdminPermission(currentAdmin, 'airports.view', 'airports');
+      assertServiceLocationAccess(currentAdmin, existing.service_location_id);
+    }
+    await RailwayStation.findByIdAndDelete(id);
     return true;
   };
 

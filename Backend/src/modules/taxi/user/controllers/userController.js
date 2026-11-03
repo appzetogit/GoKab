@@ -31,6 +31,7 @@ import { RentalVehicleType } from '../../admin/models/RentalVehicleType.js';
 import { ServiceStore } from '../../admin/models/ServiceStore.js';
 import { SetPrice } from '../../admin/models/SetPrice.js';
 import { Airport } from '../../admin/models/Airport.js';
+import { RailwayStation } from '../../admin/models/RailwayStation.js';
 import { applyDriverWalletAdjustment } from '../../driver/services/walletService.js';
 import { assertNoOutstandingUserDues, emitToDriver } from '../../services/dispatchService.js';
 import { sendPushNotificationToEntities } from '../../services/pushNotificationService.js';
@@ -247,6 +248,35 @@ export const listPublicAirports = async (req, res) => {
         zone_id: airport.zone_id || null,
         status: airport.status || 'active',
         active: airport.active !== false,
+      })),
+    },
+  });
+};
+
+export const listPublicRailwayStations = async (req, res) => {
+  const requestedServiceLocationId = String(req.query?.service_location_id || '').trim();
+  const query = { active: { $ne: false }, status: 'active' };
+
+  if (requestedServiceLocationId && mongoose.Types.ObjectId.isValid(requestedServiceLocationId)) {
+    query.service_location_id = new mongoose.Types.ObjectId(requestedServiceLocationId);
+  }
+
+  const results = await RailwayStation.find(query).sort({ name: 1 }).lean();
+
+  res.json({
+    success: true,
+    data: {
+      results: results.map((station) => ({
+        _id: station._id,
+        id: station._id,
+        name: station.name || '',
+        code: station.code || '',
+        address: station.address || '',
+        latitude: station.latitude ?? null,
+        longitude: station.longitude ?? null,
+        service_location_id: station.service_location_id || null,
+        status: station.status || 'active',
+        active: station.active !== false,
       })),
     },
   });

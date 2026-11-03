@@ -232,6 +232,7 @@ const AdminServiceLocation = lazy(() => import('./modules/admin/pages/price-mana
 const AdminServiceStores = lazy(() => import('./modules/admin/pages/price-management/ServiceStores'));
 const AdminZoneManagement = lazy(() => import('./modules/admin/pages/price-management/ZoneManagement'));
 const AdminAirportManagement = lazy(() => import('./modules/admin/pages/price-management/Airport'));
+const AdminRailwayStationManagement = lazy(() => import('./modules/admin/pages/price-management/RailwayStation'));
 const AdminSetPrices = lazy(() => import('./modules/admin/pages/price-management/SetPrices'));
 const AdminSetPackagePrices = lazy(() => import('./modules/admin/pages/price-management/SetPackagePrices'));
 const AdminCreatePackagePrice = lazy(() => import('./modules/admin/pages/price-management/CreatePackagePrice'));
@@ -1460,6 +1461,15 @@ function App() {
                   <Route
                     path="airport/edit/:id"
                     element={<AdminAirportManagement mode="edit" />}
+                  />
+                  <Route path="railway-station" element={<AdminRailwayStationManagement />} />
+                  <Route
+                    path="railway-station/create"
+                    element={<AdminRailwayStationManagement mode="create" />}
+                  />
+                  <Route
+                    path="railway-station/edit/:id"
+                    element={<AdminRailwayStationManagement mode="edit" />}
                   />
                   <Route path="vehicle-type" element={<AdminVehicleType />} />
                   <Route
