@@ -1021,6 +1021,12 @@ export const getSetPrices = asyncHandler(async (req, res) => {
   const data = await adminService.listSetPrices(req.query || {}, req.auth?.admin);
   res.json({ success: true, ...data });
 });
+
+/** Public (rider app): the active fare tariffs, no admin scoping. */
+export const getPublicSetPrices = asyncHandler(async (req, res) => {
+  const { results } = await adminService.listSetPrices({ scope: String(req.query?.scope || 'ride') });
+  res.json({ success: true, data: { results: results.filter((item) => Number(item.active) === 1) } });
+});
 export const createSetPrice = asyncHandler(async (req, res) =>
   ok(res, await adminService.createSetPrice(req.body, req.auth?.admin)),
 );
