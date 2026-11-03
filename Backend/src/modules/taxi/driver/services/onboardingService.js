@@ -714,6 +714,7 @@ export const saveDriverVehicle = async ({
   companyAddress,
   city,
   postalCode,
+  state,
   taxNumber,
   vehicles = [],
   customFields = {},
@@ -834,6 +835,7 @@ export const saveDriverVehicle = async ({
         'companyAddress',
         'city',
         'postalCode',
+        'state',
         'taxNumber',
       ].includes(key);
     })
@@ -883,6 +885,7 @@ export const saveDriverVehicle = async ({
     companyAddress: String(companyAddress || '').trim(),
     city: String(city || selectedLocation).trim(),
     postalCode: normalizedPostalCode,
+    state: String(state || '').trim(),
     taxNumber: String(taxNumber || '').trim().toUpperCase(),
     // Commercial vs private. Blank is allowed here so existing app builds
     // can still finish onboarding; it only blocks Prime/Middle plans later.
@@ -1094,6 +1097,7 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
       phone: normalizedMobile,
       address: String(session.vehicle.companyAddress || '').trim() || null,
       postal_code: String(session.vehicle.postalCode || '').trim() || null,
+      state: String(session.vehicle.state || '').trim() || null,
       city: String(session.vehicle.city || session.vehicle.locationName || '').trim() || null,
       tax_number: String(session.vehicle.taxNumber || '').trim() || null,
       account_type: targetAccountType,
@@ -1188,6 +1192,7 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
     vehicleColor: session.vehicle.color,
     vehicle_usage_type: session.vehicle.vehicleUsageType || '',
     city: session.vehicle.city || session.vehicle.locationName,
+    state: session.vehicle.state || '',
     referredBy: referrer?._id || null,
     approve: false,
     status: 'pending',
@@ -1218,6 +1223,7 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
         number: session.vehicle.number,
         color: session.vehicle.color,
         city: session.vehicle.city,
+        state: session.vehicle.state || '',
         customFields: session.vehicle.customFields || {},
       },
     },

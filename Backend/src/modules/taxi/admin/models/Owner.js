@@ -80,6 +80,11 @@ const ownerSchema = new mongoose.Schema(
       default: null,
       trim: true,
     },
+    state: {
+      type: String,
+      default: null,
+      trim: true,
+    },
     city: {
       type: String,
       default: null,
