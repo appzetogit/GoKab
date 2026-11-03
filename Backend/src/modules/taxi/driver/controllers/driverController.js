@@ -8000,6 +8000,31 @@ const findAssignedDriver = (ownerId, vehicleId) =>
     .select("name phone isOnRide")
     .lean();
 
+// Same rules as the driver app's vehicle form, enforced here so no client can
+// skip them. On edit (`existing` given) a field is only checked when it
+// actually changed, so a vehicle saved before these rules can still be edited.
+const VEHICLE_PLATE_RE = /^([A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{4}|[0-9]{2}BH[0-9]{4}[A-Z]{1,2})$/;
+const assertFleetVehicleFields = ({ make, model, number, color }, existing = null) => {
+  const rules = [
+    ["car_brand", make, existing?.car_brand, (s) => /^[A-Za-z .-]{2,30}$/.test(s), "Enter a valid car brand (letters only)"],
+    ["car_model", model, existing?.car_model, (s) => /^[A-Za-z0-9 .-]{1,30}$/.test(s) && /[A-Za-z0-9]/.test(s), "Enter a valid car model"],
+    [
+      "license_plate_number",
+      number,
+      existing?.license_plate_number,
+      (s) => VEHICLE_PLATE_RE.test(s.toUpperCase().replace(/[^A-Z0-9]/g, "")),
+      "Enter a valid number plate, e.g. MP09AB1234",
+    ],
+    ["car_color", color, existing?.car_color, (s) => /^[A-Za-z ]{3,20}$/.test(s), "Enter a valid car colour (letters only)"],
+  ];
+  for (const [field, value, current, isValid, message] of rules) {
+    if (existing && String(value).trim() === String(current || "").trim()) continue;
+    if (!isValid(String(value).trim())) {
+      throw new ApiError(422, message, { field }, "INVALID_VEHICLE_FIELD");
+    }
+  }
+};
+
 export const addOwnerVehicle = async (req, res) => {
   let owner = await resolveAuthenticatedOwner(req);
   let driverPermissions = null;
@@ -8087,6 +8112,7 @@ export const addOwnerVehicle = async (req, res) => {
 
   const normalizedPlate = String(number).trim().toUpperCase();
 
+  assertFleetVehicleFields({ make, model, number: normalizedPlate, color });
   await assertPlateAvailable({ plate: normalizedPlate });
 
   // Checked against the raw, not-yet-uploaded documents map — a request
@@ -8471,6 +8497,7 @@ export const updateOwnerFleetVehicle = async (req, res) => {
     throw new ApiError(400, "Car color is required", null, "FIELD_REQUIRED");
   }
 
+  assertFleetVehicleFields({ make, model, number, color }, vehicle);
   await assertPlateAvailable({ plate: number, excludeId: vehicle._id });
 
   // Descriptive details only: changing them does not re-open verification.
