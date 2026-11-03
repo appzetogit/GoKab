@@ -219,6 +219,7 @@ const AdminPromoCodes = lazy(() => import('./modules/admin/pages/promotions/Prom
 const AdminSendNotification = lazy(() => import('./modules/admin/pages/promotions/SendNotification'));
 const AdminBannerImage = lazy(() => import('./modules/admin/pages/promotions/BannerImage'));
 const AdminAdvertisements = lazy(() => import('./modules/admin/pages/promotions/Advertisements'));
+const AdminDriverOffers = lazy(() => import('./modules/admin/pages/promotions/DriverOffers'));
 
 // Price Management
 const AdminServiceLocation = lazy(() => import('./modules/admin/pages/price-management/ServiceLocation'));
@@ -1274,6 +1275,10 @@ function App() {
                 <Route
                   path="promotions/advertisements/create"
                   element={<AdminAdvertisements />}
+                />
+                <Route
+                  path="promotions/driver-offers"
+                  element={<AdminDriverOffers />}
                 />
 
                 {/* Admin Management */}

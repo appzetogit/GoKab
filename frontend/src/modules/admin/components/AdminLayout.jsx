@@ -490,6 +490,14 @@ const DEEP_SEARCH_INDEX = [
     icon: TrendingUp,
   },
   {
+    label: 'Driver Offers',
+    category: 'Promotions',
+    path: '/admin/promotions/driver-offers',
+    description: 'Set publishing fee rates for driver rental offers, view offers and revenue, deactivate offers',
+    keywords: 'driver offers rental publishing fee rates revenue deactivate',
+    icon: TrendingUp,
+  },
+  {
     label: 'Finance & Revenue Audit Reports',
     category: 'Reports',
     path: '/admin/reports/finance',
@@ -1149,6 +1157,7 @@ const AdminLayout = () => {
               { label: 'Promo Code', path: '/admin/promotions/promo-codes', permission: 'promotions.view' },
               { label: 'Push Notifications', path: '/admin/promotions/send-notification', permission: 'promotions.view' },
               { label: 'Advertisements', path: '/admin/promotions/advertisements', permission: 'promotions.view' },
+              { label: 'Driver Offers', path: '/admin/promotions/driver-offers', permission: 'promotions.view' },
               //{ label: 'Banner Image', path: '/admin/promotions/banner-image', permission: 'promotions.view' },
             ],
           },
