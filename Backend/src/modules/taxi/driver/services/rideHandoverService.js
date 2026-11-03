@@ -70,6 +70,8 @@ export const handOverCustomerRide = async ({ driverId, rideId, targetDriverId, b
         'assignment.assigned_by_driver_id': driverId,
         'assignment.assigned_at': now,
         'assignment.acknowledged_at': null,
+        // Puts the ride on the lead's team live map (status, and position once started).
+        ...(permissions.driver.owner_id ? { organization_owner_id: permissions.driver.owner_id } : {}),
         ...rideVehicleSetFields(vehicle),
       },
       $push: {

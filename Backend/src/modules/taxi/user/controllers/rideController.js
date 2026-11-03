@@ -1069,11 +1069,9 @@ export const listAvailableDrivers = async (req, res) => {
   const longitude = Number(lng);
   const distance = Number(maxDistance);
 
-  if (!vehicleTypeId) {
-    throw new ApiError(400, 'vehicleTypeId is required');
-  }
-
-  if (!mongoose.Types.ObjectId.isValid(vehicleTypeId)) {
+  // Optional: the home map lists nearby drivers before any vehicle type is chosen,
+  // and used to get a 400 every refresh.
+  if (vehicleTypeId && !mongoose.Types.ObjectId.isValid(vehicleTypeId)) {
     throw new ApiError(400, 'vehicleTypeId is invalid');
   }
 
