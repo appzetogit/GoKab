@@ -3,6 +3,7 @@ import { ApiError } from '../../../utils/ApiError.js';
 import { normalizePoint } from '../../../utils/geo.js';
 import { DISPATCH_TOP_DRIVERS } from '../constants/index.js';
 import { Vehicle } from '../admin/models/Vehicle.js';
+import { FleetVehicle } from '../admin/models/FleetVehicle.js';
 import { Driver } from '../driver/models/Driver.js';
 import { Zone } from '../driver/models/Zone.js';
 import { getDriverIdsBlockedByUpcomingScheduledRides } from './rideService.js';
@@ -57,7 +58,7 @@ const buildFreshLocationQuery = () => {
   };
 };
 
-const buildDriverMatchFilters = ({ zoneId, serviceLocationId, vehicleTypeId, vehicleTypeIds, vehicleTypeKeys }) => {
+const buildDriverMatchFilters = ({ zoneId, serviceLocationId, vehicleTypeId, vehicleTypeIds, vehicleTypeKeys, fleetOwnerIds = [] }) => {
   const normalizedVehicleTypeIds = normalizeVehicleTypeIds(vehicleTypeIds, vehicleTypeId);
   const normalizedVehicleTypeKeys = Array.isArray(vehicleTypeKeys)
     ? [...new Set(vehicleTypeKeys.map(normalizeVehicleKey).filter(Boolean))]
@@ -70,6 +71,7 @@ const buildDriverMatchFilters = ({ zoneId, serviceLocationId, vehicleTypeId, veh
           { vehicleIconType: { $in: normalizedVehicleTypeKeys } },
         ]
       : []),
+    ...(fleetOwnerIds.length ? [{ owner_id: { $in: fleetOwnerIds }, is_self_drive_owner: true }] : []),
   ];
   const vehicleTypeFilter =
     vehicleTypeClauses.length > 1
@@ -230,12 +232,14 @@ const findDriversForZone = async ({
   limit,
   normalizedVehicleTypeIds,
   vehicleTypeKeys,
+  fleetOwnerIds = [],
 }) => {
   const commonFilters = buildDriverMatchFilters({
     zoneId,
     serviceLocationId,
     vehicleTypeIds: normalizedVehicleTypeIds,
     vehicleTypeKeys,
+    fleetOwnerIds,
   });
   // `wallet` has to be selected for the cash-debt check downstream to see a real
   // balance — without it every driver reads as balance 0 and the tier's debt
@@ -292,6 +296,13 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
     ? await Vehicle.find({ _id: { $in: normalizedVehicleTypeIds } }).select('name vehicle_type icon_types').lean()
     : [];
   const vehicleTypeKeys = normalizeVehicleKeys(allowedVehicles);
+  const fleetOwnerIds = normalizedVehicleTypeIds.length
+    ? await FleetVehicle.distinct('owner_id', {
+        vehicle_type_id: { $in: normalizedVehicleTypeIds },
+        status: 'approved',
+        active: true,
+      })
+    : [];
 
   const zone = await findZoneByPickup(coordinates);
   const zoneBoundaryCapMeters = zone ? getZoneBoundaryCapMeters(zone, coordinates) : null;
@@ -307,6 +318,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
     limit: limit * 2, // Fetch extra candidate buffer before filtering
     normalizedVehicleTypeIds,
     vehicleTypeKeys,
+    fleetOwnerIds,
   });
 
   const blockedDriverIds = await getDriverIdsBlockedByUpcomingScheduledRides(
@@ -323,6 +335,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
       limit: limit * 2,
       normalizedVehicleTypeIds,
       vehicleTypeKeys,
+      fleetOwnerIds,
     });
 
     const fallbackBlockedDriverIds = await getDriverIdsBlockedByUpcomingScheduledRides(

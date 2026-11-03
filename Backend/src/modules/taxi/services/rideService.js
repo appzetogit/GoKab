@@ -6,6 +6,7 @@ import { RIDE_LIVE_STATUS, RIDE_STATUS } from '../constants/index.js';
 import { AdminBusinessSetting } from '../admin/models/AdminBusinessSetting.js';
 import { SetPrice } from '../admin/models/SetPrice.js';
 import { Vehicle } from '../admin/models/Vehicle.js';
+import { FleetVehicle } from '../admin/models/FleetVehicle.js';
 import { Driver } from '../driver/models/Driver.js';
 import { Owner } from '../admin/models/Owner.js';
 import { WalletTransaction } from '../driver/models/WalletTransaction.js';
@@ -912,8 +913,15 @@ const buildDriverVehicleAcceptFilter = async (ride) => {
 
   const vehicles = await Vehicle.find({ _id: { $in: vehicleTypeIds } }).select('name vehicle_type icon_types').lean();
   const vehicleTypeKeys = normalizeVehicleKeys(vehicles);
+  // A lead whose approved fleet has a vehicle of this type may take the ride too.
+  const fleetOwnerIds = await FleetVehicle.distinct('owner_id', {
+    vehicle_type_id: { $in: vehicleTypeIds },
+    status: 'approved',
+    active: true,
+  });
   const clauses = [
     { vehicleTypeId: { $in: vehicleTypeIds } },
+    ...(fleetOwnerIds.length ? [{ owner_id: { $in: fleetOwnerIds }, is_self_drive_owner: true }] : []),
     ...(vehicleTypeKeys.length
       ? [
           { vehicleType: { $in: vehicleTypeKeys } },
