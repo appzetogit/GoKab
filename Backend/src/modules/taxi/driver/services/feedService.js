@@ -5,6 +5,8 @@ import { RIDE_LIVE_STATUS, RIDE_STATUS } from '../../constants/index.js';
 import { Owner } from '../../admin/models/Owner.js';
 import { Vehicle } from '../../admin/models/Vehicle.js';
 import { Ride } from '../../user/models/Ride.js';
+import { TripPost } from '../../user/models/TripPost.js';
+import { tripPostAsRide } from './leadService.js';
 import { Driver } from '../models/Driver.js';
 import { DriverRoute } from '../models/DriverRoute.js';
 import { LeadContact } from '../models/LeadContact.js';
@@ -303,7 +305,11 @@ export const serializeFeedItem = (ride, { lead_type, publisher = null, distanceF
   serviceType: ride.serviceType,
   // Free text the booking was posted with ("Persons: 2 • Luggage: 1 •
   // Vehicle: SUV") — the app reads its trip-detail cells out of this.
-  notes: ride.network_notes || '',
+  notes: ride._post
+    ? [`Persons: ${ride._post.passengers}`, ride._post.budget ? `Budget: Rs ${ride._post.budget}` : '', ride._post.note]
+        .filter(Boolean)
+        .join(' • ')
+    : ride.network_notes || '',
   distance_km: ride.estimatedDistanceMeters
     ? Math.round((ride.estimatedDistanceMeters / 1000) * 10) / 10
     : null,
@@ -323,6 +329,7 @@ export const serializeFeedItem = (ride, { lead_type, publisher = null, distanceF
   accept,
   vehicle_mismatch,
   expires_at: ride.publish?.expires_at || null,
+  is_trip_post: ride.origin === 'customer_post',
   createdAt: ride.createdAt,
 });
 
@@ -376,6 +383,16 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
     .sort({ createdAt: -1 })
     .limit(safeLimit * safePage * 3)
     .lean();
+
+  // Riders' advertised trips ride along on the customer tab, until pickup time.
+  if (tab === 'customer') {
+    const posts = await TripPost.find({ status: 'open', scheduledAt: { $gt: now } })
+      .sort({ createdAt: -1 })
+      .limit(safeLimit * safePage * 3)
+      .lean();
+    candidates.push(...posts.map(tripPostAsRide));
+    candidates.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  }
 
   const activeRoute =
     driver.route_mode === 'route' && driver.active_route_id
@@ -451,6 +468,10 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
     const { previewRideCommission } = await import('./walletService.js');
     await Promise.all(
       paged.map(async (item) => {
+        if (item.ride.origin === 'customer_post') {
+          item.ride.estimatedEarnings = item.ride.fare || null;
+          return;
+        }
         const preview = await previewRideCommission({ ...item.ride, driverId });
         item.ride.estimatedEarnings = preview?.driverEarnings ?? null;
       }),
@@ -532,6 +553,9 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
  * and the ride goes straight back on the feed.
  */
 export const acceptFeedRide = async ({ driverId, rideId }) => {
+  if (await TripPost.exists({ _id: rideId })) {
+    throw new ApiError(409, 'This is a trip post. Contact the rider to agree on the trip.', null, 'TRIP_POST_CONTACT_ONLY');
+  }
   const ride = await Ride.findById(rideId).lean();
   if (!ride) throw new ApiError(404, 'Ride not found', null, 'RIDE_NOT_FOUND');
 

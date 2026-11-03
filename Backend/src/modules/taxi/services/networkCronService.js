@@ -1,3 +1,4 @@
+import { expireTripPosts } from '../user/services/tripPostService.js';
 import { Ride } from '../user/models/Ride.js';
 import { FleetVehicle } from '../admin/models/FleetVehicle.js';
 import { Driver } from '../driver/models/Driver.js';
@@ -322,6 +323,7 @@ export const runNetworkMaintenance = async () => {
     const pickupReminders = await runGuarded('pickupReminders', () => sendScheduledRideReminders());
     const nudges = await runGuarded('unacknowledgedNudges', () => sendUnacknowledgedAssignmentNudges());
     const platformSettlements = await runGuarded('platformSettlements', () => settlePaidPlatformEscrows());
+    const tripPosts = await runGuarded('tripPosts', () => expireTripPosts());
 
     let documentReminders = {};
     if (Date.now() - lastDocumentSweepAt >= DOCUMENT_SWEEP_INTERVAL_MS) {
@@ -336,6 +338,7 @@ export const runNetworkMaintenance = async () => {
       ...pickupReminders,
       ...nudges,
       ...platformSettlements,
+      ...tripPosts,
       ...documentReminders,
     };
   } catch (error) {

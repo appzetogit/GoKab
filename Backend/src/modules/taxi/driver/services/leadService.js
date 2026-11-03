@@ -3,6 +3,7 @@ import { ApiError } from '../../../../utils/ApiError.js';
 import { RIDE_STATUS } from '../../constants/index.js';
 import { Ride } from '../../user/models/Ride.js';
 import { User } from '../../user/models/User.js';
+import { TripPost } from '../../user/models/TripPost.js';
 import { Driver } from '../models/Driver.js';
 import { LeadContact } from '../models/LeadContact.js';
 import { LeadConversation } from '../models/LeadConversation.js';
@@ -45,7 +46,41 @@ const loadParticipantProfiles = async (participants = []) => {
   return profiles;
 };
 
+/** A TripPost wearing a Ride's field names, so the lead flow needs no second path. */
+export const tripPostAsRide = (post) => ({
+  _id: post._id,
+  origin: 'customer_post',
+  userId: post.user_id,
+  pickupAddress: post.pickupAddress,
+  dropAddress: post.dropAddress,
+  pickupLocation: post.pickupLocation,
+  dropLocation: post.dropLocation,
+  scheduledAt: post.scheduledAt,
+  vehicleTypeId: post.vehicleTypeId,
+  fare: post.budget,
+  status: post.status,
+  driverId: null,
+  paymentMethod: 'cash',
+  createdAt: post.createdAt,
+  publish: { expires_at: post.scheduledAt, status: post.status },
+  _post: post,
+});
+
+const findLead = async (id) => {
+  const ride = await Ride.findById(id).lean();
+  if (ride) return ride;
+  const post = await TripPost.findById(id).lean();
+  return post ? tripPostAsRide(post) : null;
+};
+
 const assertLeadStillOpen = (ride) => {
+  if (ride.origin === 'customer_post') {
+    if (ride.status !== 'open' || ride.scheduledAt <= new Date()) {
+      throw new ApiError(409, 'This trip post is no longer open', null, 'RIDE_NOT_OPEN');
+    }
+    return;
+  }
+
   if (ride.origin === 'driver_created') {
     if (ride.publish?.status !== 'open') {
       throw new ApiError(409, 'This ride is no longer open', null, 'RIDE_NOT_OPEN');
@@ -80,7 +115,7 @@ export const openLeadContact = async ({ driverId, rideId, channel = 'chat' }) =>
     throw new ApiError(422, "channel must be 'chat' or 'call'", null, 'INVALID_CHANNEL');
   }
 
-  const ride = await Ride.findById(rideId).lean();
+  const ride = await findLead(rideId);
   if (!ride) throw new ApiError(404, 'Ride not found', null, 'RIDE_NOT_FOUND');
 
   const target = resolveTarget(ride);
@@ -269,10 +304,12 @@ export const listLeadConversations = async ({ role, entityId, page = 1, limit = 
   const myLastReadAtOf = (conversation) =>
     (conversation.participants || []).find(isMe)?.last_read_at || null;
 
+  const leadIds = conversations.map((item) => item.ride_id);
   const [rides, profiles, unreadCounts] = await Promise.all([
-    Ride.find({ _id: { $in: conversations.map((item) => item.ride_id) } })
-      .select('pickupAddress dropAddress publish status fare')
-      .lean(),
+    Promise.all([
+      Ride.find({ _id: { $in: leadIds } }).select('pickupAddress dropAddress publish status fare').lean(),
+      TripPost.find({ _id: { $in: leadIds } }).lean(),
+    ]).then(([rows, posts]) => [...rows, ...posts.map(tripPostAsRide)]),
     loadParticipantProfiles(conversations.map(otherPartyOf).filter(Boolean)),
     // Messages from anyone else since this participant last opened the
     // thread; one indexed count per conversation, at most 50 per page.
