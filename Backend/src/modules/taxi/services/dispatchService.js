@@ -943,7 +943,7 @@ export const cancelRideByAdmin = async (rideId) => {
   return ride;
 };
 
-export const cancelRideByUser = async ({ rideId, userId }) => {
+export const cancelRideByUser = async ({ rideId, userId, reason = '', reasonId = '', note = '' }) => {
   const dispatchState = getDispatchState(rideId);
   stopDispatchFlow(rideId);
   const session = await mongoose.startSession();
@@ -977,6 +977,13 @@ export const cancelRideByUser = async ({ rideId, userId }) => {
 
     ride.status = RIDE_STATUS.CANCELLED;
     ride.liveStatus = RIDE_LIVE_STATUS.CANCELLED;
+    ride.cancellation = {
+      by: 'user',
+      reasonId: String(reasonId || '').trim().slice(0, 64),
+      reason: String(reason || '').trim().slice(0, 120),
+      note: String(note || '').trim().slice(0, 200),
+      at: new Date(),
+    };
     if (ride.bookingMode === 'bidding') {
       ride.biddingStatus = 'cancelled';
     }

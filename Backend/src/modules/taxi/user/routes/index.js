@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { promoRouter } from './promoRoutes.js';
 import { rideRouter } from './rideRoutes.js';
+import { cancellationReasonRouter } from './cancellationReasonRoutes.js';
 import { userLeadRouter } from './leadRoutes.js';
 import { tripPostRouter } from './tripPostRoutes.js';
 import { userRouter } from './userRoutes.js';
@@ -11,6 +12,7 @@ export const userModuleRouter = Router();
 // parameterised route on the main user router.
 userModuleRouter.use('/users/lead-conversations', userLeadRouter);
 userModuleRouter.use('/users/trip-posts', tripPostRouter);
+userModuleRouter.use('/users/cancellation-reasons', cancellationReasonRouter);
 userModuleRouter.use('/users', userRouter);
 userModuleRouter.use('/rides', rideRouter);
 userModuleRouter.use('/promos', promoRouter);

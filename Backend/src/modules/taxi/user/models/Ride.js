@@ -81,6 +81,14 @@ const rideSchema = new mongoose.Schema(
     },
     // How many stops the rider expects on the way (count only, no addresses).
     stopCount: { type: Number, default: 0, min: 0, max: 3 },
+    // Why and by whom the ride was cancelled (rider's pick from the cancel sheet).
+    cancellation: {
+      by: { type: String, default: '', trim: true },
+      reasonId: { type: String, default: '', trim: true },
+      reason: { type: String, default: '', trim: true },
+      note: { type: String, default: '', trim: true },
+      at: { type: Date, default: null },
+    },
     intercity: {
       bookingId: {
         type: String,
