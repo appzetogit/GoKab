@@ -17,6 +17,8 @@ import { releasePromoForCancelledRide } from './promoService.js';
 import { SOCKET_EVENTS } from '../socket/events.js';
 import { resolveTransportDispatchConfig } from './transportSettingsService.js';
 import { sendPushNotificationToEntities } from './pushNotificationService.js';
+import { Vehicle } from '../admin/models/Vehicle.js';
+import { haversineMeters } from '../../../utils/geo.js';
 
 const activeDispatches = new Map();
 let ioInstance = null;
@@ -531,9 +533,37 @@ const emitToSocket = (socketId, event, payload) => {
   }
 };
 
+const recentClosedPushes = new Map();
+
+/**
+ * Takes a driver's native ride-offer card down. The socket event only reaches an
+ * app that is awake, which is exactly when the card is not needed.
+ */
+export const sendRideOfferClosedPush = (driverId, rideId) => {
+  if (!driverId || !rideId) return;
+  const key = `${driverId}:${rideId}`;
+  const now = Date.now();
+  // Several code paths close the same offer; one push is enough.
+  if (now - (recentClosedPushes.get(key) || 0) < 10_000) return;
+  recentClosedPushes.set(key, now);
+  if (recentClosedPushes.size > 500) {
+    for (const [k, t] of recentClosedPushes) if (now - t > 10_000) recentClosedPushes.delete(k);
+  }
+  sendPushNotificationToEntities({
+    driverIds: [String(driverId)],
+    title: 'Ride request closed',
+    body: 'This booking is no longer available.',
+    dataOnly: true,
+    data: { type: 'ride_request_closed', rideId: String(rideId) },
+  }).catch(() => {});
+};
+
 export const emitToRoom = (room, event, payload) => {
   if (ioInstance) {
     ioInstance.to(room).emit(event, payload);
+  }
+  if (event === 'rideRequestClosed' && typeof room === 'string' && room.startsWith('driver:')) {
+    sendRideOfferClosedPush(room.slice('driver:'.length), payload?.rideId);
   }
 };
 
@@ -705,21 +735,40 @@ const emitRideRequestToDrivers = async ({
     });
   }
 
-  sendPushNotificationToEntities({
-    driverIds: targetDrivers.map((driver) => String(driver._id)),
-    title: ride.serviceType === 'parcel' ? 'New delivery request' : 'New ride request',
-    body: ride.pickupAddress
-      ? `Pickup: ${ride.pickupAddress}`
-      : 'A new booking is waiting for your response.',
-    data: {
-      type: 'ride_request',
-      rideId: String(ride._id),
-      serviceType: ride.serviceType || 'ride',
-      userId: String(ride.userId?._id || ride.userId || ''),
-    },
-  }).catch((error) => {
-    console.error('Failed to send driver ride-request push notification', error);
-  });
+  // One push per driver: the card shows how far *this* driver is from pickup.
+  // Data-only, so the app's native service gets it even when the app is killed;
+  // everything the card draws has to be in `data` (nothing can be fetched then).
+  const vehicle = ride.vehicleTypeId
+    ? await Vehicle.findById(ride.vehicleTypeId).select('name').lean().catch(() => null)
+    : null;
+  const km = (meters) => (Number.isFinite(Number(meters)) && Number(meters) >= 0 ? (Number(meters) / 1000).toFixed(1) : '');
+  for (const driver of targetDrivers) {
+    sendPushNotificationToEntities({
+      driverIds: [String(driver._id)],
+      title: 'New ride request',
+      body: ride.pickupAddress ? `Pickup: ${ride.pickupAddress}` : 'A new booking is waiting for your response.',
+      dataOnly: true,
+      data: {
+        type: 'ride_request',
+        rideId: String(ride._id),
+        serviceType: ride.serviceType || 'ride',
+        userId: String(ride.userId?._id || ride.userId || ''),
+        riderName: ride.userId?.name || 'Customer',
+        fare: String(Math.round(Number(ride.fare) || 0)),
+        pickupAddress: ride.pickupAddress || '',
+        dropAddress: ride.dropAddress || '',
+        pickupDistanceKm:
+          driver?.location?.coordinates?.length === 2 && ride.pickupLocation?.coordinates?.length === 2
+            ? km(haversineMeters(driver.location.coordinates, ride.pickupLocation.coordinates))
+            : '',
+        tripDistanceKm: km(ride.estimatedDistanceMeters),
+        vehicleLabel: vehicle?.name || ride.vehicleIconType || 'Ride',
+        expiresInSeconds: String(dispatchConfig.retryWindowSeconds),
+      },
+    }).catch((error) => {
+      console.error('Failed to send driver ride-request push notification', error);
+    });
+  }
 };
 
 export const markDriverRejectedFromDispatch = (rideId, driverId) => {
