@@ -765,7 +765,6 @@ const acceptCustomerLead = async ({ driverId, ride }) => {
 
   await Ride.updateOne({ _id: ride._id }, { $set: { 'assignment.mode': 'feed_accept' } });
 
-  stopDispatchFlow(ride._id);
   await notifyRideAccepted(accepted);
 
   return {

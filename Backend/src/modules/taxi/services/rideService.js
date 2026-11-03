@@ -2547,7 +2547,7 @@ const markDriverCreatedRideSettledOffline = async ({ ride, driverId }) => {
   }
 };
 
-export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymentMethod, riderRating, collectedBy }) => {
+export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymentMethod, riderRating, collectedBy, otp }) => {
   const config = rideStatusConfig[nextStatus];
 
   if (!config) {
@@ -2562,6 +2562,19 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
   if (!config.allowedCurrent.includes(ride.liveStatus)) {
     throw new ApiError(409, `Ride cannot move from ${ride.liveStatus} to ${nextStatus}`);
+  }
+
+  // The rider's OTP proves the right person is in the car, so a customer ride
+  // only starts with it. The driver app used to compare it on the phone only.
+  // Rides a driver created for an offline passenger carry no OTP.
+  if (
+    nextStatus === RIDE_LIVE_STATUS.STARTED &&
+    ride.liveStatus !== RIDE_LIVE_STATUS.STARTED &&
+    ride.origin !== 'driver_created' &&
+    ride.otp &&
+    String(otp ?? '').trim() !== String(ride.otp)
+  ) {
+    throw new ApiError(403, 'Incorrect OTP. Ask the rider for the 4-digit code.', null, 'INVALID_RIDE_OTP');
   }
 
   // A scheduled ride cannot be started hours early. Re-sending the status the
