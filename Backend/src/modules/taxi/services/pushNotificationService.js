@@ -158,6 +158,7 @@ const sendPushToTargets = async ({
   const safeData = Object.fromEntries(
     Object.entries(data || {}).map(([key, value]) => [key, String(value ?? '')]),
   );
+  const isRideRequest = safeData.type === 'ride_request';
 
   for (const batch of chunk(dedupedTargets, 500)) {
     const response = await messaging.sendEachForMulticast({
@@ -173,7 +174,14 @@ const sendPushToTargets = async ({
       },
       android: {
         priority: 'high',
-        notification: image ? { imageUrl: image } : undefined,
+        // A ride request is only answerable for its offer window: let FCM drop
+        // it after 30 s instead of delivering a stale "new ride" later, and ring
+        // on the driver app's loud channel.
+        ...(isRideRequest ? { ttl: 30000 } : {}),
+        notification: {
+          ...(image ? { imageUrl: image } : {}),
+          ...(isRideRequest ? { channelId: 'gokab_ride_requests', sound: 'default' } : {}),
+        },
       },
       webpush: {
         notification: {
