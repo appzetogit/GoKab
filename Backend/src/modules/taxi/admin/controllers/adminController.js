@@ -1041,7 +1041,7 @@ export const getPublicSetPrices = asyncHandler(async (req, res) => {
   const raw = new Map(paginator.data.map((item) => [String(item.id), item]));
   const rows = results
     .filter((item) => Number(item.active) === 1)
-    .map((item) => {
+    .map(({ icon: _icon, ...item }) => {
       const source = raw.get(String(item.id)) || {};
       return {
         ...item,
