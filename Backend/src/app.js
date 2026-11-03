@@ -70,7 +70,6 @@ export const createApp = () => {
         users: ['/api/users', '/api/v1/users'],
         drivers: ['/api/drivers', '/api/v1/drivers'],
         rides: ['/api/rides', '/api/v1/rides'],
-        deliveries: ['/api/deliveries', '/api/v1/deliveries'],
       },
     });
   });

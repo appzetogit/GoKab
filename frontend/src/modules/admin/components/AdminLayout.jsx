@@ -402,14 +402,6 @@ const DEEP_SEARCH_INDEX = [
     icon: Globe,
   },
   {
-    label: 'Delivery & Parcel Requests',
-    category: 'Operations',
-    path: '/admin/deliveries',
-    description: 'Track parcel delivery orders, item package types, sender/receiver details, delivery status',
-    keywords: 'deliveries parcel delivery courier item package delivery requests sender receiver tracking',
-    icon: Package,
-  },
-  {
     label: 'Airport Cab Operations',
     category: 'Operations',
     path: '/admin/airport/requests',
@@ -1171,7 +1163,6 @@ const AdminLayout = () => {
               { label: 'App Modules', path: '/admin/pricing/app-modules', permission: 'settings.view' },
               { label: 'Vehicle Type', path: '/admin/pricing/vehicle-type', permission: 'vehicle_types.view' },
               { label: 'Set Price', path: '/admin/pricing/set-price', permission: 'set_prices.view' },
-              { label: 'Goods Types', path: '/admin/pricing/goods-types', permission: 'goods_types.view' },
             ],
           },
           // {
@@ -1227,7 +1218,6 @@ const AdminLayout = () => {
           { icon: ShieldAlert, label: 'SOS', path: '/admin/safety', permission: 'dashboard.view' },
           { icon: Car, label: 'Trip Requests', path: '/admin/trips', permission: 'trips.view' },
           { icon: Globe, label: 'Outstation Requests', path: '/admin/outstation', permission: 'trips.view' },
-          { icon: Package, label: 'Delivery Requests', path: '/admin/deliveries', permission: 'deliveries.view' },
           { icon: Clock, label: 'Ongoing Requests', path: '/admin/ongoing', permission: 'ongoing.view' },
         ],
       },

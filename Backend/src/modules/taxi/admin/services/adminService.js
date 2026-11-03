@@ -17,7 +17,6 @@ import { Airport } from '../models/Airport.js';
 import { RailwayStation } from '../models/RailwayStation.js';
 import { BusService } from '../models/BusService.js';
 import { DriverNeededDocument } from '../models/DriverNeededDocument.js';
-import { GoodsType } from '../models/GoodsType.js';
 import { OwnerNeededDocument } from '../models/OwnerNeededDocument.js';
 import { OwnerBooking } from '../models/OwnerBooking.js';
 import { Owner } from '../models/Owner.js';
@@ -1824,20 +1823,6 @@ const serializeSetPrice = (item) => ({
   active: item.active !== false,
   createdAt: item.createdAt,
   updatedAt: item.updatedAt,
-});
-
-const serializeGoodsType = (item) => ({
-  _id: item._id,
-  id: item.external_id || item.id || 1,
-  name: item.goods_type_name || item.name || '',
-  goods_type_name: item.goods_type_name || item.name || '',
-  translation_dataset: item.translation_dataset || '',
-  goods_types_for: item.goods_types_for || 'both',
-  company_key: item.company_key || null,
-  active: item.active !== undefined ? Number(item.active) : 1,
-  created_at: item.createdAt,
-  updated_at: item.updatedAt,
-  goods_type_translation_words: item.goods_type_translation_words || [],
 });
 
 const serializeRentalPackageType = (item) => ({
@@ -5867,49 +5852,6 @@ const toAdminRideRow = (ride) => {
   };
 };
 
-const toAdminDeliveryRow = (ride) => {
-  const requestCode = `DEL_${String(ride._id).slice(-12).toUpperCase()}`;
-  const status = String(ride.status || '').toLowerCase();
-  const liveStatus = String(ride.liveStatus || '').toLowerCase();
-  const parcel = ride.deliveryId?.parcel || {};
-
-  let tripStatus = 'UPCOMING';
-  if (status === RIDE_STATUS.COMPLETED) {
-    tripStatus = 'COMPLETED';
-  } else if (status === RIDE_STATUS.CANCELLED) {
-    tripStatus = 'CANCELLED';
-  } else if (
-    status === RIDE_STATUS.ONGOING ||
-    liveStatus === RIDE_LIVE_STATUS.STARTED ||
-    liveStatus === RIDE_LIVE_STATUS.ARRIVED
-  ) {
-    tripStatus = 'ON_TRIP';
-  }
-
-  return {
-    id: String(ride._id),
-    requestId: requestCode,
-    date: ride.createdAt,
-    userName: ride.userId?.name || ride.offline_customer?.name || parcel.senderName || 'Unknown User',
-    driverName: ride.driverId?.name || 'Unassigned',
-    transportType: ride.driverId?.vehicleType || ride.vehicleIconType || 'Parcel',
-    tripStatus,
-    rideStatus: ride.status,
-    liveStatus: ride.liveStatus,
-    paymentOption: String(ride.paymentMethod || 'cash').toUpperCase(),
-    fare: Number(ride.fare || 0),
-    pickupLabel: ride.pickupAddress || formatRidePointLabel(ride.pickupLocation, 'Pickup'),
-    dropLabel: ride.dropAddress || formatRidePointLabel(ride.dropLocation, 'Drop'),
-    pickupLocation: ride.pickupLocation,
-    dropLocation: ride.dropLocation,
-    parcel: {
-      category: parcel.category || '',
-      senderName: parcel.senderName || '',
-      receiverName: parcel.receiverName || '',
-    },
-  };
-};
-
 const toAdminIntercityTripRow = (ride) => {
   const requestCode = `INT_${String(ride._id).slice(-12).toUpperCase()}`;
   const status = String(ride.status || '').toLowerCase();
@@ -6059,59 +6001,6 @@ export const listRideRequests = async (query = {}) => {
         row.transportType,
         row.pickupLabel,
         row.dropLabel,
-      ].some((value) => String(value || '').toLowerCase().includes(search)),
-    );
-  }
-
-  return buildPaginator(rows, page, limit);
-};
-
-export const listDeliveries = async (query = {}) => {
-  const page = Number(query.page || 1);
-  const limit = Number(query.limit || 10);
-  const tab = String(query.tab || 'all').toLowerCase();
-  const search = String(query.search || '').trim().toLowerCase();
-
-  const rides = await Ride.find({ serviceType: 'parcel' })
-    .sort({ createdAt: -1 })
-    .populate('deliveryId')
-    .populate('userId', 'name phone')
-    .populate('driverId', 'name phone vehicleType vehicleNumber')
-    .lean();
-
-  let rows = rides.map(toAdminDeliveryRow);
-
-  if (tab === 'completed') {
-    rows = rows.filter((row) => row.tripStatus === 'COMPLETED');
-  } else if (tab === 'cancelled') {
-    rows = rows.filter((row) => row.tripStatus === 'CANCELLED');
-  } else if (tab === 'upcoming') {
-    rows = rows.filter((row) => row.tripStatus === 'UPCOMING');
-  } else if (tab === 'on trip' || tab === 'on_trip' || tab === 'ongoing') {
-    rows = rows.filter((row) => row.tripStatus === 'ON_TRIP');
-  }
-  if (tab === 'completed') {
-    rows = rows.filter((row) => row.tripStatus === 'COMPLETED');
-  } else if (tab === 'cancelled') {
-    rows = rows.filter((row) => row.tripStatus === 'CANCELLED');
-  } else if (tab === 'upcoming') {
-    rows = rows.filter((row) => row.tripStatus === 'UPCOMING');
-  } else if (tab === 'on trip' || tab === 'on_trip' || tab === 'ongoing') {
-    rows = rows.filter((row) => row.tripStatus === 'ON_TRIP');
-  }
-
-  if (search) {
-    rows = rows.filter((row) =>
-      [
-        row.requestId,
-        row.userName,
-        row.driverName,
-        row.transportType,
-        row.pickupLabel,
-        row.dropLabel,
-        row.parcel?.category,
-        row.parcel?.senderName,
-        row.parcel?.receiverName,
       ].some((value) => String(value || '').toLowerCase().includes(search)),
     );
   }
@@ -9021,95 +8910,6 @@ export const getRentalTrackingDashboard = async () => {
     };
   };
 
-
-  export const listGoodsTypes = async () => {
-    const items = await GoodsType.find().sort({ createdAt: -1 }).lean();
-    const results = items.map(serializeGoodsType);
-
-    return {
-      success: true,
-      results,
-      paginator: {
-        current_page: 1,
-        data: results,
-        first_page_url: "http://localhost:5000/api/v1/admin/goods-types?page=1",
-        from: 1,
-        last_page: 1,
-        last_page_url: "http://localhost:5000/api/v1/admin/goods-types?page=1",
-        links: [
-          { url: null, label: "&laquo; Previous", active: false },
-          { url: "http://localhost:5000/api/v1/admin/goods-types?page=1", label: "1", active: true },
-          { url: null, label: "Next &raquo;", active: false }
-        ],
-        next_page_url: null,
-        path: "http://localhost:5000/api/v1/admin/goods-types",
-        per_page: 50,
-        prev_page_url: null,
-        to: results.length,
-        total: results.length
-      }
-    };
-  };
-
-  export const createGoodsType = async (payload) => {
-    const name = payload.goods_type_name || payload.name || '';
-    if (!name.trim()) {
-      throw new ApiError(400, 'Goods type name is required');
-    }
-
-    const active = payload.active !== undefined ?
-      (typeof payload.active === 'boolean' ? (payload.active ? 1 : 0) : Number(payload.active)) :
-      1;
-
-    const item = await GoodsType.create({
-      goods_type_name: name.trim(),
-      name: name.trim(),
-      goods_types_for: payload.goods_types_for || payload.goods_type_for || 'both',
-      status: payload.status || (active === 1 ? 'active' : 'inactive'),
-      active: active,
-      translation_dataset: payload.translation_dataset || '',
-    });
-
-    return serializeGoodsType(item.toObject());
-  };
-
-  export const updateGoodsType = async (id, payload) => {
-    const item = await GoodsType.findById(id);
-    if (!item) throw new ApiError(404, 'Goods type not found');
-
-    const name = payload.goods_type_name || payload.name;
-    if (name !== undefined) {
-      item.goods_type_name = name.trim();
-      item.name = name.trim();
-    }
-
-    if (payload.goods_types_for !== undefined || payload.goods_type_for !== undefined) {
-      item.goods_types_for = payload.goods_types_for || payload.goods_type_for || 'both';
-    }
-
-    if (payload.active !== undefined) {
-      item.active = typeof payload.active === 'boolean' ? (payload.active ? 1 : 0) : Number(payload.active);
-    }
-
-    if (payload.status !== undefined) {
-      item.status = payload.status;
-    } else if (payload.active !== undefined) {
-      item.status = item.active === 1 ? 'active' : 'inactive';
-    }
-
-    if (payload.translation_dataset !== undefined) {
-      item.translation_dataset = payload.translation_dataset;
-    }
-
-    await item.save();
-    return serializeGoodsType(item.toObject());
-  };
-
-  export const deleteGoodsType = async (id) => {
-    const deleted = await GoodsType.findByIdAndDelete(id);
-    if (!deleted) throw new ApiError(404, 'Goods type not found');
-    return true;
-  };
 
   export const listRentalPackageTypes = async () => {
     const items = await RentalPackageType.find().sort({ createdAt: -1 }).lean();

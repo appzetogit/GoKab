@@ -32,9 +32,6 @@ const Chat = lazy(() => import('./modules/user/pages/ride/Chat'));
 const Support = lazy(() => import('./modules/user/pages/ride/Support'));
 const RideDetail = lazy(() => import('./modules/user/pages/ride/RideDetail'));
 
-// Parcel Module Pages
-const ParcelType = lazy(() => import('./modules/user/pages/parcel/ParcelType'));
-const SenderReceiverDetails = lazy(() => import('./modules/user/pages/parcel/SenderReceiverDetails'));
 
 // Profile & History
 const Activity = lazy(() => import('./modules/user/pages/Activity'));
@@ -56,9 +53,6 @@ const PhonePeStatusPage = lazy(() => import('./modules/shared/pages/PhonePeStatu
 const RazorpayStatusPage = lazy(() => import('./modules/shared/pages/RazorpayStatusPage'));
 const RazorpayLaunchPage = lazy(() => import('./modules/shared/pages/RazorpayLaunchPage'));
 
-// Phase 1 — Parcel flow completions
-const ParcelSearchingDriver = lazy(() => import('./modules/user/pages/parcel/ParcelSearchingDriver'));
-const ParcelTracking = lazy(() => import('./modules/user/pages/parcel/ParcelTracking'));
 
 // Phase 2 — Core utility pages
 const UserNotifications = lazy(() => import('./modules/user/pages/Notifications'));
@@ -181,7 +175,6 @@ const AdminChat = lazy(() => import('./modules/admin/pages/operations/Chat'));
 const AdminTrips = lazy(() => import('./modules/admin/pages/operations/Trips'));
 const AdminAirportRequests = lazy(() => import('./modules/admin/pages/operations/AirportRequests'));
 const AdminOutstation = lazy(() => import('./modules/admin/pages/operations/Outstation'));
-const AdminDeliveries = lazy(() => import('./modules/admin/pages/operations/Deliveries'));
 const AdminOngoing = lazy(() => import('./modules/admin/pages/operations/Ongoing'));
 const AdminWalletPayment = lazy(() => import('./modules/admin/pages/wallet/WalletPayment'));
 const AdminUserList = lazy(() => import('./modules/admin/pages/users/UserList'));
@@ -245,7 +238,6 @@ const AdminRentalTrackingDetail = lazy(() => import('./modules/admin/pages/price
 const AdminRentalBookingRequests = lazy(() => import('./modules/admin/pages/price-management/RentalBookingRequests'));
 const AdminRentalQuoteRequests = lazy(() => import('./modules/admin/pages/price-management/RentalQuoteRequests'));
 const AdminRentalPackageTypes = lazy(() => import('./modules/admin/pages/price-management/RentalPackageTypes'));
-const AdminGoodsTypes = lazy(() => import('./modules/admin/pages/price-management/GoodsTypes'));
 const AdminPoolingManager = lazy(() => import('./modules/admin/pages/pooling/PoolingManager'));
 const AdminPoolingVehicles = lazy(() => import('./modules/admin/pages/pooling/PoolingVehicles'));
 const AdminPoolingVehicleForm = lazy(() => import('./modules/admin/pages/pooling/PoolingVehicleForm'));
@@ -725,19 +717,6 @@ function App() {
               <Route path="/ride/support" element={<Support />} />
               <Route path="/ride/detail/:id" element={<RideDetail />} />
 
-              <Route path="/parcel/type" element={<ParcelType />} />
-              <Route path="/parcel/details" element={<SenderReceiverDetails />} />
-              <Route
-                path="/parcel/contacts"
-                element={<SenderReceiverDetails />}
-              />
-              <Route
-                path="/parcel/searching"
-                element={<ParcelSearchingDriver />}
-              />
-              <Route path="/parcel/tracking" element={<ParcelTracking />} />
-              <Route path="/parcel/detail/:id" element={<RideDetail />} />
-
               {/* New Service Routes — Real pages replacing ComingSoon */}
               <Route path="/rental" element={<BikeRentalHome />} />
               <Route path="/rental/vehicle" element={<RentalVehicleDetail />} />
@@ -839,28 +818,6 @@ function App() {
               <Route path="/taxi/user/support" element={<Support />} />
               <Route
                 path="/taxi/user/ride/detail/:id"
-                element={<RideDetail />}
-              />
-
-              <Route path="/taxi/user/parcel/type" element={<ParcelType />} />
-              <Route
-                path="/taxi/user/parcel/details"
-                element={<SenderReceiverDetails />}
-              />
-              <Route
-                path="/taxi/user/parcel/contacts"
-                element={<SenderReceiverDetails />}
-              />
-              <Route
-                path="/taxi/user/parcel/searching"
-                element={<ParcelSearchingDriver />}
-              />
-              <Route
-                path="/taxi/user/parcel/tracking"
-                element={<ParcelTracking />}
-              />
-              <Route
-                path="/taxi/user/parcel/detail/:id"
                 element={<RideDetail />}
               />
 
@@ -1130,7 +1087,6 @@ function App() {
                 <Route path="chat" element={<AdminChat />} />
                 <Route path="trips" element={<AdminTrips />} />
                 <Route path="outstation" element={<AdminOutstation />} />
-                <Route path="deliveries" element={<AdminDeliveries />} />
                 <Route path="ongoing" element={<AdminOngoing />} />
                 <Route path="airport/requests" element={<AdminAirportRequests />} />
                 <Route path="bus-service" element={<AdminBusServiceManager />} />
@@ -1564,15 +1520,6 @@ function App() {
                   <Route
                     path="set-price/surge/:id"
                     element={<AdminSurgePricing />}
-                  />
-                  <Route path="goods-types" element={<AdminGoodsTypes />} />
-                  <Route
-                    path="goods-types/create"
-                    element={<AdminGoodsTypes mode="create" />}
-                  />
-                  <Route
-                    path="goods-types/edit/:id"
-                    element={<AdminGoodsTypes mode="edit" />}
                   />
                 </Route>
                 <Route path="safety" element={<AdminSafetyCenter />} />

@@ -664,11 +664,9 @@ const Home = () => {
   const vehicleLabel = currentRide?.driver?.vehicle || currentRide?.driver?.vehicleType || (serviceType === 'parcel' ? 'Parcel' : serviceType === 'rental' ? 'Rental' : 'Taxi');
   const currentRideIcon = getCurrentRideIcon(currentRide);
   const trackingPath =
-    serviceType === 'parcel'
-      ? `${routePrefix}/parcel/tracking`
-      : serviceType === 'rental'
-        ? `${routePrefix}/rental/confirmed`
-        : `${routePrefix}/ride/tracking`;
+    serviceType === 'rental'
+      ? `${routePrefix}/rental/confirmed`
+      : `${routePrefix}/ride/tracking`;
   const rideStage = String(currentRide?.liveStatus || currentRide?.status || 'accepted').toLowerCase();
   const hasAssignedDriver = Boolean(currentRide?.driver?._id || currentRide?.driver?.id || currentRide?.driver?.name);
   const scheduledTimestamp = currentRide?.scheduledAt ? new Date(currentRide.scheduledAt).getTime() : NaN;

@@ -892,9 +892,6 @@ export const getOngoingRides = asyncHandler(async (req, res) =>
 export const getRideRequests = asyncHandler(async (req, res) =>
   ok(res, await adminService.listRideRequests(req.query)),
 );
-export const getDeliveries = asyncHandler(async (req, res) =>
-  ok(res, await adminService.listDeliveries(req.query)),
-);
 export const getIntercityTrips = asyncHandler(async (req, res) =>
   ok(res, await adminService.listIntercityTrips(req.query)),
 );
@@ -1580,20 +1577,6 @@ export const getRentalTrackingDashboard = asyncHandler(async (_req, res) =>
 export const updateRentalBookingRequest = asyncHandler(async (req, res) =>
   ok(res, await adminService.updateRentalBookingRequest(req.params.id, req.body, req.auth?.sub)),
 );
-
-export const getGoodsTypes = asyncHandler(async (_req, res) =>
-  res.json(await adminService.listGoodsTypes()),
-);
-export const createGoodsType = asyncHandler(async (req, res) =>
-  ok(res, await adminService.createGoodsType(req.body)),
-);
-export const updateGoodsType = asyncHandler(async (req, res) =>
-  ok(res, await adminService.updateGoodsType(req.params.id, req.body)),
-);
-export const deleteGoodsType = asyncHandler(async (req, res) => {
-  await adminService.deleteGoodsType(req.params.id);
-  ok(res, { deleted: true });
-});
 
 export const getRentalPackageTypes = asyncHandler(async (_req, res) =>
   ok(res, { rental_packages: await adminService.listRentalPackageTypes() }),

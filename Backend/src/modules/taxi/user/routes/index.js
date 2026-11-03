@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { deliveryRouter } from './deliveryRoutes.js';
 import { promoRouter } from './promoRoutes.js';
 import { rideRouter } from './rideRoutes.js';
 import { userLeadRouter } from './leadRoutes.js';
@@ -12,5 +11,4 @@ export const userModuleRouter = Router();
 userModuleRouter.use('/users/lead-conversations', userLeadRouter);
 userModuleRouter.use('/users', userRouter);
 userModuleRouter.use('/rides', rideRouter);
-userModuleRouter.use('/deliveries', deliveryRouter);
 userModuleRouter.use('/promos', promoRouter);

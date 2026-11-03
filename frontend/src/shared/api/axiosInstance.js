@@ -301,7 +301,7 @@ api.interceptors.request.use(
     const adminToken = getStoredTokenByRole('admin') || localStorage.getItem('adminToken');
 
     const isPublicUserRoute =
-      /^\/users\/(bootstrap|app-modules|settings|goods-types|vehicle-types|register|signup|login|profile-image|auth\/send-otp|auth\/verify-otp|otp-login)(\/|$)/.test(requestPath);
+      /^\/users\/(bootstrap|app-modules|settings|vehicle-types|register|signup|login|profile-image|auth\/send-otp|auth\/verify-otp|otp-login)(\/|$)/.test(requestPath);
     const isPublicDriverRoute =
       /^\/drivers\/(register|login|auth\/send-otp|auth\/verify-otp|onboarding\/send-otp|onboarding\/verify-otp|onboarding\/personal|onboarding\/referral|onboarding\/vehicle|onboarding\/documents|onboarding\/complete|onboarding\/session\/|service-locations)(\/|$)/.test(requestPath);
     const isAdminRoute =

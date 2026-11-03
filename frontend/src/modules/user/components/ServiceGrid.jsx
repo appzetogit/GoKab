@@ -54,18 +54,6 @@ const ServiceGrid = () => {
   const routePrefix = location.pathname.startsWith('/taxi/user') ? '/taxi/user' : '';
 
   const getNavigationConfig = (module) => {
-    if (module.transport_type === 'delivery') {
-      return {
-        path: `${routePrefix}/parcel/details`,
-        navState: {
-          serviceType: 'parcel',
-          transport_type: 'delivery',
-          transportType: 'delivery',
-          deliveryScope: 'city',
-        },
-      };
-    }
-
     if (module.service_type === 'rental') return { path: `${routePrefix}/rental` };
     if (module.service_type === 'outstation') return { path: `${routePrefix}/cab` };
     if (module.service_type === 'bus' || module.name.toLowerCase().includes('bus')) {

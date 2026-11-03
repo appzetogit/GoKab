@@ -12,7 +12,6 @@ import {
   createAdminBusBooking,
   createBusService,
   createAppModule,
-  createGoodsType,
   createDriver,
   createDriverNeededDocument,
   bulkImportDrivers,
@@ -41,7 +40,6 @@ import {
   deleteBusService,
   deleteDriver,
   deleteDriverNeededDocument,
-  deleteGoodsType,
   deleteOnboardingScreen,
   deleteRentalPackageType,
   deleteLanguage,
@@ -76,7 +74,6 @@ import {
   getCancelChart,
   getCountries,
   getDashboardData,
-  getDeliveries,
   getDriver,
   getDriverNeededDocument,
   getDriverNeededDocuments,
@@ -97,7 +94,6 @@ import {
   getDeletedDrivers,
   getDriverDeletionRequests,
   getFirebaseSettings,
-  getGoodsTypes,
   getIntercityTrips,
   getRentalPackageTypes,
   getReferralTranslations,
@@ -180,7 +176,6 @@ import {
   updateDriverPassword,
   updateFirebaseSettings,
   updateOnboardingScreen,
-  updateGoodsType,
   updateRentalPackageType,
   updateGeneralSettingsCategory,
   updateLanguageStatus,
@@ -420,10 +415,6 @@ adminRouter.get('/admin/rental-tracking', getRentalTrackingDashboard);
 adminRouter.patch('/admin/rental-booking-requests/:id', updateRentalBookingRequest);
 adminRouter.get('/admin/rental-quote-requests', getRentalQuoteRequests);
 adminRouter.patch('/admin/rental-quote-requests/:id', updateRentalQuoteRequest);
-adminRouter.get('/admin/goods-types', getGoodsTypes);
-adminRouter.post('/admin/goods-types', createGoodsType);
-adminRouter.patch('/admin/goods-types/:id', updateGoodsType);
-adminRouter.delete('/admin/goods-types/:id', deleteGoodsType);
 adminRouter.get('/admin/types/rental-packages', getRentalPackageTypes);
 adminRouter.post('/admin/types/rental-packages', createRentalPackageType);
 adminRouter.patch('/admin/types/rental-packages/:id', updateRentalPackageType);
@@ -474,7 +465,6 @@ adminRouter.patch('/admin/safety/alerts/:id/resolve', authenticate(['admin']), r
 adminRouter.get('/admin/ongoing-rides', getOngoingRides);
 adminRouter.get('/admin/ride-requests', getRideRequests);
 adminRouter.delete('/admin/ongoing-rides/:id', deleteOngoingRide);
-adminRouter.get('/admin/deliveries', getDeliveries);
 adminRouter.get('/admin/trips', getIntercityTrips);
 
 adminRouter.get('/admin/wallet/withdrawals', getWithdrawals);

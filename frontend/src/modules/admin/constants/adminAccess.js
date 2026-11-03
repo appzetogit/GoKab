@@ -13,7 +13,6 @@ export const ADMIN_PERMISSION_GROUPS = [
     title: 'Operations',
     items: [
       { key: 'trips.view', label: 'Trip Requests' },
-      { key: 'deliveries.view', label: 'Delivery Requests' },
       { key: 'ongoing.view', label: 'Ongoing Requests' },
       { key: 'drivers.view', label: 'Drivers' },
       { key: 'users.view', label: 'Customers' },
@@ -33,7 +32,6 @@ export const ADMIN_PERMISSION_GROUPS = [
       { key: 'service_stores.view', label: 'Service Stores' },
       { key: 'vehicle_types.view', label: 'Vehicle Types' },
       { key: 'set_prices.view', label: 'Set Prices' },
-      { key: 'goods_types.view', label: 'Goods Types' },
       { key: 'rental.view', label: 'Rental Modules' },
       { key: 'bus_service.view', label: 'Bus Service' },
       { key: 'pooling.view', label: 'Pooling' },

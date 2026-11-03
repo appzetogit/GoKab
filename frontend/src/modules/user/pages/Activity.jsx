@@ -246,8 +246,6 @@ const Activity = () => {
       navigate('/rental/confirmed', { state: buildRentalActivityState(item.booking) });
     } else if (item.type === 'pooling') {
       navigate(`${routePrefix}/pooling`);
-    } else if (item.type === 'parcel') {
-      navigate(`${routePrefix}/parcel/detail/${item.id}`);
     } else {
       navigate(`${routePrefix}/ride/detail/${item.id}`, { state: { ride: item.ride } });
     }
