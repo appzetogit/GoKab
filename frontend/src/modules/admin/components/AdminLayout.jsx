@@ -230,7 +230,7 @@ const resolvePageTitle = (pathname, sections, appName) => {
   const label = findLabel(flattenItems(sections));
   if (label) return label;
   if (pathname.includes('/owners')) return 'Owner Management';
-  if (pathname.includes('/fleet')) return 'Fleet Management';
+  if (pathname.includes('/fleet')) return 'Vehicles';
   if (pathname.includes('/settings')) return 'Settings';
   if (pathname.includes('/reports')) return 'Reports';
   return `${appName || 'App'} Admin`;
@@ -997,7 +997,7 @@ const AdminLayout = () => {
     return Number(window.localStorage.getItem('adminLastSeenBookingCount') || 0);
   });
   const [adminProfile, setAdminProfile] = useState(() => readAdminProfile());
-  const isOwnerRoute = location.pathname.startsWith('/admin/owners') || location.pathname.startsWith('/admin/fleet');
+  const isOwnerRoute = false; // the separate Owner console is gone; vehicles live in the main sidebar
   const isAdminChatRoute = pathMatches(location.pathname, '/admin/chat');
   const isTripsRoute = pathMatches(location.pathname, '/admin/trips');
   const isOwnerBookingsRoute = pathMatches(location.pathname, '/admin/owners/bookings');
@@ -1277,7 +1277,14 @@ const AdminLayout = () => {
               { label: 'Referral Translation', path: '/admin/referrals/translation', permission: 'referrals.view' },
             ],
           },
-          { icon: Briefcase, label: 'Owner Management', path: '/admin/owners/dashboard', permission: 'owners.view' },
+          {
+            icon: Car,
+            label: 'Vehicles',
+            subItems: [
+              { label: 'Vehicle Approvals', path: '/admin/fleet/manage', permission: 'owners.view' },
+              { label: 'Vehicle Documents', path: '/admin/fleet/documents', permission: 'owners.view' },
+            ],
+          },
           {
             icon: FileText,
             label: 'Report',
@@ -1285,7 +1292,6 @@ const AdminLayout = () => {
               { label: 'User Report', path: '/admin/reports/user', permission: 'reports.view' },
               { label: 'Driver Report', path: '/admin/reports/driver', permission: 'reports.view' },
               { label: 'Driver Duty Report', path: '/admin/reports/driver-duty', permission: 'reports.view' },
-              { label: 'Owner Report', path: '/admin/reports/owner', permission: 'reports.view' },
               { label: 'Finance Report', path: '/admin/reports/finance', permission: 'reports.view' },
               { label: 'Fleet Finance Report', path: '/admin/reports/fleet-finance', permission: 'reports.view' },
             ],
@@ -2030,7 +2036,7 @@ const AdminLayout = () => {
           </div>
 
           <div className="flex items-center gap-4">
-            <ModeSwitcher mode={mode} setMode={setMode} />
+            
 
             <div className="flex items-center gap-2 border-l border-slate-100 pl-4 h-8">
               <button

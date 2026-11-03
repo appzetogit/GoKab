@@ -102,7 +102,7 @@ const ManageFleet = () => {
   const [itemsPerPage, setItemsPerPage] = useState(10);
   const [page, setPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('pending');
 
   const [formData, setFormData] = useState({
     owner_id: '', // Added owner_id
@@ -620,7 +620,7 @@ const ManageFleet = () => {
           exit={{ opacity: 0 }}
         >
           <div className="px-5 pt-3">
-            <AdminPageHeader module="Fleet Management" page="Manage Fleet" title="Manage Fleet" />
+            <AdminPageHeader module="Vehicles" page="Vehicle Approvals" title="Vehicle Approvals" />
           </div>
 
           <div className="px-5 pb-6">
@@ -695,6 +695,7 @@ const ManageFleet = () => {
                 <table className="w-full text-left">
                   <thead className="bg-gray-50">
                     <tr>
+                      <th className="px-3 py-4 text-sm font-bold text-gray-950">Driver</th>
                       <th className="px-3 py-4 text-sm font-bold text-gray-950">Vehicle Type</th>
                       <th className="px-3 py-4 text-sm font-bold text-gray-950">Car Brand</th>
                       <th className="px-3 py-4 text-sm font-bold text-gray-950">Car Model</th>
@@ -709,7 +710,7 @@ const ManageFleet = () => {
                   <tbody className="divide-y divide-gray-200">
                   {isLoading ? (
                     <tr>
-                      <td colSpan="9" className="px-3 py-24 text-center">
+                      <td colSpan="10" className="px-3 py-24 text-center">
                         <div className="flex flex-col items-center gap-4 text-slate-400">
                           <Loader2 size={34} className="animate-spin text-teal-500" />
                           <p className="text-sm font-semibold">Loading fleet...</p>
@@ -718,7 +719,7 @@ const ManageFleet = () => {
                     </tr>
                   ) : pagedFleet.length === 0 ? (
                     <tr>
-                      <td colSpan="9" className="border-b border-gray-200 px-3 py-10 text-center">
+                      <td colSpan="10" className="border-b border-gray-200 px-3 py-10 text-center">
                         <div className="flex min-h-[130px] flex-col items-center justify-center text-slate-700">
                           <FileSearch size={92} strokeWidth={1.7} className="mb-2 text-indigo-950" />
                           <p className="text-xl font-medium">No Data Found</p>
@@ -731,6 +732,11 @@ const ManageFleet = () => {
                         key={item._id}
                         className="bg-white transition-colors hover:bg-gray-50"
                       >
+                        {/* Driver */}
+                        <td className="px-3 py-5 text-sm text-gray-950">
+                          {item.owner_id?.owner_name || item.owner_id?.name || item.owner_id?.company_name || '-'}
+                          {item.owner_id?.mobile ? <div className="text-xs text-slate-500">{item.owner_id.mobile}</div> : null}
+                        </td>
                         {/* Vehicle Type */}
                         <td className="px-3 py-5 text-sm text-gray-950">
                           <span className="text-[13px] font-black text-gray-800 uppercase">
