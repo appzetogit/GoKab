@@ -725,6 +725,7 @@ const emitRideRequestToDrivers = async ({
       paymentMethod: ride.paymentMethod,
       parcel: ride.parcel || null,
       intercity: ride.intercity || null,
+      stopCount: ride.stopCount || 0,
       radius: effectiveRadius,
       attempt: attemptIndex + 1,
       maxAttempts: dispatchConfig.maxAttempts,
@@ -763,6 +764,7 @@ const emitRideRequestToDrivers = async ({
             : '',
         tripDistanceKm: km(ride.estimatedDistanceMeters),
         vehicleLabel: vehicle?.name || ride.vehicleIconType || 'Ride',
+        stopCount: String(ride.stopCount || 0),
         expiresInSeconds: String(dispatchConfig.retryWindowSeconds),
       },
     }).catch((error) => {
@@ -1505,6 +1507,7 @@ export const notifyRideAccepted = async (ride) => {
     vehicleIconUrl: populatedRide.vehicleIconUrl || '',
     parcel: populatedRide.parcel || null,
     intercity: populatedRide.intercity || null,
+    stopCount: populatedRide.stopCount || 0,
     commissionAmount: populatedRide.commissionAmount,
     driverEarnings: populatedRide.driverEarnings,
     pickupLocation: populatedRide.pickupLocation,

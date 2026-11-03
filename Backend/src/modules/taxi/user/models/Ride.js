@@ -79,6 +79,8 @@ const rideSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
     },
+    // How many stops the rider expects on the way (count only, no addresses).
+    stopCount: { type: Number, default: 0, min: 0, max: 3 },
     intercity: {
       bookingId: {
         type: String,
