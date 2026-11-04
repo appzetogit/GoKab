@@ -1198,6 +1198,7 @@ export const listUpcomingRides = async ({ driverId, page = 1, limit = 20 }) => {
         pickup: { address: ride.pickupAddress || '', coordinates: ride.pickupLocation?.coordinates || [] },
         drop: { address: ride.dropAddress || '', coordinates: ride.dropLocation?.coordinates || [] },
         fare: ride.fare,
+        roundTrip: ride.roundTrip?.isRoundTrip ? { isRoundTrip: true, legType: ride.roundTrip.legType, returnAt: ride.roundTrip.returnAt } : null,
         amount_for_you: tookFromFeed ? Number(ride.publish?.driver_payout || 0) : null,
         paymentMethod: ride.paymentMethod,
         notes: ride.network_notes || '',
