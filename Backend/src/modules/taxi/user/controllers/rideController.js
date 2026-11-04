@@ -385,6 +385,10 @@ export const getRideById = async (req, res) => {
     const data = ride.toJSON();
     data.publisher = await loadPublisherCardForRide(ride);
     data.is_secure = ride.publish?.is_secure !== false;
+    // Who booked it: the customer is shown this name and number.
+    const { loadPublisherInfo } = await import('../../services/networkTripService.js');
+    const booked = await loadPublisherInfo(ride);
+    data.bookedBy = { name: booked.businessName, phone: booked.contactPhone };
     // The vehicle chosen for this ride, on its own and on the driver card.
     data.vehicle = resolveRideVehicle(ride, ride.driverId?._id ? ride.driverId : null);
     if (data.driverId && typeof data.driverId === 'object') data.driverId = withRideVehicle(ride, data.driverId);
