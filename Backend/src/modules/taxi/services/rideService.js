@@ -2547,6 +2547,31 @@ const markDriverCreatedRideSettledOffline = async ({ ride, driverId }) => {
   }
 };
 
+// Tells the rider about each step of their trip, also when the app is closed.
+const RIDER_STATUS_PUSH = {
+  [RIDE_LIVE_STATUS.ARRIVING]: ['Driver has arrived', (name) => `${name} is at your pickup point. Share your OTP to start the trip.`],
+  [RIDE_LIVE_STATUS.STARTED]: ['Trip started', () => 'Your trip has started. Have a safe ride.'],
+  [RIDE_LIVE_STATUS.ARRIVED]: ['You are near your destination', () => 'You are about to reach your drop location.'],
+  [RIDE_LIVE_STATUS.COMPLETED]: ['Trip completed', () => 'You have reached your destination. Rate your driver.'],
+};
+
+const notifyRiderOfStatus = (ride, nextStatus) => {
+  const entry = RIDER_STATUS_PUSH[nextStatus];
+  const userId = ride.userId?._id || ride.userId;
+  if (!entry || !userId || ride.origin === 'driver_created') return;
+  const [title, body] = entry;
+  import('./pushNotificationService.js')
+    .then(({ sendPushNotificationToEntities }) =>
+      sendPushNotificationToEntities({
+        userIds: [String(userId)],
+        title,
+        body: body(ride.driverId?.name || 'Your driver'),
+        data: { type: `ride_${nextStatus}`, rideId: String(ride._id), serviceType: ride.serviceType || 'ride' },
+      }),
+    )
+    .catch((error) => console.error('[rideService] rider status push failed:', error.message));
+};
+
 export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymentMethod, riderRating, collectedBy, otp }) => {
   const config = rideStatusConfig[nextStatus];
 
@@ -2665,6 +2690,7 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
     }
   }
 
+  const previousLiveStatus = ride.liveStatus;
   ride.liveStatus = nextStatus;
   ride.status = config.persistedStatus;
 
@@ -2764,6 +2790,8 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
   const populatedRide = await populateRideRealtime(ride._id);
   populatedRide.$locals.walletUpdate = walletUpdate;
+
+  if (previousLiveStatus !== nextStatus) notifyRiderOfStatus(populatedRide, nextStatus);
 
   return populatedRide;
 };
