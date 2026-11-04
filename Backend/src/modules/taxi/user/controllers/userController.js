@@ -1753,6 +1753,11 @@ export const registerUser = async (req, res) => {
     ? await User.findByIdAndUpdate(existingUser._id, { $set: userPayload }, { new: true, runValidators: true })
     : await User.create(userPayload);
 
+  // Rides a driver booked for this phone before the customer had the app.
+  import('../../services/networkTripService.js')
+    .then((m) => m.linkOfflineRidesToUser(user))
+    .catch(() => {});
+
   if (!String(user.referralCode || '').trim()) {
     user.referralCode = generateUserReferralCode(user);
     await user.save();
@@ -1899,6 +1904,11 @@ export const signupUser = async (req, res) => {
   const user = existingUser
     ? await User.findByIdAndUpdate(existingUser._id, { $set: userPayload }, { new: true, runValidators: true })
     : await User.create(userPayload);
+
+  // Rides a driver booked for this phone before the customer had the app.
+  import('../../services/networkTripService.js')
+    .then((m) => m.linkOfflineRidesToUser(user))
+    .catch(() => {});
 
   if (!String(user.referralCode || '').trim()) {
     user.referralCode = generateUserReferralCode(user);

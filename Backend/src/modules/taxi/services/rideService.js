@@ -388,6 +388,15 @@ const waitBeforeTransactionRetry = (attempt) =>
 
 const normalizeAddress = (value = '') => String(value || '').trim();
 const generateRideOtp = () => String(crypto.randomInt(1000, 10000));
+
+// A ride a driver creates for a customer carries a fixed OTP (setting
+// `network_fixed_otp`, 1234) until SMS / WhatsApp delivery is live; blank = random.
+const resolveRideOtp = async (isDriverCreated) => {
+  if (!isDriverCreated) return generateRideOtp();
+  const { getDriverNetworkSettings } = await import('./appSettingsService.js');
+  const fixed = String((await getDriverNetworkSettings()).network_fixed_otp ?? '').trim();
+  return /^\d{4}$/.test(fixed) ? fixed : generateRideOtp();
+};
 const DEFAULT_BID_STEP_AMOUNT = 10;
 const DEFAULT_MAX_BID_STEPS = 5;
 
@@ -1071,6 +1080,7 @@ export const createRideRecord = async ({
     }
   }
   // Airport / railway carpool: this rider's seat. `fare` is the seat fare.
+  const rideOtp = await resolveRideOtp(isDriverCreated);
   let carpoolFields;
   if (carpool?.enabled) {
     const stationLat = Number(carpool.station?.lat);
@@ -1300,7 +1310,7 @@ export const createRideRecord = async ({
       paymentMethod: effectivePaymentMethod,
       driverPaymentCollection: effectiveDriverPaymentCollection,
       subscriptionUsage: effectiveSubscriptionUsage,
-      otp: generateRideOtp(),
+      otp: rideOtp,
       service_location_id: resolvedServiceLocationId,
       transport_type: normalizedTransportType,
       pricingSnapshot,
@@ -1372,7 +1382,7 @@ export const createRideRecord = async ({
             paymentMethod: effectivePaymentMethod,
             driverPaymentCollection: effectiveDriverPaymentCollection,
             subscriptionUsage: effectiveSubscriptionUsage,
-            otp: generateRideOtp(),
+            otp: rideOtp,
             service_location_id: resolvedServiceLocationId,
             transport_type: normalizedTransportType,
             pricingSnapshot,
@@ -1829,7 +1839,10 @@ const historyOtpFor = (ride, { role, entityId }) => {
   if (role === 'user') return ride.otp || '';
   if (role !== 'driver') return '';
   const drivenBy = ride.driverId?._id || ride.driverId || null;
-  return drivenBy && String(drivenBy) === String(entityId) ? ride.otp || '' : '';
+  if (drivenBy && String(drivenBy) === String(entityId)) return ride.otp || '';
+  // The publisher tells the customer the code until SMS / WhatsApp covers it.
+  const publisher = ride.created_by_driver_id?._id || ride.created_by_driver_id || null;
+  return ride.origin === 'driver_created' && publisher && String(publisher) === String(entityId) ? ride.otp || '' : '';
 };
 
 const HISTORY_STATUSES = new Set(['all', RIDE_STATUS.COMPLETED, RIDE_STATUS.CANCELLED]);
@@ -2678,7 +2691,7 @@ const RIDER_STATUS_PUSH = {
 const notifyRiderOfStatus = (ride, nextStatus) => {
   const entry = RIDER_STATUS_PUSH[nextStatus];
   const userId = ride.userId?._id || ride.userId;
-  if (!entry || !userId || ride.origin === 'driver_created') return;
+  if (!entry || !userId) return;
   const [title, body] = entry;
   import('./pushNotificationService.js')
     .then(({ sendPushNotificationToEntities }) =>
@@ -2715,7 +2728,6 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
   if (
     nextStatus === RIDE_LIVE_STATUS.STARTED &&
     ride.liveStatus !== RIDE_LIVE_STATUS.STARTED &&
-    ride.origin !== 'driver_created' &&
     ride.otp &&
     String(otp ?? '').trim() !== String(ride.otp)
   ) {
@@ -2924,7 +2936,12 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
   const populatedRide = await populateRideRealtime(ride._id);
   populatedRide.$locals.walletUpdate = walletUpdate;
 
-  if (previousLiveStatus !== nextStatus) notifyRiderOfStatus(populatedRide, nextStatus);
+  if (previousLiveStatus !== nextStatus) {
+    notifyRiderOfStatus(populatedRide, nextStatus);
+    import('./networkTripService.js')
+      .then((m) => m.onNetworkRideStatus(populatedRide, nextStatus))
+      .catch((error) => console.error('[rideService] network trip update failed:', error.message));
+  }
 
   return populatedRide;
 };

@@ -681,6 +681,13 @@ const rideSchema = new mongoose.Schema(
       returnDropAddress: { type: String, default: '' },
       returnDropCoordinates: { type: [Number], default: undefined },
     },
+    // The driver tapped "Go to pickup": from here the publisher sees their live location.
+    enRouteAt: { type: Date, default: null },
+    // Public tracking link for a customer who has no app (see networkTripService).
+    tracking: {
+      token: { type: String, default: null, index: true, sparse: true },
+      lostAlertedAt: { type: Date, default: null },
+    },
     // Airport / railway carpool: riders sharing one cab to the same station.
     carpool: {
       enabled: { type: Boolean, default: false },

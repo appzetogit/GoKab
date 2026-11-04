@@ -92,6 +92,23 @@ export const getCarpoolPublicConfig = asyncHandler(async (_req, res) => {
     });
 });
 
+// The link a customer without the app gets: a map page and the data it polls.
+const TRACK_TOKEN = /^[A-Za-z0-9_-]{6,40}$/;
+
+export const getTrackingPage = asyncHandler(async (req, res) => {
+    if (!TRACK_TOKEN.test(req.params.token)) return res.status(404).send('Link not found');
+    const { trackingPageHtml } = await import('../../services/networkTripService.js');
+    res.set('Cache-Control', 'no-store');
+    return res.type('html').send(trackingPageHtml(req.params.token));
+});
+
+export const getTrackingData = asyncHandler(async (req, res) => {
+    if (!TRACK_TOKEN.test(req.params.token)) return res.json({ success: true, data: null });
+    const { getTrackingData: load } = await import('../../services/networkTripService.js');
+    res.set('Cache-Control', 'no-store');
+    return res.json({ success: true, data: await load(req.params.token) });
+});
+
 export const acknowledgePhonePeCallback = asyncHandler(async (req, res) => {
     logPaymentDiagnostic({
         provider: 'phonepe',

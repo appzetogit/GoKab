@@ -491,6 +491,13 @@ export const updateRideStatus = async (req, res) => {
   });
 };
 
+// "Go to pickup": the driver is on the way. Starts the publisher's live location.
+export const markRideEnRoute = async (req, res) => {
+  const { markDriverEnRoute } = await import('../../services/networkTripService.js');
+  const ride = await markDriverEnRoute({ rideId: req.params.rideId, driverId: req.auth.sub });
+  res.json({ success: true, data: { rideId: String(ride._id), enRouteAt: ride.enRouteAt } });
+};
+
 export const submitRideReview = async (req, res) => {
   if (req.auth.role !== 'user') {
     throw new ApiError(403, 'Only users can rate completed rides');

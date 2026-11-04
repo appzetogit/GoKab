@@ -20,7 +20,7 @@ import { toPublicImageUrl } from './publisherCardService.js';
  */
 
 const WORKED_STATUSES = [RIDE_STATUS.ACCEPTED, RIDE_STATUS.ONGOING, RIDE_STATUS.COMPLETED];
-const DRIVER_CARD_FIELDS = 'name phone profileImage vehicleNumber vehicleType rating driver_category deletedAt';
+const DRIVER_CARD_FIELDS = 'name phone profileImage vehicleNumber vehicleType rating driver_category deletedAt business_name owner_id';
 
 const toObjectId = (value, field) => {
   if (!value || !mongoose.isValidObjectId(value)) {
@@ -43,6 +43,7 @@ const serializeDriverCard = (driver) =>
         id: String(driver._id),
         name: driver.name || '',
         phone: driver.phone || '',
+        business_name: driver.business_name || '',
         profile_image: toPublicImageUrl(driver.profileImage),
         vehicle_number: driver.vehicleNumber || '',
         vehicle_type: driver.vehicleType || '',
@@ -125,6 +126,7 @@ export const listWorkedWith = async ({ driverId, page = 1, limit = 20 }) => {
   const total = grouped[0]?.total?.[0]?.count || 0;
   const counterpartIds = rows.map((row) => row._id);
 
+  const myOwner = (await Driver.findById(me).select('owner_id').lean())?.owner_id || null;
   const [drivers, saved, locked] = await Promise.all([
     Driver.find({ _id: { $in: counterpartIds } }).select(DRIVER_CARD_FIELDS).lean(),
     SavedContact.find({ owner_driver_id: me, contact_driver_id: { $in: counterpartIds } })
@@ -147,6 +149,8 @@ export const listWorkedWith = async ({ driverId, page = 1, limit = 20 }) => {
         last_ride_at: row.last_ride_at,
         last_ride_id: String(row.last_ride_id),
         is_saved: savedMap.has(String(row._id)),
+        // A member of my own fleet (not someone from the wider network).
+        is_fleet: Boolean(myOwner) && String(driverMap.get(String(row._id))?.owner_id || '') === String(myOwner),
         contact_id: savedMap.get(String(row._id)) || null,
       })),
     pagination: { page: safePage, limit: safeLimit, total, totalPages: Math.ceil(total / safeLimit) || 1 },

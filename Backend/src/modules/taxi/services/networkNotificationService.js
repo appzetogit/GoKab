@@ -134,20 +134,22 @@ export const notifyNetworkAssignment = async (ride) => {
     fare: ride.fare,
   };
 
-  const customerTitle = `Your ride is confirmed – ${context.orgName}`;
-  const customerBody =
-    `Owner: ${context.ownerName} · Driver: ${context.driverName}` +
-    `${context.vehicleNumber ? ` (${context.vehicleNumber})` : ''} · OTP ${safe(ride.otp)}`;
+  const { notifyCustomer, loadPublisherInfo } = await import('./networkTripService.js');
+  const publisher = await loadPublisherInfo(ride);
+  customerPayload.bookedBy = { name: publisher.businessName, phone: publisher.contactPhone };
 
   if (ride.userId) {
     emitToRoom(getUserRoom(ride.userId), 'network:ride:assigned', customerPayload);
-    await sendPushNotificationToEntities({
-      userIds: [String(ride.userId)],
-      title: customerTitle,
-      body: customerBody,
-      data: { type: 'network_ride_assigned', rideId: String(ride._id) },
-    }).catch((error) => console.error('[networkNotification] customer push failed:', error.message));
+    // The ride shows on the customer's home as their current ride, if they have none.
+    await User.updateOne(
+      { _id: ride.userId, $or: [{ currentRideId: null }, { currentRideId: { $exists: false } }] },
+      { $set: { currentRideId: ride._id } },
+    ).catch(() => {});
+    await notifyCustomer(ride, 'assigned');
   } else {
+    // No app account: a text with the driver, the OTP and a tracking link (the plain
+    // OTP SMS below stays as the fallback while the full text has no approved template).
+    await notifyCustomer(ride, 'assigned');
     await notifyOfflineCustomerBySms(ride, context);
   }
 
@@ -182,14 +184,16 @@ export const notifyNetworkAssignment = async (ride) => {
     }
 
     emitToRoom(getDriverRoom(ride.driverId), 'network:ride:assigned', driverPayload);
-    await sendPushNotificationToEntities({
-      driverIds: [String(ride.driverId)],
-      title: `New ride assigned by ${context.ownerName}`,
-      body:
-        `${context.orgName} · Pickup: ${safe(ride.pickupAddress, 'see app')}` +
-        (context.vehicleNumber ? ` · Vehicle: ${context.vehicleLabel} (${context.vehicleNumber})` : ''),
-      data: { type: 'network_ride_assigned', rideId: String(ride._id) },
-    }).catch((error) => console.error('[networkNotification] driver push failed:', error.message));
+    if (ride.assignment?.mode !== 'published') {
+      await sendPushNotificationToEntities({
+        driverIds: [String(ride.driverId)],
+        title: `New ride assigned by ${context.ownerName}`,
+        body:
+          `${context.orgName} · Pickup: ${safe(ride.pickupAddress, 'see app')}` +
+          (context.vehicleNumber ? ` · Vehicle: ${context.vehicleLabel} (${context.vehicleNumber})` : ''),
+        data: { type: 'network_ride_assigned', rideId: String(ride._id) },
+      }).catch((error) => console.error('[networkNotification] driver push failed:', error.message));
+    }
   }
 
   if (ride.organization_owner_id) {
@@ -241,7 +245,7 @@ export const notifyAssignmentAcknowledged = async ({ ride, driver }) => {
  * publisher app; the push is the only way a publisher with the app closed
  * finds out their lead is gone.
  */
-export const notifyPublishedRideTaken = async ({ ride, acceptorDriverId, held = 0, isSecure = true }) => {
+export const notifyPublishedRideTaken = async ({ ride, acceptorDriverId, held = 0, isSecure = true, push = true }) => {
   const acceptor = await Driver.findById(acceptorDriverId).select('name phone vehicleNumber').lean();
   const acceptorName = safe(acceptor?.name, 'A driver');
 
@@ -258,6 +262,7 @@ export const notifyPublishedRideTaken = async ({ ride, acceptorDriverId, held = 
     },
   });
 
+  if (!push) return;
   await sendPushNotificationToEntities({
     driverIds: [String(ride.created_by_driver_id)],
     title: 'Your ride was accepted',

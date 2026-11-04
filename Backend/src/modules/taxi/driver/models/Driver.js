@@ -50,6 +50,9 @@ const driverSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    // Shown to a customer who is sent a ride this driver published or assigned.
+    business_name: { type: String, default: '', trim: true, maxlength: 80 },
+    customer_contact_phone: { type: String, default: '', trim: true, maxlength: 15 },
     owner_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'TaxiOwner',

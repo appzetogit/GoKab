@@ -477,6 +477,8 @@ export const approveRideApplicant = async ({ driverId, rideId, applicantId }) =>
       acceptorDriverId: applicant._id,
       held: secure ? claimed.publish?.driver_payout || 0 : 0,
       isSecure: secure,
+      // The publisher is the one approving: no "your ride was accepted" push.
+      push: false,
     }),
   );
   await afterCommit('closing lead conversations', () => closeLeadConversationsForRide(claimed._id, 'RIDE_TAKEN'));

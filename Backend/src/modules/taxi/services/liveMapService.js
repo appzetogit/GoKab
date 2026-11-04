@@ -44,13 +44,17 @@ const loadRideMeta = async (ride) => {
 /**
  * Pushes a driver's position to the people entitled to watch it.
  *
- * Location is only shared **after the pickup OTP is entered** — before that the
- * owner sees status only. That boundary is the requirement, and it also keeps a
- * driver's movements private while they are merely on their way.
+ * Location is shared once the driver taps "Go to pickup" and until the ride ends;
+ * before that the owner sees status only, which keeps a driver's movements private
+ * while they are not on a job.
  */
 export const broadcastNetworkLocation = async ({ ride, coordinates, heading, speed }) => {
   if (!ride) return;
-  if (ride.liveStatus !== RIDE_LIVE_STATUS.STARTED) return;
+  // From "Go to pickup" (enRouteAt) until the ride ends; before that, status only.
+  const sharing =
+    ride.liveStatus === RIDE_LIVE_STATUS.STARTED ||
+    (ride.enRouteAt && [RIDE_LIVE_STATUS.ACCEPTED, RIDE_LIVE_STATUS.ARRIVING].includes(ride.liveStatus));
+  if (!sharing) return;
 
   const meta = await loadRideMeta(ride);
   if (!meta.organizationOwnerId && !meta.isPublished) return;

@@ -20,6 +20,9 @@ export const DEFAULT_DRIVER_NETWORK_SETTINGS = Object.freeze({
   prime_slot_reservation_minutes: 15,
   call_mode: 'reveal',
   live_location_emit_interval_ms: 4000,
+  // OTP on rides drivers create (published / assigned) until SMS and WhatsApp are live.
+  // Empty = a random OTP for each ride.
+  network_fixed_otp: '1234',
   cancel_penalty_after_accept: 0,
   // Published rides go to a driver the publisher approves (request → approve)
   // instead of the first driver to tap Accept.

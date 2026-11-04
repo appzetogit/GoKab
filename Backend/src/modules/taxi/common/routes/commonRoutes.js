@@ -17,4 +17,6 @@ commonRouter.get('/common/referrals/settings', commonController.getReferralSetti
 commonRouter.get('/common/payment-gateway', commonController.getPaymentGatewayConfig);
 commonRouter.get('/common/app-config', commonController.getPublicAppConfig);
 commonRouter.get('/common/carpool-config', commonController.getCarpoolPublicConfig);
+commonRouter.get('/track/:token', commonController.getTrackingPage);
+commonRouter.get('/track/:token/data', commonController.getTrackingData);
 commonRouter.post('/common/payment-gateway/phonepe/callback', commonController.acknowledgePhonePeCallback);
