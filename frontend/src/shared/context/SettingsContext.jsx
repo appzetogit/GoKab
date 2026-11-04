@@ -26,9 +26,7 @@ const DEFAULT_SETTINGS_CONTEXT = {
       admin_theme_color: '',
       currency_symbol: '',
     },
-    transportRide: {
-      enable_bus_service: '0',
-    },
+    transportRide: {},
     bidRide: {
       bidding_low_percentage: '10',
       bidding_high_percentage: '20',
@@ -46,34 +44,8 @@ const DEFAULT_SETTINGS_CONTEXT = {
 };
 const SettingsContext = createContext(DEFAULT_SETTINGS_CONTEXT);
 
-const normalizeBooleanSetting = (value, fallback = '0') => {
-  if (typeof value === 'boolean') {
-    return value ? '1' : '0';
-  }
-
-  if (typeof value === 'number') {
-    return value === 1 ? '1' : '0';
-  }
-
-  const normalized = String(value || '').trim().toLowerCase();
-  if (!normalized) {
-    return fallback;
-  }
-
-  if (['1', 'true', 'yes', 'on', 'enabled'].includes(normalized)) {
-    return '1';
-  }
-
-  if (['0', 'false', 'no', 'off', 'disabled'].includes(normalized)) {
-    return '0';
-  }
-
-  return fallback;
-};
-
 const normalizeTransportRideSettings = (settings = {}) => ({
   ...settings,
-  enable_bus_service: normalizeBooleanSetting(settings?.enable_bus_service, '0'),
 });
 
 const normalizeHexColor = (value, fallback = '') => {

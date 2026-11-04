@@ -6,9 +6,9 @@ import { buildAvatarFallback } from './activityHelpers';
 const ActivityCard = ({ type, title, address, date, time, status, statusTone, price, onClick, driverName, driverImage, vehicleImage, eyebrow }) => {
   const [vehicleBroken, setVehicleBroken] = useState(false);
   const [driverBroken, setDriverBroken] = useState(false);
-  const resolvedVehicleImage = vehicleBroken ? (type === 'parcel' ? '/5_Parcel.png' : '/1_Bike.png') : vehicleImage;
+  const resolvedVehicleImage = vehicleBroken ? '/1_Bike.png' : vehicleImage;
   const resolvedDriverImage = driverBroken ? buildAvatarFallback(driverName) : driverImage;
-  const vehicleAlt = type === 'parcel' ? 'Parcel' : type === 'bus' ? 'Bus' : type === 'pooling' ? 'Pooling vehicle' : 'Vehicle';
+  const vehicleAlt = type === 'pooling' ? 'Pooling vehicle' : 'Vehicle';
 
   return (
     <motion.button

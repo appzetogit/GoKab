@@ -19,7 +19,6 @@ const initialFormData = {
 const defaultTransportTypes = [
   { transport_type: 'all' },
   { transport_type: 'taxi' },
-  { transport_type: 'delivery' },
   { transport_type: 'intercity' },
 ];
 

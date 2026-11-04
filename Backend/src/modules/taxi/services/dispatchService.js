@@ -12,7 +12,6 @@ import {
   RIDE_LIVE_STATUS,
   RIDE_STATUS,
 } from '../constants/index.js';
-import { Delivery } from '../user/models/Delivery.js';
 import { getRideRoom, getScheduledDispatchLeadMs, resolveSetPriceForRide } from './rideService.js';
 import { releasePromoForCancelledRide } from './promoService.js';
 import { SOCKET_EVENTS } from '../socket/events.js';
@@ -42,10 +41,6 @@ const ensureUserWallet = async (userId, session = null) => {
 const normalizeRideTransportType = (ride) => {
   const serviceType = String(ride?.serviceType || '').trim().toLowerCase();
   const transportType = String(ride?.transport_type || '').trim().toLowerCase();
-
-  if (serviceType === 'parcel') {
-    return transportType === 'both' ? 'delivery' : (transportType || 'delivery');
-  }
 
   if (serviceType === 'intercity') {
     return 'intercity';
@@ -523,7 +518,6 @@ const getDispatchVehicleTypeIds = (ride) => {
 // airport bookings are matched as 'city' until that gets its own field.
 const getRideModuleCode = (ride) => {
   const serviceType = String(ride?.serviceType || 'ride').toLowerCase();
-  if (serviceType === 'parcel') return 'parcel';
   if (serviceType === 'intercity') return 'outstation';
   return 'city';
 };
@@ -729,7 +723,6 @@ const emitRideRequestToDrivers = async ({
       fareIncreaseWaitMinutes: Number(ride.fareIncreaseWaitMinutes || 0),
       nextFareIncreaseAt: ride.nextFareIncreaseAt || null,
       paymentMethod: ride.paymentMethod,
-      parcel: ride.parcel || null,
       intercity: ride.intercity || null,
       stopCount: ride.stopCount || 0,
       carpool: carpoolInfo,
@@ -814,13 +807,6 @@ const closeRideAsUnmatched = async (rideId) => {
   // No driver was ever found, so the rider must not lose their promo use.
   await releasePromoForCancelledRide({ ride });
   emitCustomerFeedEvent(ride, 'feed:customer:removed', { reason: 'UNMATCHED' });
-
-  if (ride.deliveryId) {
-    await Delivery.findByIdAndUpdate(ride.deliveryId, {
-      status: ride.status,
-      liveStatus: ride.liveStatus,
-    });
-  }
 
   await User.updateOne({ _id: ride.userId, currentRideId: ride._id }, { currentRideId: null });
   if (ride.carpool?.groupId) {
@@ -921,14 +907,6 @@ export const cancelRideByAdmin = async (rideId) => {
   }
   await ride.save();
 
-  if (ride.deliveryId) {
-    await Delivery.findByIdAndUpdate(ride.deliveryId, {
-      driverId: ride.driverId || null,
-      status: ride.status,
-      liveStatus: ride.liveStatus,
-    });
-  }
-
   await Promise.all([
     User.updateOne({ _id: ride.userId, currentRideId: ride._id }, { currentRideId: null }),
     ride.driverId ? Driver.findByIdAndUpdate(ride.driverId, { isOnRide: false }) : Promise.resolve(),
@@ -1015,14 +993,6 @@ export const cancelRideByUser = async ({ rideId, userId, reason = '', reasonId =
       ride.biddingStatus = 'cancelled';
     }
     await ride.save({ session });
-
-    if (ride.deliveryId) {
-      await Delivery.findByIdAndUpdate(ride.deliveryId, {
-        driverId: ride.driverId || null,
-        status: ride.status,
-        liveStatus: ride.liveStatus,
-      }, { session });
-    }
 
     await Promise.all([
       User.updateOne({ _id: ride.userId, currentRideId: ride._id }, { currentRideId: null }, { session }),
@@ -1166,14 +1136,6 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
       ride.biddingStatus = 'cancelled';
     }
     await ride.save({ session });
-
-    if (ride.deliveryId) {
-      await Delivery.findByIdAndUpdate(ride.deliveryId, {
-        driverId: ride.driverId || null,
-        status: ride.status,
-        liveStatus: ride.liveStatus,
-      }, { session });
-    }
 
     await Promise.all([
       User.updateOne({ _id: ride.userId, currentRideId: ride._id }, { currentRideId: null }, { session }),
@@ -1689,7 +1651,6 @@ export const notifyRideAccepted = async (ride) => {
     vehicleIconType: populatedRide.vehicleIconType || '',
     vehicleIconUrl: populatedRide.vehicleIconUrl || '',
     driver: populatedRide.driverId,
-    parcel: populatedRide.parcel || null,
   });
 
   emitToRoom(getUserRoom(populatedRide.userId), SOCKET_EVENTS.RIDE_STATE, {
@@ -1706,7 +1667,6 @@ export const notifyRideAccepted = async (ride) => {
     otp: populatedRide.otp || '',
     vehicleIconType: populatedRide.vehicleIconType || '',
     vehicleIconUrl: populatedRide.vehicleIconUrl || '',
-    parcel: populatedRide.parcel || null,
     intercity: populatedRide.intercity || null,
     stopCount: populatedRide.stopCount || 0,
     commissionAmount: populatedRide.commissionAmount,

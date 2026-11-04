@@ -175,15 +175,6 @@ const seedVehicleTypes = async () => {
           map_icon: '',
           supported_other_vehicle_types: [],
           vehicle_preference: [],
-          delivery_category: '',
-          delivery_distance_pricing: {
-            enabled: false,
-            base_price: 0,
-            free_distance: 0,
-            distance_price: 0,
-            free_time: 0,
-            time_price: 0
-          }
         });
 
         console.log(`* ${v.name}`);

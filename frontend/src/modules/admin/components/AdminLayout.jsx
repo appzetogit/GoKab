@@ -12,7 +12,6 @@ import {
   Bell,
   Briefcase,
   Car,
-  Bus,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -445,8 +444,8 @@ const DEEP_SEARCH_INDEX = [
     label: 'Vehicle Types & Categories',
     category: 'Pricing',
     path: '/admin/pricing/vehicle-type',
-    description: 'Manage vehicle types (Auto, Sedan, SUV, Bike, Parcel), seating capacities, icons, base rates',
-    keywords: 'vehicle types sedan suv auto bike parcel vehicle category capacity base fare icon',
+    description: 'Manage vehicle types (Auto, Sedan, SUV, Bike), seating capacities, icons, base rates',
+    keywords: 'vehicle types sedan suv auto bike vehicle category capacity base fare icon',
     icon: IndianRupee,
   },
   {
@@ -1180,28 +1179,6 @@ const AdminLayout = () => {
           //   subItems: [
           //     { label: 'Airport', path: '/admin/pricing/airport', permission: 'airports.view' },
           //     { label: 'Airport Requests', path: '/admin/airport/requests', permission: 'trips.view' },
-          //   ],
-          // },
-          // {
-          //   icon: Briefcase,
-          //   label: 'Rental',
-          //   subItems: [
-          //     { label: 'Service Stores', path: '/admin/pricing/service-stores', permission: 'service_stores.view' },
-          //     { label: 'Rental Vehicles', path: '/admin/pricing/rental-vehicles', permission: 'rental.view' },
-          //     { label: 'Track Vehicles', path: '/admin/pricing/rental-tracking', permission: 'rental.view' },
-          //     { label: 'Rental Requests', path: '/admin/pricing/rental-requests', permission: 'rental.view' },
-          //     { label: 'Rental Quote Requests', path: '/admin/pricing/rental-quotes', permission: 'rental.view' },
-          //     { label: 'Rental Package Types', path: '/admin/pricing/rental-packages', permission: 'rental.view' },
-          //     { label: 'Package Pricing', path: '/admin/pricing/package-pricing', permission: 'rental.view' },
-          //   ],
-          // },
-          // {
-          //   icon: Bus,
-          //   label: 'Bus Service',
-          //   subItems: [
-          //     { label: 'Fleet Manager', path: '/admin/bus-service', permission: 'bus_service.view' },
-          //     { label: 'Bus Commission', path: '/admin/bus-service/commission', permission: 'bus_service.view' },
-          //     { label: 'Bus Bookings', path: '/admin/bus-service/bookings', permission: 'bus_service.view' },
           //   ],
           // },
           // {

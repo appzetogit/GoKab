@@ -72,14 +72,9 @@ const rideSchema = new mongoose.Schema(
       set: (value) => (typeof value === 'string' && value.startsWith('data:') ? '' : value),
       get: (value) => (typeof value === 'string' && value.startsWith('data:') ? '' : value),
     },
-    deliveryId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Delivery',
-      default: null,
-    },
     serviceType: {
       type: String,
-      enum: ['ride', 'parcel', 'intercity'],
+      enum: ['ride', 'intercity'],
       default: 'ride',
       lowercase: true,
       trim: true,
@@ -135,64 +130,6 @@ const rideSchema = new mongoose.Schema(
         min: 0,
       },
       vehicleName: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-    },
-    parcel: {
-      category: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      weight: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      description: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      deliveryCategory: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      goodsTypeFor: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      deliveryScope: {
-        type: String,
-        enum: ['city', 'outstation'],
-        default: 'city',
-        lowercase: true,
-        trim: true,
-      },
-      isOutstation: {
-        type: Boolean,
-        default: false,
-      },
-      senderName: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      senderMobile: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      receiverName: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      receiverMobile: {
         type: String,
         default: '',
         trim: true,
@@ -901,6 +838,9 @@ const rideSchema = new mongoose.Schema(
         default: 0,
         min: 0,
       },
+      // Tiered alerts: the last phase whose plans were alerted, and who got the alert.
+      alerted_phase: { type: Number, default: -1 },
+      alerted_driver_ids: { type: [mongoose.Schema.Types.ObjectId], default: [] },
       // Secure (default): both sides' shares are frozen in escrow at accept and
       // settled through the wallets. Unsecure: no wallet check, no hold, cash
       // only — the two drivers settle the split between themselves offline.

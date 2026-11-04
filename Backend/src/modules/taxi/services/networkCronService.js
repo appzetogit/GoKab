@@ -315,6 +315,8 @@ const runGuarded = async (label, task) => {
 };
 
 export const runNetworkMaintenance = async () => {
+  // Published rides: alert the next plan phase when its time comes.
+  import('./publishedAlertService.js').then((m) => m.advancePublishedAlerts()).catch(() => {});
   // A publisher is told once when the driver's location goes quiet mid-trip.
   import('./networkTripService.js').then((m) => m.alertLostDriverLocations()).catch(() => {});
   // Carpool riders the driver never answered for go on their own.

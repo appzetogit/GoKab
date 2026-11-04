@@ -930,14 +930,14 @@ const PoolingManager = ({ mode: propMode }) => {
               <p className="text-[10px] font-black uppercase tracking-[0.22em] text-indigo-500">Section 3</p>
               <h2 className="mt-1 text-lg font-black text-slate-900">Pooling Vehicles And Layout</h2>
               <p className="mt-1 text-sm font-medium text-slate-500">
-                Choose which rental vehicles are allowed for this route. Their saved seat blueprint becomes the pooling layout for that vehicle.
+                Choose which pooling vehicles are allowed for this route. Their saved seat blueprint becomes the pooling layout for that vehicle.
               </p>
             </div>
 
             <div className="lg:col-span-2 grid gap-4 xl:grid-cols-3">
               {vehicles.length === 0 ? (
                 <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-4 md:p-8 text-sm text-slate-500 xl:col-span-3">
-                  No pooling-enabled rental vehicles found. Turn on pooling in rental vehicles first.
+                  No pooling-enabled vehicles found. Add a pooling vehicle first.
                 </div>
               ) : (
                 vehicles.map((vehicle) => {
@@ -1245,7 +1245,7 @@ const PoolingManager = ({ mode: propMode }) => {
               </div>
 
               <div className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                This page uses only rental vehicles with pooling enabled, so the saved blueprint layout stays consistent between rental setup and car pooling operations.
+                This page uses only pooling-enabled vehicles, so the saved blueprint layout stays consistent across car pooling operations.
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">

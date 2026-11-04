@@ -5,7 +5,6 @@ import {
     ChevronRight, 
     MapPin, 
     Zap, 
-    Package,
     ShieldCheck,
     Info,
     CheckCircle2
@@ -54,7 +53,7 @@ const normalizeServiceCategories = (value, registerFor = 'taxi') => {
         rawValues
             .map((item) => String(item || '').trim().toLowerCase())
             .flatMap((item) => item === 'both' ? ['taxi', 'outstation'] : item ? [item] : [])
-            .filter((item) => ['taxi', 'outstation', 'delivery', 'pooling'].includes(item)),
+            .filter((item) => ['taxi', 'outstation', 'pooling'].includes(item)),
     )];
 
     if (normalized.length > 0) {
@@ -66,7 +65,7 @@ const normalizeServiceCategories = (value, registerFor = 'taxi') => {
         return ['taxi', 'outstation'];
     }
 
-    return ['taxi', 'outstation', 'delivery', 'pooling'].includes(fallback) ? [fallback] : ['taxi'];
+    return ['taxi', 'outstation', 'pooling'].includes(fallback) ? [fallback] : ['taxi'];
 };
 
 const getPrimaryRegisterFor = (serviceCategories = [], fallback = 'taxi') => {
@@ -75,7 +74,6 @@ const getPrimaryRegisterFor = (serviceCategories = [], fallback = 'taxi') => {
     if (normalized.includes('taxi') && normalized.includes('outstation')) return 'both';
     if (normalized.includes('taxi')) return 'taxi';
     if (normalized.includes('outstation')) return 'outstation';
-    if (normalized.includes('delivery')) return 'delivery';
     if (normalized.includes('pooling')) return 'pooling';
 
     return String(fallback || 'taxi').trim().toLowerCase() || 'taxi';
@@ -406,7 +404,6 @@ const StepVehicle = () => {
     const registerTypes = [
         { id: 'taxi', label: 'Taxi', icon: <Car size={18} />, color: 'emerald' },
         { id: 'outstation', label: 'Outstation', icon: <MapPin size={18} />, color: 'sky' },
-        { id: 'delivery', label: 'Delivery', icon: <Package size={18} />, color: 'amber' },
         { id: 'pooling', label: 'Pooling', icon: <Zap size={18} />, color: 'indigo' }
     ];
 

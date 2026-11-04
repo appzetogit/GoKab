@@ -9,8 +9,6 @@ import {
   getRailwayStations,
   updateRailwayStation,
   createAdminAccount,
-  createAdminBusBooking,
-  createBusService,
   createAppModule,
   createDriver,
   createDriverNeededDocument,
@@ -25,9 +23,6 @@ import {
   createPaymentMethod,
   createPoolingRoute,
   createServiceLocation,
-  createServiceStore,
-  createServiceStoreStaff,
-  createRentalVehicleType,
   createSetPrice,
   createSubscriptionPlan,
   createCustomerSubscriptionPlan,
@@ -37,7 +32,6 @@ import {
   approveUserDeletionRequest,
   approveDriverDeletionRequest,
   deleteAppModule,
-  deleteBusService,
   deleteDriver,
   deleteDriverNeededDocument,
   deleteOnboardingScreen,
@@ -51,10 +45,8 @@ import {
   deleteRole,
   deletePaymentMethod,
   deletePoolingRoute,
-  deleteRentalVehicleType,
   deleteSetPrice,
   deleteServiceLocation,
-  deleteServiceStore,
   deleteUser,
   deleteZone,
   downloadDriverDutyReport,
@@ -65,11 +57,8 @@ import {
   downloadUserReport,
   forgotPassword,
   getAdminStatus,
-  getAdminBusBookingCalendar,
-  getAdminBusBookings,
   getAdminEarnings,
   getAirports,
-  getBusServices,
   getAppModules,
   getCancelChart,
   getCountries,
@@ -116,11 +105,7 @@ import {
   getPaymentMethods,
   getPaymentSettings,
   getPoolingRoutes,
-  getRentalBookingRequests,
-  getRentalTrackingDashboard,
-  getRentalQuoteRequests,
   getPreferences,
-  getRentalVehicleTypes,
   getRideModules,
   getRoles,
   getReferralSettings,
@@ -128,7 +113,6 @@ import {
   getReferralDashboard,
   getSetPrices,
   getServiceLocations,
-  getServiceStores,
   getSmsSettings,
   getSubscriptionPlans,
   getCustomerSubscriptionPlans,
@@ -170,7 +154,6 @@ import {
   updateAppModule,
   updateAirport,
   updateAdminAccount,
-  updateBusService,
   updateDriver,
   updateDriverNeededDocument,
   updateDriverPassword,
@@ -188,21 +171,16 @@ import {
   updatePaymentSettings,
   updatePaymentMethod,
   updatePoolingRoute,
-  updateRentalBookingRequest,
-  updateRentalQuoteRequest,
   updatePreferenceStatus,
   updateReferralTranslation,
-  updateRentalVehicleType,
   updateSetPrice,
   updateServiceLocation,
-  updateServiceStore,
   updateSmsSettings,
   updateUser,
   updateVehicleType,
   updateZone,
   createVehicleType,
   createFleetVehicle,
-  cancelAdminBusBookingSeats,
   deleteAirport,
   deleteAdminAccount,
   deleteVehicleType,
@@ -372,11 +350,6 @@ adminRouter.get('/admin/service-locations/nearby', getNearbyServiceLocations);
 adminRouter.post('/admin/service-locations', createServiceLocation);
 adminRouter.patch('/admin/service-locations/:id', updateServiceLocation);
 adminRouter.delete('/admin/service-locations/:id', deleteServiceLocation);
-adminRouter.get('/admin/service-stores', getServiceStores);
-adminRouter.post('/admin/service-stores', createServiceStore);
-adminRouter.patch('/admin/service-stores/:id', updateServiceStore);
-adminRouter.post('/admin/service-stores/:id/staff', createServiceStoreStaff);
-adminRouter.delete('/admin/service-stores/:id', deleteServiceStore);
 adminRouter.get('/common/ride_modules', getRideModules);
 adminRouter.get('/admin/types/vehicle-types/list', getVehicleTypes);
 adminRouter.get('/admin/types/vehicle-types', getVehicleTypeCatalog);
@@ -394,18 +367,6 @@ adminRouter.get('/admin/railway-stations', getRailwayStations);
 adminRouter.post('/admin/railway-stations', createRailwayStation);
 adminRouter.patch('/admin/railway-stations/:id', updateRailwayStation);
 adminRouter.delete('/admin/railway-stations/:id', deleteRailwayStation);
-adminRouter.get('/admin/bus-services', getBusServices);
-adminRouter.post('/admin/bus-services', createBusService);
-adminRouter.patch('/admin/bus-services/:id', updateBusService);
-adminRouter.delete('/admin/bus-services/:id', deleteBusService);
-adminRouter.get('/admin/bus-bookings', getAdminBusBookings);
-adminRouter.get('/admin/bus-bookings/calendar', getAdminBusBookingCalendar);
-adminRouter.post('/admin/bus-bookings/manual', createAdminBusBooking);
-adminRouter.post('/admin/bus-bookings/:id/cancel', cancelAdminBusBookingSeats);
-adminRouter.get('/admin/types/rental-vehicles', getRentalVehicleTypes);
-adminRouter.post('/admin/types/rental-vehicles', createRentalVehicleType);
-adminRouter.patch('/admin/types/rental-vehicles/:id', updateRentalVehicleType);
-adminRouter.delete('/admin/types/rental-vehicles/:id', deleteRentalVehicleType);
 adminRouter.get('/admin/pooling-routes', getPoolingRoutes);
 adminRouter.post('/admin/pooling-routes', createPoolingRoute);
 adminRouter.patch('/admin/pooling-routes/:id', updatePoolingRoute);
@@ -421,11 +382,6 @@ adminRouter.get('/admin/pooling-bookings', getPoolingBookings);
 adminRouter.patch('/admin/pooling-bookings/:id/status', updatePoolingBookingStatus);
 
 adminRouter.post('/admin/upload-image', uploadImage);
-adminRouter.get('/admin/rental-booking-requests', getRentalBookingRequests);
-adminRouter.get('/admin/rental-tracking', getRentalTrackingDashboard);
-adminRouter.patch('/admin/rental-booking-requests/:id', updateRentalBookingRequest);
-adminRouter.get('/admin/rental-quote-requests', getRentalQuoteRequests);
-adminRouter.patch('/admin/rental-quote-requests/:id', updateRentalQuoteRequest);
 adminRouter.get('/admin/types/rental-packages', getRentalPackageTypes);
 adminRouter.post('/admin/types/rental-packages', createRentalPackageType);
 adminRouter.patch('/admin/types/rental-packages/:id', updateRentalPackageType);

@@ -210,6 +210,10 @@ export const configureTaxiSocketServer = (httpServer) => {
         }
 
         // First successful transaction wins; later accepts are rejected by the service layer.
+        // A ride another driver published is requested, not taken: the publisher approves.
+        const { requestInsteadOfAccept } = await import('../services/publishedAlertService.js');
+        if (await requestInsteadOfAccept({ rideId, driverId: identity.sub })) return;
+
         const ride = await acceptRideAssignment({ rideId, driverId: identity.sub });
         joinRideRoom(socket, ride._id);
         await notifyRideAccepted(ride);

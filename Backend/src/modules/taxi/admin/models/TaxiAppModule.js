@@ -7,7 +7,7 @@ const taxiAppModuleSchema = new mongoose.Schema(
       required: true,
     },
     transport_type: {
-      type: String, // taxi, delivery
+      type: String, // taxi
       required: true,
     },
     service_type: {

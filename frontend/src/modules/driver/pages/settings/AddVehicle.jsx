@@ -94,7 +94,6 @@ const getVehicleTypeImage = (type = {}) =>
 
 const formatTransportType = (value = "") => {
   const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "both") return "Ride + Delivery";
   if (!normalized) return "Taxi";
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 };

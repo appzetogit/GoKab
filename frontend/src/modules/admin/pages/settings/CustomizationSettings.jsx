@@ -1,11 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { 
   ChevronRight, 
   Save, 
-  Loader2,
-  Bus,
-  ArrowUpRight
+  Loader2
 } from 'lucide-react';
 import api from '../../../../shared/api/axiosInstance';
 import toast from 'react-hot-toast';
@@ -53,7 +50,6 @@ const InputField = ({ label, name, value, onChange, placeholder, type = "text", 
 );
 
 const CustomizationSettings = () => {
-  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [settings, setSettings] = useState({});
@@ -92,7 +88,6 @@ const CustomizationSettings = () => {
         api.patch('/admin/general-settings/transport-ride', {
           settings: {
             ...transportRideSettings,
-            enable_bus_service: transportRideSettings.enable_bus_service === "1" ? "1" : "0",
           },
         }),
       ]);
@@ -109,10 +104,6 @@ const CustomizationSettings = () => {
 
   const handleChange = (name, value) => {
     setSettings(prev => ({ ...prev, [name]: value }));
-  };
-
-  const handleTransportRideChange = (name, value) => {
-    setTransportRideSettings(prev => ({ ...prev, [name]: value }));
   };
 
   if (loading) {
@@ -174,8 +165,6 @@ const CustomizationSettings = () => {
               <ToggleField label="Enable Country Restrict on Map" name="enable_country_restrict_on_map" value={settings.enable_country_restrict_on_map} onChange={handleChange} />
               <ToggleField label="Show Owner Module Feature on Mobile App" name="enable_owner_module" value={settings.enable_owner_module} onChange={handleChange} />
               <ToggleField label="Show Ride OTP Feature" name="show_ride_otp" value={settings.show_ride_otp} onChange={handleChange} />
-              <ToggleField label="Show Delivery Ride Otp On Loading Feature" name="enable_delivery_otp_load" value={settings.enable_delivery_otp_load} onChange={handleChange} />
-              <ToggleField label="Show Delivery Ride Otp On Unloading Feature" name="enable_delivery_otp_unload" value={settings.enable_delivery_otp_unload} onChange={handleChange} />
               <ToggleField label="Show Ride Without Destination" name="show_ride_without_destination" value={settings.show_ride_without_destination} onChange={handleChange} />
               <ToggleField label="Enable Web Booking Feature" name="enable_web_booking_feature" value={settings.enable_web_booking_feature} onChange={handleChange} />
               <ToggleField label="Enable Sub Vehicle Feature" name="enable_sub_vehicle_feature" value={settings.enable_sub_vehicle_feature} onChange={handleChange} />
@@ -192,43 +181,8 @@ const CustomizationSettings = () => {
 
            <SectionHeader title="Transport Ride Settings" />
            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 mb-8">
-              <ToggleField label="Enable Shipment Load Feature" name="enable_shipment_load_feature" value={settings.enable_shipment_load_feature} onChange={handleChange} />
-              <ToggleField label="Enable Shipment Unload Feature" name="enable_shipment_unload_feature" value={settings.enable_shipment_unload_feature} onChange={handleChange} />
               <ToggleField label="Enable Digital Signature" name="enable_digital_signature" value={settings.enable_digital_signature} onChange={handleChange} />
               <ToggleField label="Set The ETA price (without Waiting Charge) on completion of ride" name="enable_eta_price_on_complete" value={settings.enable_eta_price_on_complete} onChange={handleChange} />
-           </div>
-
-           <SectionHeader title="Bus Service" />
-           <div className="mb-8 rounded-2xl border border-rose-100 bg-rose-50/70 p-5">
-             <div className="flex items-start justify-between gap-4">
-               <div className="flex gap-3">
-                 <div className="w-11 h-11 rounded-2xl bg-white text-rose-500 border border-rose-100 flex items-center justify-center shadow-sm">
-                   <Bus size={20} />
-                 </div>
-                 <div>
-                   <p className="text-[13px] font-black text-slate-800">Enable Bus Service</p>
-                   <p className="mt-1 text-xs text-slate-500">
-                     Show the Bus option in the user app and enable route search, seat booking, and Razorpay payment flow.
-                   </p>
-                 </div>
-               </div>
-               <button
-                 onClick={() => handleTransportRideChange('enable_bus_service', transportRideSettings.enable_bus_service === "1" ? "0" : "1")}
-                 className={`w-11 h-6 rounded-full relative transition-all duration-300 shrink-0 ${
-                   transportRideSettings.enable_bus_service === "1" ? 'bg-rose-500' : 'bg-slate-300'
-                 }`}
-               >
-                 <div className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-all duration-300 ${transportRideSettings.enable_bus_service === "1" ? 'right-1' : 'left-1'}`} />
-               </button>
-             </div>
-
-             <button
-               type="button"
-               onClick={() => navigate('/admin/bus-service')}
-               className="mt-4 inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-[12px] font-black text-slate-700 border border-rose-100 shadow-sm hover:border-rose-200 hover:text-rose-600 transition-all"
-             >
-               Manage Bus Services <ArrowUpRight size={14} />
-             </button>
            </div>
 
            <SectionHeader title="Chain Ride settings" />

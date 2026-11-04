@@ -482,7 +482,6 @@ const ManageFleet = () => {
                     ) : (
                       <>
                         <option value="taxi">Taxi</option>
-                        <option value="delivery">Delivery</option>
                       </>
                     )}
                   </select>

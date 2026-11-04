@@ -21,7 +21,6 @@ import {
   Tag,
   Clock,
   ChevronLeft,
-  Gift,
   Settings,
   Filter,
   Cone,
@@ -60,7 +59,6 @@ const normalizePaymentTypes = (value) => {
 
 const normalizeTransportType = (value = '') => {
   const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'delivery') return 'delivery';
   if (normalized === 'pooling') return 'pooling';
   if (normalized === 'both' || normalized === 'all') return 'both';
   return normalized === 'taxi' ? 'taxi' : '';
@@ -161,10 +159,6 @@ const SetPrices = ({ mode }) => {
 
     if (!normalized.has('taxi')) {
       normalized.set('taxi', { id: 'taxi', name: 'taxi', display_name: 'Taxi' });
-    }
-
-    if (!normalized.has('delivery')) {
-      normalized.set('delivery', { id: 'delivery', name: 'delivery', display_name: 'Delivery' });
     }
 
     if (!normalized.has('both')) {
@@ -360,13 +354,6 @@ const SetPrices = ({ mode }) => {
                           <td className="px-8 py-6 text-right pr-12">
                              <div className="flex items-center justify-end gap-2">
                                 <button onClick={() => navigate(`/admin/pricing/set-price/edit/${prize.id || prize._id}`)} className="w-8 h-8 flex items-center justify-center bg-[#FFF7ED] text-[#F97316] rounded transition-colors hover:bg-orange-100"><Edit2 size={14} /></button>
-                                 <button 
-                                   title="set package prices"
-                                   onClick={() => navigate('/admin/pricing/package-pricing')}
-                                   className="w-8 h-8 flex items-center justify-center bg-[#F0FDFA] text-[#14B8A6] rounded transition-colors hover:bg-emerald-100"
-                                 >
-                                    <Gift size={14} />
-                                 </button>
                                  <button 
                                    title="Surge"
                                    onClick={() => navigate(`/admin/pricing/set-price/surge/${prize.id || prize._id}`)}

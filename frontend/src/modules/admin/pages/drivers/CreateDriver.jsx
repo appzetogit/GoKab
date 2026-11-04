@@ -139,7 +139,6 @@ const extractResults = (payload) => {
 const serviceCategoryChoices = [
   { id: 'taxi', label: 'Taxi' },
   { id: 'outstation', label: 'Outstation' },
-  { id: 'delivery', label: 'Delivery' },
   { id: 'pooling', label: 'Pooling' },
 ];
 
@@ -248,7 +247,7 @@ const CreateDriver = () => {
           options = normalizeVehicleOptions(catalogResponse).filter((item) => {
             if (!item.transportType) return true;
             if (formData.transport_type === 'both') {
-              return ['taxi', 'delivery', 'both'].includes(item.transportType);
+              return ['taxi', 'both'].includes(item.transportType);
             }
             return item.transportType === formData.transport_type || item.transportType === 'both';
           });
@@ -373,7 +372,7 @@ const CreateDriver = () => {
       service_categories:
         nextTransportType === 'both'
           ? ['taxi', 'outstation']
-          : [nextTransportType === 'delivery' ? 'delivery' : nextTransportType === 'pooling' ? 'pooling' : 'taxi'],
+          : [nextTransportType === 'pooling' ? 'pooling' : 'taxi'],
     }));
   };
 

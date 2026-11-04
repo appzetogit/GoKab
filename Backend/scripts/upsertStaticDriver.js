@@ -2,10 +2,7 @@ import mongoose from 'mongoose';
 import { env } from '../src/config/env.js';
 import { ServiceLocation } from '../src/modules/taxi/admin/models/ServiceLocation.js';
 import { Owner } from '../src/modules/taxi/admin/models/Owner.js';
-import { ServiceCenterStaff } from '../src/modules/taxi/admin/models/ServiceCenterStaff.js';
-import { ServiceStore } from '../src/modules/taxi/admin/models/ServiceStore.js';
 import { Driver } from '../src/modules/taxi/driver/models/Driver.js';
-import { BusDriver } from '../src/modules/taxi/driver/models/BusDriver.js';
 import { Zone } from '../src/modules/taxi/driver/models/Zone.js';
 import { hashPassword } from '../src/modules/taxi/services/passwordService.js';
 
@@ -196,82 +193,6 @@ const upsertOwner = async (passwordHash, serviceLocationId) => {
   );
 };
 
-const upsertServiceStore = async (serviceLocationId, zoneId) => ServiceStore.findOneAndUpdate(
-  { owner_phone: STATIC_PHONE },
-  {
-    $set: {
-      name: 'Static Service Center',
-      zone_id: zoneId,
-      service_location_id: serviceLocationId,
-      address: 'Indore, Madhya Pradesh, India',
-      owner_name: 'Static Center Owner',
-      owner_phone: STATIC_PHONE,
-      latitude: DEFAULT_COORDINATES[1],
-      longitude: DEFAULT_COORDINATES[0],
-      location: {
-        type: 'Point',
-        coordinates: DEFAULT_COORDINATES,
-      },
-      status: 'active',
-      active: true,
-    },
-  },
-  {
-    returnDocument: 'after',
-    upsert: true,
-    setDefaultsOnInsert: true,
-    runValidators: true,
-  },
-);
-
-const upsertServiceStaff = async (serviceCenterId) => ServiceCenterStaff.findOneAndUpdate(
-  { phone: STATIC_PHONE },
-  {
-    $set: {
-      serviceCenterId,
-      name: 'Static Service Staff',
-      phone: STATIC_PHONE,
-      active: true,
-      status: 'active',
-      biometrics: [],
-    },
-  },
-  {
-    returnDocument: 'after',
-    upsert: true,
-    setDefaultsOnInsert: true,
-    runValidators: true,
-  },
-);
-
-const upsertBusDriver = async () => BusDriver.findOneAndUpdate(
-  { phone: STATIC_PHONE },
-  {
-    $set: {
-      name: 'Static Bus Driver',
-      phone: STATIC_PHONE,
-      email: buildRoleEmail('bus-driver'),
-      approve: true,
-      active: true,
-      status: 'approved',
-      operatorName: 'Static Fleet',
-      busName: 'Static Express',
-      serviceNumber: 'BUS-7610',
-      registrationNumber: 'MP09BUS7610',
-      routeName: 'Indore Central',
-      originCity: 'Indore',
-      destinationCity: 'Indore',
-      lastLoginAt: null,
-    },
-  },
-  {
-    returnDocument: 'after',
-    upsert: true,
-    setDefaultsOnInsert: true,
-    runValidators: true,
-  },
-);
-
 const main = async () => {
   if (!STATIC_PHONE) {
     throw new Error('STATIC_OTP_PHONE is missing');
@@ -285,9 +206,6 @@ const main = async () => {
 
   const driver = await upsertDriver(passwordHash, serviceLocation._id, zone._id);
   const owner = await upsertOwner(passwordHash, serviceLocation._id);
-  const serviceCenter = await upsertServiceStore(serviceLocation._id, zone._id);
-  const staff = await upsertServiceStaff(serviceCenter._id);
-  const busDriver = await upsertBusDriver();
 
   console.log(
     JSON.stringify(
@@ -307,21 +225,6 @@ const main = async () => {
             id: String(owner._id),
             status: owner.status,
             approve: owner.approve,
-          },
-          service_center: {
-            id: String(serviceCenter._id),
-            status: serviceCenter.status,
-            active: serviceCenter.active,
-          },
-          service_center_staff: {
-            id: String(staff._id),
-            status: staff.status,
-            active: staff.active,
-          },
-          bus_driver: {
-            id: String(busDriver._id),
-            status: busDriver.status,
-            approve: busDriver.approve,
           },
         },
       },

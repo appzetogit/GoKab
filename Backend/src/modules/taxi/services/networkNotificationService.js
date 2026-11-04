@@ -247,6 +247,7 @@ export const notifyAssignmentAcknowledged = async ({ ride, driver }) => {
 export const notifyPublishedRideTaken = async ({ ride, acceptorDriverId, held = 0, isSecure = true, push = true }) => {
   const acceptor = await Driver.findById(acceptorDriverId).select('name phone vehicleNumber').lean();
   const acceptorName = safe(acceptor?.name, 'A driver');
+  import('./publishedAlertService.js').then((m) => m.closePublishedAlerts(ride, 'taken')).catch(() => {});
 
   emitToRoom(getPublisherRoom(ride.created_by_driver_id), 'network:ride:taken', {
     rideId: String(ride._id),
@@ -278,6 +279,7 @@ export const notifyPublishedRideTaken = async ({ ride, acceptorDriverId, held = 
 
 /** A published ride reached its expiry with no taker. */
 export const notifyPublishedRideExpired = async (ride) => {
+  import('./publishedAlertService.js').then((m) => m.closePublishedAlerts(ride, 'expired')).catch(() => {});
   emitToRoom(getPublisherRoom(ride.created_by_driver_id), 'network:ride:expired', {
     rideId: String(ride._id),
   });

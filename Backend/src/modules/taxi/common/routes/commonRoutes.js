@@ -7,7 +7,7 @@ export const commonRouter = Router();
 // Universal image upload endpoint
 commonRouter.post(
   '/common/upload/image',
-  authenticate(['admin', 'user', 'driver', 'owner', 'bus_driver', 'service_center', 'service_center_staff'], {
+  authenticate(['admin', 'user', 'driver', 'owner'], {
     allowPending: true,
   }),
   commonController.uploadImage,

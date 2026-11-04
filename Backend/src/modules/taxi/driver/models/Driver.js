@@ -236,10 +236,6 @@ const driverSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
-    delivery_enabled: {
-      type: Boolean,
-      default: false,
-    },
     serviceCategories: {
       type: [String],
       default: [],

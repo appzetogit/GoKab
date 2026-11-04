@@ -28,8 +28,6 @@ export const createDefaultBusinessSettings = () => ({
     enable_country_restrict_on_map: '1',
     enable_owner_module: '1',
     show_ride_otp: '1',
-    enable_delivery_otp_load: '1',
-    enable_delivery_otp_unload: '1',
     show_ride_without_destination: '1',
     enable_web_booking_feature: '1',
     enable_sub_vehicle_feature: '1',
@@ -65,7 +63,6 @@ export const createDefaultBusinessSettings = () => ({
     owner_mobile_password: '1',
   },
   transport_ride: {
-    enable_bus_service: '0',
     trip_dispatch_type: '1',
     maximum_time_for_accept_reject_bidding_ride: '60',
     maximum_time_for_find_drivers_for_bitting_ride: '300',
@@ -96,8 +93,6 @@ export const createDefaultBusinessSettings = () => ({
     // Share of the usual commission kept when the driver ends up with one rider (0 = none).
     carpool_solo_commission_percent: '0',
     can_round_the_bill_values: '1',
-    enable_shipment_load_feature: '1',
-    enable_shipment_unload_feature: '1',
     enable_digital_signature: '1',
     enable_eta_price_on_complete: '1',
     enable_secondary_ride: '0',
@@ -119,7 +114,6 @@ export const createDefaultBusinessSettings = () => ({
     vendor_max_vehicles: 4,
     super_fleet_min_vehicles: 5,
     grace_period_days: 30,
-    delivery_module_globally_enabled: '1',
     pooling_module_globally_enabled: '1',
     copy_individual: 'Individual Driver: Single vehicle owned & driven by you.',
     copy_vendor: 'Vendor: Small fleet owner with 2 to 4 vehicles.',

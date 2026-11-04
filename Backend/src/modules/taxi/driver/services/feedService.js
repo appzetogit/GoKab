@@ -189,6 +189,7 @@ export const unpublishRide = async ({ driverId, rideId }) => {
     rideId: String(updated._id),
     reason: 'UNPUBLISHED',
   });
+  import('../../services/publishedAlertService.js').then((m) => m.closePublishedAlerts(updated, 'unpublished')).catch(() => {});
   await closeLeadConversationsForRide(updated._id, 'UNPUBLISHED');
   const { rejectPendingRequestsForRide } = await import('./rideRequestService.js');
   await rejectPendingRequestsForRide({ ride: updated, reason: 'ride_cancelled' });
@@ -213,6 +214,7 @@ export const closePublishedListingForCancelledRide = async (ride) => {
       rideId: String(ride._id),
       reason: 'CANCELLED',
     });
+    import('../../services/publishedAlertService.js').then((m) => m.closePublishedAlerts(ride, 'cancelled')).catch(() => {});
   }
 
   await closeLeadConversationsForRide(ride._id, 'CANCELLED');
@@ -225,6 +227,15 @@ export const closePublishedListingForCancelledRide = async (ride) => {
 const MAX_LEAD_PUSHES = 200;
 
 const broadcastNewDriverLead = async (ride) => {
+  // The first phase's plans get the ring card and push now; later phases follow as
+  // their time comes (publishedAlertService, run by the maintenance cron).
+  try {
+    const { alertPublishedRide } = await import('../../services/publishedAlertService.js');
+    await alertPublishedRide(ride._id);
+  } catch (error) {
+    console.error('[feedService] tiered alert failed:', error.message);
+  }
+
   emitToRoom(getFeedRoom(ride.service_location_id), 'feed:driver:new', {
     rideId: String(ride._id),
     pickup: ride.pickupAddress || '',
@@ -396,6 +407,14 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
     candidates = isTeamMember
       ? []
       : candidates.filter((ride) => isRideOpenToCategory(ride, categoryOf(driver), phases));
+  }
+
+  // Rides other drivers published follow the same plan phases: Elite first, then
+  // Elite + Pro, then everyone (they stay on the feed for everyone after that).
+  if (tab === 'driver') {
+    const phases = await getTierPhases();
+    const { isPublishedOpenToCategory } = await import('../../services/publishedAlertService.js');
+    candidates = candidates.filter((ride) => isPublishedOpenToCategory(ride, categoryOf(driver), phases));
   }
 
   // Riders' advertised trips ride along on the customer tab, until pickup time.

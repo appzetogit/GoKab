@@ -131,9 +131,18 @@ export const requestPublishedRide = async ({ driverId, rideId, note = '' }) => {
     throw new ApiError(409, 'This ride is no longer open', null, 'RIDE_NOT_OPEN');
   }
 
-  const driver = await Driver.findById(driverId).select(SNAPSHOT_DRIVER_FIELDS).lean();
+  const driver = await Driver.findById(driverId).select(`${SNAPSHOT_DRIVER_FIELDS} driver_category`).lean();
   if (!driver || driver.deletedAt || driver.approve === false) {
     throw new ApiError(403, 'Your account cannot take rides right now', null, 'DRIVER_NOT_AVAILABLE');
+  }
+
+  // Elite sees a published ride first, then Pro, then everyone (see publishedAlertService).
+  const [{ getTierPhases, categoryOf }, { isPublishedOpenToCategory }] = await Promise.all([
+    import('../../services/tierPhaseService.js'),
+    import('../../services/publishedAlertService.js'),
+  ]);
+  if (!isPublishedOpenToCategory(ride, categoryOf(driver), await getTierPhases())) {
+    throw new ApiError(409, 'This ride is not open to your plan yet', null, 'RIDE_NOT_OPEN_FOR_PLAN_YET');
   }
 
   const existing = await RideRequest.findOne({ ride_id: ride._id, driver_id: driverId, published_at: publishKey(ride) }).lean();

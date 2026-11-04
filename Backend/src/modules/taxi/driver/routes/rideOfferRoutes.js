@@ -20,6 +20,12 @@ rideOfferRouter.post(
   '/:rideId/accept',
   driverOnly,
   asyncHandler(async (req, res) => {
+    // A ride another driver published is requested, not taken: the publisher approves.
+    const { requestInsteadOfAccept } = await import('../../services/publishedAlertService.js');
+    if (await requestInsteadOfAccept({ rideId: req.params.rideId, driverId: req.auth.sub })) {
+      res.json({ success: true, data: { rideId: String(req.params.rideId), status: 'requested' } });
+      return;
+    }
     const ride = await acceptRideAssignment({ rideId: req.params.rideId, driverId: req.auth.sub });
     await notifyRideAccepted(ride);
     // The app reads this when it opens (or is already open): same shape the

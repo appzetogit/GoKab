@@ -8,8 +8,6 @@ import { SettingsProvider } from './shared/context/SettingsContext';
 import AppAutoUpdater from './modules/shared/components/AppAutoUpdater';
 import { clearLocalUserSession, getLocalUserToken } from './modules/user/services/authService';
 import { clearCurrentRide } from './modules/user/services/currentRideService';
-import RentalLocationTracker from './modules/user/components/RentalLocationTracker';
-import userBusService from './modules/user/services/busService';
 import { userService } from './modules/user/services/userService';
 import { syncUpcomingRideReminders } from './modules/user/utils/upcomingRideReminderService';
 import { getAuthenticatedDriverRole, getLocalDriverToken } from './modules/driver/services/registrationService';
@@ -65,7 +63,7 @@ const SupportTickets = lazy(() => import('./modules/user/pages/support/SupportTi
 const SupportTicketDetail = lazy(() => import('./modules/user/pages/support/SupportTicketDetail'));
 const DeleteAccount = lazy(() => import('./modules/user/pages/profile/DeleteAccount'));
 
-// Phase 4 — Cab/Intercity/Bus flows
+// Phase 4 — Cab/Intercity flows
 const CabHome = lazy(() => import('./modules/user/pages/cab/CabHome'));
 const SharedTaxi = lazy(() => import('./modules/user/pages/cab/SharedTaxi'));
 const SharedTaxiSeats = lazy(() => import('./modules/user/pages/cab/SharedTaxiSeats'));
@@ -80,23 +78,11 @@ const IntercityVehicle = lazy(() => import('./modules/user/pages/intercity/Inter
 const IntercityDetails = lazy(() => import('./modules/user/pages/intercity/IntercityDetails'));
 const IntercityConfirm = lazy(() => import('./modules/user/pages/intercity/IntercityConfirm'));
 
-const BusHome = lazy(() => import('./modules/user/pages/bus/BusHome'));
-const BusList = lazy(() => import('./modules/user/pages/bus/BusList'));
-const BusSeats = lazy(() => import('./modules/user/pages/bus/BusSeats'));
-const BusPreview = lazy(() => import('./modules/user/pages/bus/BusPreview'));
-const BusDetails = lazy(() => import('./modules/user/pages/bus/BusDetails'));
-const BusConfirm = lazy(() => import('./modules/user/pages/bus/BusConfirm'));
 
 // Phase 5 — Onboarding
 const Onboarding = lazy(() => import('./modules/user/pages/auth/Onboarding'));
 
 // New Feature Pages
-const BikeRentalHome = lazy(() => import('./modules/user/pages/rental/BikeRentalHome'));
-const RentalVehicleDetail = lazy(() => import('./modules/user/pages/rental/RentalVehicleDetail'));
-const RentalSchedule = lazy(() => import('./modules/user/pages/rental/RentalSchedule'));
-const RentalKYC = lazy(() => import('./modules/user/pages/rental/RentalKYC'));
-const RentalDeposit = lazy(() => import('./modules/user/pages/rental/RentalDeposit'));
-const RentalConfirmed = lazy(() => import('./modules/user/pages/rental/RentalConfirmed'));
 const IntercityHome = lazy(() => import('./modules/user/pages/intercity/IntercityHome'));
 const CabSharing = lazy(() => import('./modules/user/pages/cabsharing/CabSharing'));
 
@@ -115,8 +101,6 @@ const DriverPoolingBookings = lazy(() => import('./modules/driver/pages/pooling/
 const ProfileSettings = lazy(() => import('./modules/user/pages/profile/ProfileSettings'));
 const PaymentSettings = lazy(() => import('./modules/user/pages/profile/PaymentSettings'));
 const AddressSettings = lazy(() => import('./modules/user/pages/profile/AddressSettings'));
-const BusBookings = lazy(() => import('./modules/user/pages/profile/BusBookings'));
-const BusBookingDetail = lazy(() => import('./modules/user/pages/profile/BusBookingDetail'));
 const UserSubscriptions = lazy(() => import('./modules/user/pages/profile/Subscriptions'));
 // Driver Module - Common
 import DriverLayout from './modules/driver/components/DriverLayout';
@@ -135,18 +119,12 @@ const ApplicationStatus = lazy(() => import('./modules/driver/pages/registration
 const DriverHome = lazy(() => import('./modules/driver/pages/DriverHome'));
 const DriverSubscriptionPlans = lazy(() => import('./modules/driver/pages/DriverSubscriptionPlans'));
 const OwnerDashboard = lazy(() => import('./modules/driver/pages/OwnerDashboard'));
-const OwnerBusServicePage = lazy(() => import('./modules/driver/pages/OwnerBusServicePage'));
-const OwnerBusBookingsPage = lazy(() => import('./modules/driver/pages/OwnerBusBookingsPage'));
 const ActiveTrip = lazy(() => import('./modules/driver/pages/ActiveTrip'));
 const DriverWallet = lazy(() => import('./modules/driver/pages/DriverWallet'));
 const DriverProfile = lazy(() => import('./modules/driver/pages/DriverProfile'));
 const DriverBankDetailsPage = lazy(() => import('./modules/driver/pages/DriverBankDetailsPage'));
-const ServiceCenterDashboard = lazy(() => import('./modules/driver/pages/ServiceCenterDashboard'));
-const ServiceCenterVehicleDetails = lazy(() => import('./modules/driver/pages/ServiceCenterVehicleDetails'));
 const RideRequests = lazy(() => import('./modules/driver/pages/RideRequests'));
 const DriverIncentives = lazy(() => import('./modules/driver/pages/DriverIncentives'));
-const BusDriverHome = lazy(() => import('./modules/driver/pages/BusDriverHome'));
-const BusDriverLiveRoute = lazy(() => import('./modules/driver/pages/BusDriverLiveRoute'));
 const PortalSupportPage = lazy(() => import('./modules/driver/pages/PortalSupportPage'));
 
 // Driver Module - Settings
@@ -223,32 +201,19 @@ const AdminDriverOffers = lazy(() => import('./modules/admin/pages/promotions/Dr
 
 // Price Management
 const AdminServiceLocation = lazy(() => import('./modules/admin/pages/price-management/ServiceLocation'));
-const AdminServiceStores = lazy(() => import('./modules/admin/pages/price-management/ServiceStores'));
 const AdminZoneManagement = lazy(() => import('./modules/admin/pages/price-management/ZoneManagement'));
 const AdminAirportManagement = lazy(() => import('./modules/admin/pages/price-management/Airport'));
 const AdminRailwayStationManagement = lazy(() => import('./modules/admin/pages/price-management/RailwayStation'));
 const AdminSetPrices = lazy(() => import('./modules/admin/pages/price-management/SetPrices'));
-const AdminSetPackagePrices = lazy(() => import('./modules/admin/pages/price-management/SetPackagePrices'));
-const AdminCreatePackagePrice = lazy(() => import('./modules/admin/pages/price-management/CreatePackagePrice'));
 const AdminDriverIncentive = lazy(() => import('./modules/admin/pages/price-management/DriverIncentive'));
 const AdminSurgePricing = lazy(() => import('./modules/admin/pages/price-management/SurgePricing'));
 const AdminVehicleType = lazy(() => import('./modules/admin/pages/price-management/VehicleType'));
-const AdminRentalVehicleTypes = lazy(() => import('./modules/admin/pages/price-management/RentalVehicleTypes'));
-const AdminRentalTracking = lazy(() => import('./modules/admin/pages/price-management/RentalTracking'));
-const AdminRentalTrackingDetail = lazy(() => import('./modules/admin/pages/price-management/RentalTrackingDetail'));
-const AdminRentalBookingRequests = lazy(() => import('./modules/admin/pages/price-management/RentalBookingRequests'));
-const AdminRentalQuoteRequests = lazy(() => import('./modules/admin/pages/price-management/RentalQuoteRequests'));
-const AdminRentalPackageTypes = lazy(() => import('./modules/admin/pages/price-management/RentalPackageTypes'));
 const AdminPoolingManager = lazy(() => import('./modules/admin/pages/pooling/PoolingManager'));
 const AdminPoolingVehicles = lazy(() => import('./modules/admin/pages/pooling/PoolingVehicles'));
 const AdminPoolingVehicleForm = lazy(() => import('./modules/admin/pages/pooling/PoolingVehicleForm'));
 const AdminPoolingBookings = lazy(() => import('./modules/admin/pages/pooling/PoolingBookings'));
 const AdminPendingPoolingDrivers = lazy(() => import('./modules/admin/pages/pooling/PendingPoolingDrivers'));
 const AdminPoolingCommissionManager = lazy(() => import('./modules/admin/pages/pooling/PoolingCommissionManager'));
-const AdminBusServiceManager = lazy(() => import('./modules/admin/pages/bus-service/BusServiceManager'));
-const AdminBusServiceDetails = lazy(() => import('./modules/admin/pages/bus-service/BusServiceDetails'));
-const AdminBusBookingManager = lazy(() => import('./modules/admin/pages/bus-service/BusBookingManager'));
-const AdminBusCommissionManager = lazy(() => import('./modules/admin/pages/bus-service/BusCommissionManager'));
 const AdminPricingPlaceholder = ({ title }) => (
   <div className="flex flex-col items-center justify-center min-h-[500px] text-gray-400 bg-white rounded-[32px] border border-gray-100 shadow-sm p-10">
     <MapPin size={60} strokeWidth={1} className="mb-6 opacity-20" />
@@ -515,8 +480,7 @@ const UserUpcomingRideReminderBootstrap = () => {
       location.pathname.startsWith('/taxi/user') ||
       location.pathname === '/user' ||
       location.pathname.startsWith('/ride') ||
-      location.pathname.startsWith('/pooling') ||
-      location.pathname.startsWith('/bus');
+      location.pathname.startsWith('/pooling');
 
     if (!isUserRoute || !getLocalUserToken()) {
       return undefined;
@@ -527,8 +491,7 @@ const UserUpcomingRideReminderBootstrap = () => {
 
     const syncReminders = async () => {
       try {
-        const [busResult, poolingResult, scheduledRideResult] = await Promise.all([
-          userBusService.getMyBookings({ page: 1, limit: 20, tripState: 'upcoming' }),
+        const [poolingResult, scheduledRideResult] = await Promise.all([
           userService.getMyPoolingBookings(),
           api.get('/rides', {
             params: {
@@ -543,7 +506,6 @@ const UserUpcomingRideReminderBootstrap = () => {
           return;
         }
 
-        const busPayload = getResponsePayload(busResult);
         const poolingPayload = getResponsePayload(poolingResult);
         const scheduledRidePayload = getResponsePayload(scheduledRideResult);
 
@@ -585,7 +547,6 @@ const UserUpcomingRideReminderBootstrap = () => {
         });
 
         syncUpcomingRideReminders({
-          busBookings: Array.isArray(busPayload?.results) ? busPayload.results : [],
           poolingBookings,
           scheduledRides: Array.isArray(scheduledRidePayload?.results) ? scheduledRidePayload.results : [],
         });
@@ -650,13 +611,7 @@ const DriverEntryRedirect = () => {
       to={
         role === 'owner'
           ? '/taxi/owner/dashboard'
-          : role === 'service_center'
-            ? '/taxi/driver/service-center'
-            : role === 'service_center_staff'
-              ? '/taxi/driver/service-center'
-            : role === 'bus_driver'
-              ? '/taxi/driver/bus-home'
-              : '/taxi/driver/home'
+          : '/taxi/driver/home'
       }
       replace
     />
@@ -667,7 +622,6 @@ function App() {
   return (
     <Router>
       <SettingsProvider>
-        <RentalLocationTracker />
         <AppAutoUpdater />
         <ScrollToTop />
         <UserAccountInvalidationListener />
@@ -720,12 +674,6 @@ function App() {
               <Route path="/ride/detail/:id" element={<RideDetail />} />
 
               {/* New Service Routes — Real pages replacing ComingSoon */}
-              <Route path="/rental" element={<BikeRentalHome />} />
-              <Route path="/rental/vehicle" element={<RentalVehicleDetail />} />
-              <Route path="/rental/schedule" element={<RentalSchedule />} />
-              <Route path="/rental/kyc" element={<RentalKYC />} />
-              <Route path="/rental/deposit" element={<RentalDeposit />} />
-              <Route path="/rental/confirmed" element={<RentalConfirmed />} />
               <Route path="/intercity" element={<IntercityHome />} />
               <Route path="/intercity/vehicle" element={<IntercityVehicle />} />
               <Route path="/intercity/details" element={<IntercityDetails />} />
@@ -752,11 +700,6 @@ function App() {
                 path="/cab/spiritual-confirm"
                 element={<SpiritualTripConfirm />}
               />
-              <Route path="/bus" element={<BusHome />} />
-              <Route path="/bus/list" element={<BusList />} />
-              <Route path="/bus/seats" element={<BusSeats />} />
-              <Route path="/bus/details" element={<BusDetails />} />
-              <Route path="/bus/confirm" element={<BusConfirm />} />
               <Route path="/tours" element={<ComingSoon />} />
 
               <Route path="/activity" element={<Activity />} />
@@ -827,24 +770,6 @@ function App() {
               <Route path="/taxi/user/pooling/list" element={<UserPoolingList />} />
               <Route path="/taxi/user/pooling/seats/:id" element={<UserPoolingSeats />} />
               <Route path="/taxi/user/pooling/confirm" element={<UserPoolingConfirm />} />
-              <Route path="/taxi/user/rental" element={<BikeRentalHome />} />
-              <Route
-                path="/taxi/user/rental/vehicle"
-                element={<RentalVehicleDetail />}
-              />
-              <Route
-                path="/taxi/user/rental/schedule"
-                element={<RentalSchedule />}
-              />
-              <Route path="/taxi/user/rental/kyc" element={<RentalKYC />} />
-              <Route
-                path="/taxi/user/rental/deposit"
-                element={<RentalDeposit />}
-              />
-              <Route
-                path="/taxi/user/rental/confirmed"
-                element={<RentalConfirmed />}
-              />
               <Route path="/taxi/user/intercity" element={<IntercityHome />} />
               <Route
                 path="/taxi/user/intercity/vehicle"
@@ -886,12 +811,6 @@ function App() {
                 path="/taxi/user/cab/spiritual-confirm"
                 element={<SpiritualTripConfirm />}
               />
-              <Route path="/taxi/user/bus" element={<BusHome />} />
-              <Route path="/taxi/user/bus/list" element={<BusList />} />
-              <Route path="/taxi/user/bus/seats" element={<BusSeats />} />
-              <Route path="/taxi/user/bus/details" element={<BusPreview />} />
-              <Route path="/taxi/user/bus/checkout" element={<BusDetails />} />
-              <Route path="/taxi/user/bus/confirm" element={<BusConfirm />} />
               <Route path="/taxi/user/tours" element={<ComingSoon />} />
 
               <Route path="/taxi/user/activity" element={<Activity />} />
@@ -915,14 +834,6 @@ function App() {
               <Route
                 path="/taxi/user/profile/addresses"
                 element={<AddressSettings />}
-              />
-              <Route
-                path="/taxi/user/profile/bus-bookings"
-                element={<BusBookings />}
-              />
-              <Route
-                path="/taxi/user/profile/bus-bookings/:id"
-                element={<BusBookingDetail />}
               />
               <Route
                 path="/taxi/user/profile/subscriptions"
@@ -976,17 +887,12 @@ function App() {
                 <Route path="status" element={<ApplicationStatus />} />
 
                 <Route path="home" element={<DriverHome />} />
-                <Route path="bus-home" element={<BusDriverHome />} />
-                <Route path="bus-home/live-route" element={<BusDriverLiveRoute />} />
                 <Route path="dashboard" element={<DriverHome />} />
                 <Route path="active-trip" element={<ActiveTrip />} />
                 <Route path="chat" element={<Chat />} />
                 <Route path="wallet" element={<DriverWallet />} />
                 <Route path="profile" element={<DriverProfile />} />
                 <Route path="profile/bank-details" element={<DriverBankDetailsPage />} />
-                <Route path="service-center" element={<ServiceCenterDashboard />} />
-                <Route path="service-center/vehicles/new" element={<ServiceCenterVehicleDetails />} />
-                <Route path="service-center/vehicles/:vehicleId" element={<ServiceCenterVehicleDetails />} />
                 <Route path="history" element={<RideRequests />} />
                 <Route path="incentives" element={<DriverIncentives />} />
                 <Route path="subscriptions" element={<DriverSubscriptionPlans />} />
@@ -1039,11 +945,6 @@ function App() {
                 <Route path="status" element={<ApplicationStatus />} />
                 <Route path="home" element={<OwnerDashboard />} />
                 <Route path="dashboard" element={<OwnerDashboard />} />
-                <Route path="bus-service" element={<OwnerBusServicePage />} />
-                <Route path="bus-service/create" element={<OwnerBusServicePage />} />
-                <Route path="bus-service/edit/:id" element={<OwnerBusServicePage />} />
-                <Route path="bus-service/:id" element={<OwnerBusServicePage />} />
-                <Route path="bus-bookings" element={<OwnerBusBookingsPage />} />
                 <Route path="profile" element={<DriverProfile />} />
                 <Route path="profile/bank-details" element={<DriverBankDetailsPage />} />
                 <Route path="wallet" element={<DriverWallet />} />
@@ -1091,12 +992,6 @@ function App() {
                 <Route path="outstation" element={<AdminOutstation />} />
                 <Route path="ongoing" element={<AdminOngoing />} />
                 <Route path="airport/requests" element={<AdminAirportRequests />} />
-                <Route path="bus-service" element={<AdminBusServiceManager />} />
-                <Route path="bus-service/create" element={<AdminBusServiceManager mode="create" />} />
-                <Route path="bus-service/edit/:id" element={<AdminBusServiceManager mode="edit" />} />
-                <Route path="bus-service/commission" element={<AdminBusCommissionManager />} />
-                <Route path="bus-service/bookings" element={<AdminBusBookingManager />} />
-                <Route path="bus-service/:id" element={<AdminBusServiceDetails />} />
                 <Route path="pooling" element={<Navigate to="/admin/pooling/routes" replace />} />
                 <Route path="pooling/routes" element={<AdminPoolingManager />} />
                 <Route
@@ -1385,18 +1280,6 @@ function App() {
                     path="service-location/edit/:id"
                     element={<AdminServiceLocation mode="edit" />}
                   />
-                  <Route
-                    path="service-stores"
-                    element={<AdminServiceStores />}
-                  />
-                  <Route
-                    path="service-stores/add"
-                    element={<AdminServiceStores mode="create" />}
-                  />
-                  <Route
-                    path="service-stores/edit/:id"
-                    element={<AdminServiceStores mode="edit" />}
-                  />
                   <Route path="app-modules" element={<AdminAppModules />} />
                   <Route
                     path="app-modules/create"
@@ -1442,50 +1325,6 @@ function App() {
                     path="vehicle-type/edit/:id"
                     element={<AdminVehicleType mode="edit" />}
                   />
-                  <Route
-                    path="rental-vehicles"
-                    element={<AdminRentalVehicleTypes />}
-                  />
-                  <Route
-                    path="rental-vehicles/create"
-                    element={<AdminRentalVehicleTypes mode="create" />}
-                  />
-                  <Route
-                    path="rental-vehicles/edit/:id"
-                    element={<AdminRentalVehicleTypes mode="edit" />}
-                  />
-                  <Route
-                    path="rental-vehicles/view/:id"
-                    element={<AdminRentalVehicleTypes mode="view" />}
-                  />
-                  <Route
-                    path="rental-tracking"
-                    element={<AdminRentalTracking />}
-                  />
-                  <Route
-                    path="rental-tracking/:id"
-                    element={<AdminRentalTrackingDetail />}
-                  />
-                  <Route
-                    path="rental-requests"
-                    element={<AdminRentalBookingRequests />}
-                  />
-                  <Route
-                    path="rental-quotes"
-                    element={<AdminRentalQuoteRequests />}
-                  />
-                  <Route
-                    path="rental-packages"
-                    element={<AdminRentalPackageTypes />}
-                  />
-                  <Route
-                    path="rental-packages/create"
-                    element={<AdminRentalPackageTypes mode="create" />}
-                  />
-                  <Route
-                    path="rental-packages/edit/:id"
-                    element={<AdminRentalPackageTypes mode="edit" />}
-                  />
                   <Route path="set-price" element={<AdminSetPrices />} />
                   <Route
                     path="set-price/create"
@@ -1494,30 +1333,6 @@ function App() {
                   <Route
                     path="set-price/edit/:id"
                     element={<AdminSetPrices mode="edit" />}
-                  />
-                  <Route
-                    path="set-price/packages/:id"
-                    element={<AdminSetPackagePrices />}
-                  />
-                  <Route
-                    path="set-price/packages/create/:id"
-                    element={<AdminCreatePackagePrice mode="create" />}
-                  />
-                  <Route
-                    path="set-price/packages/edit/:packageId"
-                    element={<AdminCreatePackagePrice mode="edit" />}
-                  />
-                  <Route
-                    path="package-pricing"
-                    element={<AdminSetPackagePrices />}
-                  />
-                  <Route
-                    path="package-pricing/create"
-                    element={<AdminCreatePackagePrice mode="create" />}
-                  />
-                  <Route
-                    path="package-pricing/edit/:packageId"
-                    element={<AdminCreatePackagePrice mode="edit" />}
                   />
                   <Route
                     path="set-price/incentive/:id"

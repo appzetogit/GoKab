@@ -287,7 +287,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
     vehicleTypeId,
     vehicleTypeIds,
     serviceLocationId = null,
-    rideModuleCode = null, // e.g. 'outstation', 'airport', 'parcel', 'carpool'
+    rideModuleCode = null, // e.g. 'outstation', 'airport', 'carpool'
     paymentMethod = 'cash',
     dropCoords = null,
   } = options;

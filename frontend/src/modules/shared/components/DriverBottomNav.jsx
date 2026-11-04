@@ -2,7 +2,6 @@ import React from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Briefcase,
-  Bus,
   Car,
   Home,
   IndianRupee,
@@ -11,20 +10,11 @@ import {
   History,
   Users,
 } from "lucide-react";
-import { useSettings } from "../../../shared/context/SettingsContext";
-
-const isEnabledFlag = (value) => {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value === 1;
-  return ["1", "true", "yes", "on", "enabled"].includes(String(value || "").trim().toLowerCase());
-};
 
 const DriverBottomNav = () => {
   const location = useLocation();
-  const { settings } = useSettings();
   const isOwner = location.pathname.startsWith("/taxi/owner");
   const routePrefix = isOwner ? "/taxi/owner" : "/taxi/driver";
-  const busEnabled = isEnabledFlag(settings.transportRide?.enable_bus_service);
 
   // Matching user's latest screenshot labels: Home, History, Earnings, Accounts
   const navItems = isOwner
@@ -44,15 +34,6 @@ const DriverBottomNav = () => {
           label: "Vehicle",
           path: `${routePrefix}/vehicle-fleet`,
         },
-        ...(busEnabled
-          ? [
-              {
-                icon: <Bus size={22} />,
-                label: "Bus",
-                path: `${routePrefix}/bus-service`,
-              },
-            ]
-          : []),
         {
           icon: <User size={22} />,
           label: "Account",

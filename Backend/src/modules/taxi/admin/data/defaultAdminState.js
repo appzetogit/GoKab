@@ -96,7 +96,6 @@ export const createDefaultAdminState = () => {
     ],
     rideModules: [
       { transport_type: 'taxi' },
-      { transport_type: 'delivery' },
       { transport_type: 'intercity' },
     ],
     appModules: [
@@ -109,16 +108,6 @@ export const createDefaultAdminState = () => {
         description: 'Standard intra-city taxi booking experience.',
         active: true,
         mobile_menu_icon: 'https://cdn.jsdelivr.net/gh/tabler/tabler-icons/icons/car.svg',
-      },
-      {
-        name: 'Parcel Delivery',
-        transport_type: 'delivery',
-        service_type: 'normal',
-        order_by: 2,
-        short_description: 'Send packages fast',
-        description: 'Door to door parcel logistics.',
-        active: true,
-        mobile_menu_icon: 'https://cdn.jsdelivr.net/gh/tabler/tabler-icons/icons/package.svg',
       },
     ],
     notificationChannels: [
