@@ -158,7 +158,6 @@ export const notifyNetworkAssignment = async (ride) => {
       rideId: String(ride._id),
       status: ride.status,
       liveStatus: ride.liveStatus,
-      otp: safe(ride.otp),
       assignedBy: { name: context.ownerName, org_name: context.orgName },
       pickup: {
         address: safe(ride.pickupAddress),

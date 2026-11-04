@@ -1839,7 +1839,8 @@ const historyOtpFor = (ride, { role, entityId }) => {
   if (role === 'user') return ride.otp || '';
   if (role !== 'driver') return '';
   const drivenBy = ride.driverId?._id || ride.driverId || null;
-  if (drivenBy && String(drivenBy) === String(entityId)) return ride.otp || '';
+  // The driver gets a driver-created ride's code from the customer, not from us.
+  if (drivenBy && String(drivenBy) === String(entityId)) return ride.origin === 'driver_created' ? '' : ride.otp || '';
   // The publisher tells the customer the code until SMS / WhatsApp covers it.
   const publisher = ride.created_by_driver_id?._id || ride.created_by_driver_id || null;
   return ride.origin === 'driver_created' && publisher && String(publisher) === String(entityId) ? ride.otp || '' : '';
