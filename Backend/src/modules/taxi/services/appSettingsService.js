@@ -8,6 +8,13 @@ export const DEFAULT_DRIVER_NETWORK_SETTINGS = Object.freeze({
   enabled: true,
   prime_per_city: 5,
   default_corridor_km: 10,
+  // Widest corridor a driver may pick, the longest route, and how often a driver
+  // may change mode / route in a day. All Locations radius: rides this far from
+  // the driver (plus the driver's own city) are offered in All Locations mode.
+  max_corridor_km: 25,
+  max_route_km: 1500,
+  route_switches_per_day: 10,
+  all_locations_radius_km: 15,
   publish_expiry_minutes: 60,
   publish_min_lead_minutes: 0,
   platform_commission_on_published_rides_percent: 0,

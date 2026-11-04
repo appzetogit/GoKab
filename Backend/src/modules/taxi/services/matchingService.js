@@ -348,7 +348,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
   // still be the right match (parked in Indore, pickup in Ujjain on their
   // route). Radius search can never surface them, so pull them in separately
   // and de-duplicate.
-  if (dropCoords) {
+  if (coordinates) {
     const routeMatched = await findDriversWhoseActiveRouteMatches({
       pickup: coordinates,
       drop: dropCoords,
@@ -378,7 +378,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
   for (const driver of rawDrivers) {
     // Honour the corridor the driver selected: in `route` mode they only want
     // trips that run along it, in the right direction.
-    if (dropCoords && driver.route_mode === 'route') {
+    if (driver.route_mode === 'route') {
       const routeResult = await driverAcceptsTrip({
         driver,
         pickup: coordinates,

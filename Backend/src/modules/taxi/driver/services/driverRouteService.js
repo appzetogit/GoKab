@@ -147,17 +147,36 @@ const assertRouteId = (routeId) => {
   }
 };
 
-const normalizeCorridorKm = (value, fallback) => {
+const normalizeCorridorKm = (value, fallback, maxKm = 25) => {
   if (value === undefined || value === null || value === '') {
     return fallback;
   }
 
   const km = Number(value);
-  if (!Number.isFinite(km) || km < 1 || km > 50) {
-    throw new ApiError(422, 'Corridor width must be between 1 and 50 km', null, 'INVALID_CORRIDOR');
+  if (!Number.isFinite(km) || km < 1 || km > maxKm) {
+    throw new ApiError(422, `Corridor width must be between 1 and ${maxKm} km`, null, 'INVALID_CORRIDOR');
   }
 
   return Math.round(km);
+};
+
+const assertRouteLength = (distanceMeters, settings) => {
+  const maxKm = Number(settings.max_route_km || 0);
+  if (maxKm > 0 && distanceMeters / 1000 > maxKm) {
+    throw new ApiError(422, `A route can be at most ${maxKm} km long`, null, 'ROUTE_TOO_LONG');
+  }
+};
+
+// Admin limit on how often a driver may change mode or route in one day.
+const countRouteSwitch = async (driver) => {
+  const limit = Number((await getDriverNetworkSettings()).route_switches_per_day || 0);
+  const today = new Date().toISOString().slice(0, 10);
+  const used = driver.route_switch_day === today ? driver.route_switch_count || 0 : 0;
+  if (limit > 0 && used >= limit) {
+    throw new ApiError(429, `You can change your route mode ${limit} times a day`, { limit }, 'ROUTE_SWITCH_LIMIT');
+  }
+  driver.route_switch_day = today;
+  driver.route_switch_count = used + 1;
 };
 
 // `max_routes: 0` means "not included in this plan" (unlike vehicles, where 0
@@ -295,8 +314,9 @@ export const createDriverRoute = async ({ driverId, name, stops, corridorKm, bid
 
   const normalizedStops = normalizeStops(stops);
   const settings = await getDriverNetworkSettings();
-  const corridor = normalizeCorridorKm(corridorKm, settings.default_corridor_km ?? 10);
+  const corridor = normalizeCorridorKm(corridorKm, settings.default_corridor_km ?? 10, settings.max_corridor_km ?? 25);
   const path = await buildPath(normalizedStops);
+  assertRouteLength(path.distanceMeters, settings);
 
   const route = await DriverRoute.create({
     driver_id: driverId,
@@ -334,6 +354,7 @@ export const updateDriverRoute = async ({ driverId, routeId, name, stops, corrid
     // fail) even though the stops themselves never moved.
     if (stopsChanged(route.stops, normalizedStops)) {
       const path = await buildPath(normalizedStops);
+      assertRouteLength(path.distanceMeters, await getDriverNetworkSettings());
       route.stops = normalizedStops;
       route.path = { type: 'LineString', coordinates: path.coordinates };
       route.path_source = path.source;
@@ -342,7 +363,11 @@ export const updateDriverRoute = async ({ driverId, routeId, name, stops, corrid
   }
 
   if (corridorKm !== undefined) {
-    route.corridor_km = normalizeCorridorKm(corridorKm, route.corridor_km);
+    route.corridor_km = normalizeCorridorKm(
+      corridorKm,
+      route.corridor_km,
+      (await getDriverNetworkSettings()).max_corridor_km ?? 25,
+    );
   }
 
   if (bidirectional !== undefined) {
@@ -401,6 +426,7 @@ export const setDriverRouteMode = async ({ driverId, mode, routeId }) => {
   if (!driver) throw new ApiError(404, 'Driver not found', null, 'DRIVER_NOT_FOUND');
 
   if (mode === 'all_locations') {
+    if (driver.route_mode === 'route') await countRouteSwitch(driver);
     driver.route_mode = 'all_locations';
     driver.active_route_id = null;
     await driver.save();
@@ -435,6 +461,9 @@ export const setDriverRouteMode = async ({ driverId, mode, routeId }) => {
     throw new ApiError(404, 'Route not found', null, 'ROUTE_NOT_FOUND');
   }
 
+  if (driver.route_mode !== 'route' || String(driver.active_route_id) !== String(route._id)) {
+    await countRouteSwitch(driver);
+  }
   driver.route_mode = 'route';
   driver.active_route_id = route._id;
   await driver.save();
@@ -445,4 +474,23 @@ export const setDriverRouteMode = async ({ driverId, mode, routeId }) => {
   });
 
   return { route_mode: 'route', active_route_id: String(route._id), active_route: serializeDriverRoute(route) };
+};
+
+/**
+ * Plan expired or downgraded to one without routes: drivers still in route mode go
+ * back to All Locations (run by the maintenance cron). Mode switches here are not
+ * counted against the driver's daily limit.
+ */
+export const resetRouteModeForDriversWithoutPlan = async () => {
+  const drivers = await Driver.find({ route_mode: 'route', deletedAt: null }).select('_id').limit(500).lean();
+  for (const { _id } of drivers) {
+    try {
+      const permissions = await getDriverPermissions(_id);
+      if (permissions.max_routes) continue;
+      await Driver.updateOne({ _id }, { $set: { route_mode: 'all_locations', active_route_id: null } });
+      emitToRoom(getDriverRoom(_id), 'driver:route-mode:updated', { route_mode: 'all_locations', active_route_id: null });
+    } catch (error) {
+      console.error('[routeMode] reset failed:', error.message);
+    }
+  }
 };

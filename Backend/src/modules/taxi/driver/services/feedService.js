@@ -12,7 +12,7 @@ import { DriverRoute } from '../models/DriverRoute.js';
 import { LeadContact } from '../models/LeadContact.js';
 import { getDriverNetworkSettings } from '../../services/appSettingsService.js';
 import { getDriverPermissions } from '../../services/driverCategoryService.js';
-import { matchRideToRoute } from '../../services/routeMatchService.js';
+import { matchRideToRoute, refreshRouteLimits } from '../../services/routeMatchService.js';
 import {
   emitToRoom,
   getFeedRoom,
@@ -260,7 +260,11 @@ const broadcastNewDriverLead = async (ride) => {
       ignoreServiceLocation: true,
     });
 
+    // Same plan phases as the ring card: Basic drivers wait for their phase.
+    const phases = await getTierPhases();
+    const { isPublishedOpenToCategory } = await import('../../services/publishedAlertService.js');
     const driverIds = matched
+      .filter((driver) => isPublishedOpenToCategory(ride, categoryOf(driver), phases))
       .map((driver) => String(driver._id))
       .filter((id) => id !== String(ride.created_by_driver_id))
       .slice(0, MAX_LEAD_PUSHES);
@@ -427,6 +431,7 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
     candidates.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
 
+  await refreshRouteLimits();
   const activeRoute =
     driver.route_mode === 'route' && driver.active_route_id
       ? await DriverRoute.findOne({ _id: driver.active_route_id, deletedAt: null, is_active: true }).lean()

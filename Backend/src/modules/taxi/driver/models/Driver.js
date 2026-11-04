@@ -227,6 +227,9 @@ const driverSchema = new mongoose.Schema(
       ref: 'TaxiDriverRoute',
       default: null,
     },
+    // Mode / route changes made today, for the admin per-day limit.
+    route_switch_day: { type: String, default: '' },
+    route_switch_count: { type: Number, default: 0 },
     max_routes_override: {
       type: Number,
       default: null,

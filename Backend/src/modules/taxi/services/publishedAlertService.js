@@ -1,7 +1,9 @@
 import { RIDE_STATUS } from '../constants/index.js';
 import { Ride } from '../user/models/Ride.js';
 import { Driver } from '../driver/models/Driver.js';
-import { getTierPhases } from './tierPhaseService.js';
+import { getTierPhases, categoryOf } from './tierPhaseService.js';
+import { getDriverNetworkSettings } from './appSettingsService.js';
+import { findDriversWhoseActiveRouteMatches } from './routeMatchService.js';
 import { sendPushNotificationToEntities } from './pushNotificationService.js';
 
 /**
@@ -138,18 +140,53 @@ export const alertPublishedRide = async (rideId) => {
     ? { $or: [{ driver_category: { $in: allowed } }, { driver_category: { $exists: false } }, { driver_category: null }] }
     : { driver_category: { $in: allowed } };
 
-  const drivers = await Driver.find({
+  const pickup = ride.pickupLocation?.coordinates;
+  const drop = ride.dropLocation?.coordinates?.length === 2 ? ride.dropLocation.coordinates : null;
+  const settings = await getDriverNetworkSettings();
+  const radiusKm = Number(settings.all_locations_radius_km || 0);
+  const skip = [ride.created_by_driver_id, ...already].filter(Boolean).map(String);
+
+  // All Locations drivers: the ride's city, or within the admin radius of the pickup.
+  const where = [];
+  if (ride.service_location_id) where.push({ service_location_id: ride.service_location_id });
+  if (radiusKm > 0 && pickup?.length === 2) {
+    where.push({ location: { $geoWithin: { $centerSphere: [pickup, radiusKm / 6378.1] } } });
+  }
+  const allLocations = await Driver.find({
     isOnline: true,
     isOnRide: { $ne: true },
     approve: true,
     deletedAt: null,
-    _id: { $nin: [ride.created_by_driver_id, ...already].filter(Boolean) },
-    ...(ride.service_location_id ? { service_location_id: ride.service_location_id } : {}),
+    route_mode: { $ne: 'route' },
+    _id: { $nin: skip },
+    ...(where.length ? { $or: where } : {}),
     ...categoryFilter,
   })
     .select('_id')
     .limit(MAX_ALERTS_PER_PHASE)
     .lean();
+
+  // Route mode drivers: only when the ride lies on their route, in any city.
+  const routeMatched = pickup?.length === 2
+    ? await findDriversWhoseActiveRouteMatches({
+        pickup,
+        drop,
+        serviceLocationId: ride.service_location_id,
+        ignoreServiceLocation: true,
+        limit: MAX_ALERTS_PER_PHASE,
+      })
+    : [];
+  const categoryOk = (driver) => allowed.includes(categoryOf(driver));
+  const drivers = [
+    ...allLocations,
+    ...routeMatched.filter(
+      (driver) =>
+        driver.isOnline === true &&
+        driver.isOnRide !== true &&
+        !skip.includes(String(driver._id)) &&
+        categoryOk(driver),
+    ),
+  ];
 
   await Ride.updateOne(
     { _id: ride._id },
