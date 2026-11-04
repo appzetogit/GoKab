@@ -1747,6 +1747,15 @@ const serializeHistoryItem = (ride, { role, entityId }) => ({
   dropLocation: ride.dropLocation,
   dropAddress: ride.dropAddress || '',
   scheduledAt: ride.scheduledAt || null,
+  roundTrip: ride.roundTrip?.isRoundTrip
+    ? {
+        isRoundTrip: true,
+        legType: ride.roundTrip.legType,
+        returnAt: ride.roundTrip.returnAt,
+        returnRideId: ride.roundTrip.returnRideId ? String(ride.roundTrip.returnRideId) : null,
+        parentRideId: ride.roundTrip.parentRideId ? String(ride.roundTrip.parentRideId) : null,
+      }
+    : null,
   acceptedAt: ride.acceptedAt,
   arrivedAt: ride.arrivedAt,
   startedAt: ride.startedAt,
