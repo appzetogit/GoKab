@@ -22,7 +22,7 @@ import { findZoneByPickup } from './matchingService.js';
 import { getTipSettings } from './appSettingsService.js';
 import { getBidRideSettings } from './transportSettingsService.js';
 import { assertDriverMayTakeCustomerRide } from './tierPhaseService.js';
-import { applyReturnWaitingCharge, createReturnLegIfNeeded, normalizeReturnAt } from './roundTripService.js';
+import { applyReturnWaitingCharge, createReturnLegIfNeeded, loadRoundTripSummaries, normalizeReturnAt } from './roundTripService.js';
 import { resolveRideVehicle, withRideVehicle } from '../driver/services/rideVehicleService.js';
 import { carpoolSummary } from './carpoolService.js';
 
@@ -1987,7 +1987,14 @@ const listDriverRideHistory = async ({ entityId, limit, page, category, from, to
         : dateRangeClause
     : null;
 
-  const baseClauses = [driverRoleClause(normalizedRole, me), historyCategoryClause(category), searchClause, dateClause].filter(Boolean);
+  // A round trip is two rides; the list shows one card (the onward ride) with both legs inside.
+  const baseClauses = [
+    driverRoleClause(normalizedRole, me),
+    historyCategoryClause(category),
+    searchClause,
+    dateClause,
+    { 'roundTrip.legType': { $ne: 'return' } },
+  ].filter(Boolean);
   const originClause = historyOriginClause(normalizedOrigin);
   const statusClause = driverStatusClause(normalizedStatus);
   const itemMatch = { $and: [...baseClauses, originClause, statusClause].filter(Boolean) };
@@ -2063,11 +2070,13 @@ const listDriverRideHistory = async ({ entityId, limit, page, category, from, to
   ]);
 
   const extras = await buildDriverListExtras(rides, me);
+  const roundTrips = await loadRoundTripSummaries(rides);
 
   return {
     results: rides.map((ride) => ({
       ...serializeHistoryItem(ride, { role: 'driver', entityId }),
       ...extras(ride),
+      round_trip: roundTrips.get(String(ride._id)) || null,
     })),
     pagination: {
       page: safePage,
