@@ -37,6 +37,7 @@ import {
   startDispatchFlow,
 } from '../../services/dispatchService.js';
 import { getTipSettings } from '../../services/appSettingsService.js';
+import { loadRoundTripSummaries } from '../../services/roundTripService.js';
 import { Ride } from '../models/Ride.js';
 import { UserWallet } from '../models/UserWallet.js';
 
@@ -378,6 +379,9 @@ export const getRideById = async (req, res) => {
   });
 
   const ride = await getRideDetails(req.params.rideId);
+  const roundTrip = ride.roundTrip?.isRoundTrip
+    ? (await loadRoundTripSummaries([ride])).get(String(ride._id)) || null
+    : null;
 
   // Driver-created rides show who created them (images included) on the detail
   // screen, same card as the feed. Other rides are returned exactly as before.
@@ -396,6 +400,14 @@ export const getRideById = async (req, res) => {
       // The chat is between the rider and the driver who took the ride.
       delete data.messages;
     }
+    if (roundTrip) data.round_trip = roundTrip;
+    res.json({ success: true, data });
+    return;
+  }
+
+  if (roundTrip) {
+    const data = ride.toJSON();
+    data.round_trip = roundTrip;
     res.json({ success: true, data });
     return;
   }
