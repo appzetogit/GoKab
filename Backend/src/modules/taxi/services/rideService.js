@@ -25,6 +25,7 @@ import { getBidRideSettings } from './transportSettingsService.js';
 import { assertDriverMayTakeCustomerRide } from './tierPhaseService.js';
 import { applyReturnWaitingCharge, createReturnLegIfNeeded, normalizeReturnAt } from './roundTripService.js';
 import { resolveRideVehicle, withRideVehicle } from '../driver/services/rideVehicleService.js';
+import { carpoolSummary } from './carpoolService.js';
 
 // Booking a ride releases whatever the rider had queued in `currentRideId`, but
 // two bookings only actually conflict when both would be live at the same time.
@@ -1010,6 +1011,7 @@ export const createRideRecord = async ({
   userMaxBidFare,
   bidStepAmount,
   bookingPreferences,
+  carpool,
   roundTrip,
   origin = 'customer_app',
   offlineCustomer = null,
@@ -1067,6 +1069,25 @@ export const createRideRecord = async ({
       roundTripFields.returnDropAddress = returnDrop.address;
       roundTripFields.returnDropCoordinates = returnDrop.coordinates;
     }
+  }
+  // Airport / railway carpool: this rider's seat. `fare` is the seat fare.
+  let carpoolFields;
+  if (carpool?.enabled) {
+    const stationLat = Number(carpool.station?.lat);
+    const stationLng = Number(carpool.station?.lng);
+    if (!Number.isFinite(stationLat) || !Number.isFinite(stationLng)) {
+      throw new ApiError(400, 'Carpool needs the airport or station', null, 'CARPOOL_STATION_REQUIRED');
+    }
+    if (isDriverCreated) throw new ApiError(400, 'Carpool is only for rider bookings');
+    carpoolFields = {
+      enabled: true,
+      kind: carpool.kind === 'railway' ? 'railway' : 'airport',
+      seats: clampCount(bookingPreferences?.passengers, 1, 1, 12),
+      fullFare: Math.max(0, Number(carpool.fullFare) || 0),
+      stationName: String(carpool.station?.name || '').trim().slice(0, 200),
+      stationCoordinates: [stationLng, stationLat],
+      role: '',
+    };
   }
   const { retainedRideId } = user
     ? await clearUserActiveRideIfPresent(user, {
@@ -1287,6 +1308,7 @@ export const createRideRecord = async ({
       intercity: normalizeIntercityPayload(intercity),
       stopCount: Math.min(Math.max(Math.trunc(Number(stopCount) || 0), 0), 3),
       ...(roundTripFields ? { roundTrip: roundTripFields } : {}),
+      ...(carpoolFields ? { carpool: carpoolFields } : {}),
       scheduledAt: normalizedScheduledAt,
       status: RIDE_STATUS.SEARCHING,
       liveStatus: RIDE_LIVE_STATUS.SEARCHING,
@@ -1358,6 +1380,7 @@ export const createRideRecord = async ({
             intercity: normalizeIntercityPayload(intercity),
       stopCount: Math.min(Math.max(Math.trunc(Number(stopCount) || 0), 0), 3),
       ...(roundTripFields ? { roundTrip: roundTripFields } : {}),
+      ...(carpoolFields ? { carpool: carpoolFields } : {}),
             scheduledAt: normalizedScheduledAt,
             status: RIDE_STATUS.SEARCHING,
             liveStatus: RIDE_LIVE_STATUS.SEARCHING,
@@ -1459,6 +1482,7 @@ const clampCount = (value, fallback, min, max) => {
 };
 
 export const serializeRideRealtime = (ride) => ({
+  carpool: carpoolSummary(ride),
   passengers: ride.bookingPreferences?.passengers || 1,
   luggageCount: ride.bookingPreferences?.luggageCount || 0,
   rideId: String(ride._id),
@@ -1739,6 +1763,7 @@ const serializeDriverHistoryExtras = (ride, entityId) => {
 
 /** One ride in a history list; the fields every caller of GET /rides has always had. */
 const serializeHistoryItem = (ride, { role, entityId }) => ({
+  carpool: carpoolSummary(ride),
   passengers: ride.bookingPreferences?.passengers || 1,
   luggageCount: ride.bookingPreferences?.luggageCount || 0,
   rideId: String(ride._id),
@@ -2347,6 +2372,7 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
       'scheduledAt',
       'roundTrip',
       'bookingPreferences.passengers',
+      'carpool',
       'bookingPreferences.luggageCount',
       'acceptedAt',
       'arrivedAt',
@@ -2467,6 +2493,13 @@ export const acceptRideAssignment = async ({ rideId, driverId }) => {
       await driver.save({ session });
       await session.commitTransaction();
       await syncDeliveryWithRide(ride);
+
+      if (ride.carpool?.groupId) {
+        const { onLeadAccepted } = await import('./carpoolService.js');
+        await onLeadAccepted(ride).catch((error) =>
+          console.error('[rideService] carpool accept failed:', error.message),
+        );
+      }
 
       return ride;
     } catch (error) {
@@ -2861,6 +2894,12 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
       walletUpdate = await settleCompletedRideWallet({ rideId: ride._id });
     }
     await consumeUserSubscriptionRide({ ride });
+    if (ride.carpool?.groupId) {
+      const { onRideCompleted } = await import('./carpoolService.js');
+      await onRideCompleted(ride).catch((error) =>
+        console.error('[rideService] carpool completion failed:', error.message),
+      );
+    }
     const settledRide = await Ride.findById(ride._id).select('completedAt driverEarnings estimatedDistanceMeters');
 
     await incrementDriverTodaySummaryForCompletedRide({

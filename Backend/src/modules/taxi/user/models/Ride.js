@@ -681,6 +681,22 @@ const rideSchema = new mongoose.Schema(
       returnDropAddress: { type: String, default: '' },
       returnDropCoordinates: { type: [Number], default: undefined },
     },
+    // Airport / railway carpool: riders sharing one cab to the same station.
+    carpool: {
+      enabled: { type: Boolean, default: false },
+      groupId: { type: mongoose.Schema.Types.ObjectId, ref: 'CarpoolGroup', default: null, index: true },
+      role: { type: String, enum: ['', 'lead', 'member'], default: '' },
+      kind: { type: String, enum: ['', 'airport', 'railway'], default: '' },
+      // How many seats this rider takes (their passengers).
+      seats: { type: Number, default: 1, min: 1 },
+      // What the whole cab would have cost; `fare` is this rider's seat.
+      fullFare: { type: Number, default: 0 },
+      stationName: { type: String, default: '' },
+      stationCoordinates: { type: [Number], default: undefined },
+      // Joined a cab a driver already has: waits for the driver's yes.
+      pendingApproval: { type: Boolean, default: false },
+      pendingUntil: { type: Date, default: null },
+    },
     bookingPreferences: {
       tripType: {
         type: String,

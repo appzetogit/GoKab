@@ -84,6 +84,17 @@ export const createDefaultBusinessSettings = () => ({
     // driver accepts, or this many minutes pass. Alerts and sound stop after the
     // tier phases (10 min by default); only the feed keeps showing it.
     ride_search_expiry_minutes: '60',
+    // Airport / railway carpool. The seat fare is this share of the whole cab's fare.
+    carpool_enabled_airport: '1',
+    carpool_enabled_railway: '1',
+    carpool_seat_fare_percent: '65',
+    carpool_match_radius_km: '3',
+    carpool_time_window_minutes: '15',
+    // A scheduled carpool takes no new rider this many minutes before pickup.
+    carpool_join_cutoff_minutes: '30',
+    carpool_add_rider_timeout_minutes: '3',
+    // Share of the usual commission kept when the driver ends up with one rider (0 = none).
+    carpool_solo_commission_percent: '0',
     can_round_the_bill_values: '1',
     enable_shipment_load_feature: '1',
     enable_shipment_unload_feature: '1',

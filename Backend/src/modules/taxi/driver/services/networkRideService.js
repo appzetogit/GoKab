@@ -1199,6 +1199,7 @@ export const listUpcomingRides = async ({ driverId, page = 1, limit = 20 }) => {
         drop: { address: ride.dropAddress || '', coordinates: ride.dropLocation?.coordinates || [] },
         fare: ride.fare,
         roundTrip: ride.roundTrip?.isRoundTrip ? { isRoundTrip: true, legType: ride.roundTrip.legType, returnAt: ride.roundTrip.returnAt } : null,
+        carpool: ride.carpool?.enabled ? { enabled: true, groupId: ride.carpool.groupId ? String(ride.carpool.groupId) : '', seats: Number(ride.carpool.seats || 1) } : null,
         amount_for_you: tookFromFeed ? Number(ride.publish?.driver_payout || 0) : null,
         paymentMethod: ride.paymentMethod,
         notes: ride.network_notes || '',

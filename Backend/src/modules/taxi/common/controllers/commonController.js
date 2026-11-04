@@ -78,6 +78,20 @@ export const getPublicAppConfig = asyncHandler(async (_req, res) => {
     });
 });
 
+// What the rider app needs to price and offer carpool.
+export const getCarpoolPublicConfig = asyncHandler(async (_req, res) => {
+    const { getCarpoolSettings } = await import('../../services/carpoolService.js');
+    const cfg = await getCarpoolSettings();
+    return res.json({
+        success: true,
+        data: {
+            enabled_airport: cfg.enabledAirport,
+            enabled_railway: cfg.enabledRailway,
+            seat_fare_percent: cfg.seatFarePercent,
+        },
+    });
+});
+
 export const acknowledgePhonePeCallback = asyncHandler(async (req, res) => {
     logPaymentDiagnostic({
         provider: 'phonepe',

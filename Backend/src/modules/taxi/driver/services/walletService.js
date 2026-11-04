@@ -368,11 +368,16 @@ export const settleCompletedRideWallet = async ({ rideId }) => {
     const actualFare = normalizeAmount(ride.fare || 0, 'fare');
     const commissionBaseFare = normalizeAmount(ride.baseFare || ride.fare || 0, 'fare');
     const commissionConfig = await resolveCommissionConfigForRide(ride, session);
-    const commissionAmount = computeCommissionAmount({
+    let commissionAmount = computeCommissionAmount({
       fare: commissionBaseFare,
       type: commissionConfig.type,
       value: commissionConfig.value,
     });
+    // A carpool where the driver ended up with one rider keeps most of the commission.
+    if (ride.carpool?.groupId) {
+      const { carpoolCommissionFactor } = await import('../../services/carpoolService.js');
+      commissionAmount = Math.round(commissionAmount * (await carpoolCommissionFactor(ride)) * 100) / 100;
+    }
     const paymentMethod = normalizePaymentMethod(ride.paymentMethod);
     const driverEarnings = Math.max(Math.round((commissionBaseFare - commissionAmount) * 100) / 100, 0);
     // Cash rides: the driver only ever physically collects `actualFare` from

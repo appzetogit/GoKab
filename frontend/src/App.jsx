@@ -289,6 +289,7 @@ const AdminGlobalSettings = lazy(() => import('./modules/admin/pages/settings/Gl
 const AdminGeneralSettings = lazy(() => import('./modules/admin/pages/settings/GeneralSettings'));
 const AdminCustomizationSettings = lazy(() => import('./modules/admin/pages/settings/CustomizationSettings'));
 const AdminTransportRideSettings = lazy(() => import('./modules/admin/pages/settings/TransportRideSettings'));
+const AdminCarpoolSettings = lazy(() => import('./modules/admin/pages/settings/CarpoolSettings'));
 const AdminBidRideSettings = lazy(() => import('./modules/admin/pages/settings/BidRideSettings'));
 const AdminWalletSettings = lazy(() => import('./modules/admin/pages/settings/WalletSettings'));
 const AdminTipSettings = lazy(() => import('./modules/admin/pages/settings/TipSettings'));
@@ -1586,6 +1587,10 @@ function App() {
                 <Route
                   path="settings/business/transport-ride"
                   element={<AdminTransportRideSettings />}
+                />
+                <Route
+                  path="settings/business/carpool"
+                  element={<AdminCarpoolSettings />}
                 />
                 <Route
                   path="settings/business/bid-ride"

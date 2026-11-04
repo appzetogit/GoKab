@@ -679,6 +679,10 @@ const emitRideRequestToDrivers = async ({
   }
 
   const requestExpiresAt = new Date(Date.now() + dispatchConfig.retryDelayMs).toISOString();
+  // Set for an airport / railway carpool: riders so far, this seat's fare, and the most the trip can pay.
+  const carpoolInfo = ride.carpool?.enabled
+    ? await import('./carpoolService.js').then((m) => m.requestCardInfo(ride)).catch(() => null)
+    : null;
 
   for (const driver of targetDrivers) {
     emitToDriver(driver._id, 'rideRequest', {
@@ -728,6 +732,7 @@ const emitRideRequestToDrivers = async ({
       parcel: ride.parcel || null,
       intercity: ride.intercity || null,
       stopCount: ride.stopCount || 0,
+      carpool: carpoolInfo,
       radius: effectiveRadius,
       attempt: attemptIndex + 1,
       maxAttempts: dispatchConfig.maxAttempts,
@@ -767,6 +772,9 @@ const emitRideRequestToDrivers = async ({
         tripDistanceKm: km(ride.estimatedDistanceMeters),
         vehicleLabel: vehicle?.name || ride.vehicleIconType || 'Ride',
         stopCount: String(ride.stopCount || 0),
+        carpool: carpoolInfo ? '1' : '',
+        carpoolRiders: carpoolInfo ? String(carpoolInfo.riders) : '',
+        carpoolMaxFare: carpoolInfo ? String(carpoolInfo.maxFare) : '',
         returnAt: ride.roundTrip?.isRoundTrip && ride.roundTrip.returnAt ? new Date(ride.roundTrip.returnAt).toISOString() : '',
         expiresInSeconds: String(dispatchConfig.retryWindowSeconds),
       },
@@ -815,6 +823,10 @@ const closeRideAsUnmatched = async (rideId) => {
   }
 
   await User.updateOne({ _id: ride.userId, currentRideId: ride._id }, { currentRideId: null });
+  if (ride.carpool?.groupId) {
+    const { onRideCancelled } = await import('./carpoolService.js');
+    await onRideCancelled(ride).catch((error) => console.error('[dispatch] carpool cancel failed:', error.message));
+  }
 
   emitToRoom(getUserRoom(ride.userId), 'rideCancelled', {
     rideId: String(ride._id),
@@ -923,6 +935,10 @@ export const cancelRideByAdmin = async (rideId) => {
   ]);
 
   await releaseEscrowAfterCancel(ride, { reason: 'cancelled_by_admin' });
+  if (ride.carpool?.groupId) {
+    const { onRideCancelled } = await import('./carpoolService.js');
+    await onRideCancelled(ride).catch((error) => console.error('[dispatch] carpool cancel failed:', error.message));
+  }
   // A published driver-created ride also leaves the feed, and its applicants are told.
   await closeListingAfterCancel(ride);
   emitCustomerFeedEvent(ride, 'feed:customer:removed', { reason: 'CANCELLED' });
@@ -1022,6 +1038,10 @@ export const cancelRideByUser = async ({ rideId, userId, reason = '', reasonId =
   }
 
   await releaseEscrowAfterCancel(ride, { reason: 'cancelled_by_user' });
+  if (ride.carpool?.groupId) {
+    const { onRideCancelled } = await import('./carpoolService.js');
+    await onRideCancelled(ride).catch((error) => console.error('[dispatch] carpool cancel failed:', error.message));
+  }
   // A published driver-created ride also leaves the feed, and its applicants are told.
   await closeListingAfterCancel(ride);
   emitCustomerFeedEvent(ride, 'feed:customer:removed', { reason: 'CANCELLED' });
@@ -1174,6 +1194,10 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
     reason: 'cancelled_by_driver',
     penaltyFrom: 'acceptor',
   });
+  if (ride.carpool?.groupId) {
+    const { onRideCancelled } = await import('./carpoolService.js');
+    await onRideCancelled(ride).catch((error) => console.error('[dispatch] carpool cancel failed:', error.message));
+  }
 
   const refunded = Number(ride.roundTrip?.refundAmount || 0);
   const cancelReason = refunded > 0
@@ -1535,6 +1559,7 @@ export const restoreScheduledDispatches = async () => {
     status: RIDE_STATUS.SEARCHING,
     liveStatus: RIDE_LIVE_STATUS.SEARCHING,
     scheduledAt: { $ne: null },
+    'carpool.role': { $ne: 'member' },
   }).select('_id scheduledAt');
 
   for (const ride of rides) {

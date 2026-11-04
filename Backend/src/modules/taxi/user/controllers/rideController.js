@@ -312,7 +312,7 @@ const razorpayRequest = async ({ method, path, body, keyId, keySecret }) => {
 };
 
 export const createRide = async (req, res) => {
-  const { pickup, drop, pickupAddress, dropAddress, fare, estimatedDistanceMeters, estimatedDurationMinutes, vehicleTypeId, vehicleTypeIds, vehicleIconType, vehicleIconUrl, paymentMethod, serviceType, intercity, stopCount, promo_code, service_location_id, transport_type, scheduledAt, bookingMode, userMaxBidFare, bidStepAmount, bookingPreferences, roundTrip } =
+  const { pickup, drop, pickupAddress, dropAddress, fare, estimatedDistanceMeters, estimatedDurationMinutes, vehicleTypeId, vehicleTypeIds, vehicleIconType, vehicleIconUrl, paymentMethod, serviceType, intercity, stopCount, promo_code, service_location_id, transport_type, scheduledAt, bookingMode, userMaxBidFare, bidStepAmount, bookingPreferences, roundTrip, carpool } =
     req.body;
 
   if (!pickup || !drop) {
@@ -345,9 +345,14 @@ export const createRide = async (req, res) => {
     bidStepAmount,
     bookingPreferences,
     roundTrip,
+    carpool,
   });
 
-  await startDispatchFlow(ride);
+  // A carpool rider may join a cab that is already being found; then it is not
+  // offered to drivers again on its own.
+  const { attachRideToCarpool } = await import('../../services/carpoolService.js');
+  const { dispatch: shouldDispatch } = await attachRideToCarpool(ride);
+  if (shouldDispatch) await startDispatchFlow(ride);
 
   res.status(201).json({
     success: true,

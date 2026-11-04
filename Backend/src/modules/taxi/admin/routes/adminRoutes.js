@@ -240,6 +240,17 @@ adminRouter.get('/admin/general-settings/:category', getGeneralSettingsCategory)
 adminRouter.get('/admin/types/set-prices', getSetPrices);
 
 adminRouter.use('/admin', authenticate(['admin']));
+adminRouter.get('/admin/carpool/groups', async (req, res, next) => {
+  try {
+    const { listGroupsForAdmin } = await import('../../services/carpoolService.js');
+    const status = ['searching', 'accepted', 'completed', 'cancelled'].includes(String(req.query.status))
+      ? String(req.query.status)
+      : undefined;
+    res.json({ success: true, data: { groups: await listGroupsForAdmin({ status }) } });
+  } catch (error) {
+    next(error);
+  }
+});
 
 adminRouter.get('/admin/permissions', getAdminPermissions);
 adminRouter.get('/admin/admin-management/admins', getAdmins);

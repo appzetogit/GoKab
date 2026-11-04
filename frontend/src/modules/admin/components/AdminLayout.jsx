@@ -1325,6 +1325,7 @@ const AdminLayout = () => {
               { label: 'General Settings', path: '/admin/settings/business/general', permission: 'settings.view' },
               { label: 'Customization Settings', path: '/admin/settings/business/customization', permission: 'settings.view' },
               { label: 'Transport Ride Settings', path: '/admin/settings/business/transport-ride', permission: 'settings.view' },
+              { label: 'Carpool Settings', path: '/admin/settings/business/carpool', permission: 'settings.view' },
               { label: 'Bid Ride Settings', path: '/admin/settings/business/bid-ride', permission: 'settings.view' },
             ],
           },

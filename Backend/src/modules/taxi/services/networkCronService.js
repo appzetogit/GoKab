@@ -315,6 +315,8 @@ const runGuarded = async (label, task) => {
 };
 
 export const runNetworkMaintenance = async () => {
+  // Carpool riders the driver never answered for go on their own.
+  import('./carpoolService.js').then((m) => m.releaseExpiredAddRiderRequests()).catch(() => {});
   try {
     const expired = await expirePublishedRides();
     const orphans = await releaseOrphanedEscrow();
