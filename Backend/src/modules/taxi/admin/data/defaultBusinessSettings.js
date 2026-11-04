@@ -80,6 +80,12 @@ export const createDefaultBusinessSettings = () => ({
     // scheduled ride, and from when it shows as their active trip.
     scheduled_start_window_minutes: '30',
     scheduled_dispatch_lead_minutes: '60',
+    // A rider's ride request keeps searching (and stays on the driver feed) until a
+    // driver accepts, or this many minutes pass. Alerts and sound stop after the
+    // tier phases (10 min by default); only the feed keeps showing it.
+    ride_search_expiry_minutes: '60',
+    // The finding-driver screen sends the rider back to home after this many minutes.
+    finding_screen_background_minutes: '5',
     can_round_the_bill_values: '1',
     enable_shipment_load_feature: '1',
     enable_shipment_unload_feature: '1',

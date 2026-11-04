@@ -697,6 +697,12 @@ const rideSchema = new mongoose.Schema(
         type: Boolean,
         default: false,
       },
+      // How many bags the rider is bringing (0 = none).
+      luggageCount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
       pooling: {
         type: Boolean,
         default: false,

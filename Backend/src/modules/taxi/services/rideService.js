@@ -1278,8 +1278,9 @@ export const createRideRecord = async ({
         tripType: bookingPreferences?.tripType || 'ONE_WAY',
         pickupDate: bookingPreferences?.pickupDate || '',
         pickupTime: bookingPreferences?.pickupTime || '',
-        passengers: Number(bookingPreferences?.passengers || 1),
-        luggage: Boolean(bookingPreferences?.luggage),
+        passengers: clampCount(bookingPreferences?.passengers, 1, 1, 12),
+        luggage: Boolean(bookingPreferences?.luggage) || clampCount(bookingPreferences?.luggageCount, 0, 0, 20) > 0,
+        luggageCount: clampCount(bookingPreferences?.luggageCount, 0, 0, 20),
         pooling: Boolean(bookingPreferences?.pooling),
         preferredLanguages: Array.isArray(bookingPreferences?.preferredLanguages) ? bookingPreferences.preferredLanguages : [],
         driverPreferences: Array.isArray(bookingPreferences?.driverPreferences) ? bookingPreferences.driverPreferences : [],
@@ -1348,8 +1349,9 @@ export const createRideRecord = async ({
               tripType: bookingPreferences?.tripType || 'ONE_WAY',
               pickupDate: bookingPreferences?.pickupDate || '',
               pickupTime: bookingPreferences?.pickupTime || '',
-              passengers: Number(bookingPreferences?.passengers || 1),
-              luggage: Boolean(bookingPreferences?.luggage),
+              passengers: clampCount(bookingPreferences?.passengers, 1, 1, 12),
+              luggage: Boolean(bookingPreferences?.luggage) || clampCount(bookingPreferences?.luggageCount, 0, 0, 20) > 0,
+              luggageCount: clampCount(bookingPreferences?.luggageCount, 0, 0, 20),
               pooling: Boolean(bookingPreferences?.pooling),
               preferredLanguages: Array.isArray(bookingPreferences?.preferredLanguages) ? bookingPreferences.preferredLanguages : [],
               driverPreferences: Array.isArray(bookingPreferences?.driverPreferences) ? bookingPreferences.driverPreferences : [],
@@ -1435,7 +1437,14 @@ const populateRideRealtime = async (rideId) => {
   return ride;
 };
 
+const clampCount = (value, fallback, min, max) => {
+  const n = Math.trunc(Number(value));
+  return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : fallback;
+};
+
 export const serializeRideRealtime = (ride) => ({
+  passengers: ride.bookingPreferences?.passengers || 1,
+  luggageCount: ride.bookingPreferences?.luggageCount || 0,
   rideId: String(ride._id),
   roundTrip: ride.roundTrip?.isRoundTrip
     ? {
@@ -1714,6 +1723,8 @@ const serializeDriverHistoryExtras = (ride, entityId) => {
 
 /** One ride in a history list; the fields every caller of GET /rides has always had. */
 const serializeHistoryItem = (ride, { role, entityId }) => ({
+  passengers: ride.bookingPreferences?.passengers || 1,
+  luggageCount: ride.bookingPreferences?.luggageCount || 0,
   rideId: String(ride._id),
   deliveryId: ride.deliveryId?._id ? String(ride.deliveryId._id) : ride.deliveryId ? String(ride.deliveryId) : null,
   type: ride.serviceType || 'ride',
@@ -2319,6 +2330,8 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
       'dropAddress',
       'scheduledAt',
       'roundTrip',
+      'bookingPreferences.passengers',
+      'bookingPreferences.luggageCount',
       'acceptedAt',
       'arrivedAt',
       'startedAt',

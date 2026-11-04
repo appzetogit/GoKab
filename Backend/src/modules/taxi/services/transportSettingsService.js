@@ -46,8 +46,19 @@ export const resolveTransportDispatchConfig = async () => {
     toPositiveNumber(defaultTransportRideSettings.maximum_time_for_find_drivers_for_regular_ride, 300),
   );
 
+  const searchExpiryMinutes = toPositiveNumber(
+    settings.ride_search_expiry_minutes,
+    toPositiveNumber(defaultTransportRideSettings.ride_search_expiry_minutes, 60),
+  );
+  const backgroundAfterMinutes = toPositiveNumber(
+    settings.finding_screen_background_minutes,
+    toPositiveNumber(defaultTransportRideSettings.finding_screen_background_minutes, 5),
+  );
+
   return {
     settings,
+    searchExpiryMs: Math.round(searchExpiryMinutes * 60 * 1000),
+    backgroundAfterSeconds: Math.round(backgroundAfterMinutes * 60),
     dispatchType: String(settings.trip_dispatch_type || defaultTransportRideSettings.trip_dispatch_type) === '2'
       ? 'broadcast'
       : 'one_by_one',

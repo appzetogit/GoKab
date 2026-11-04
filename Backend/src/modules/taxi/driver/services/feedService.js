@@ -30,12 +30,14 @@ import {
 import { applyDriverWalletAdjustment, getWalletSnapshot } from './walletService.js';
 import { buildPublisherCard, PUBLISHER_DRIVER_FIELDS } from './publisherCardService.js';
 import { driverDefaultVehicle, rideVehicleSetFields } from './rideVehicleService.js';
+import { resolveTransportDispatchConfig } from '../../services/transportSettingsService.js';
 
 const round2 = (value) => Math.round(Number(value || 0) * 100) / 100;
 
-// Customer leads go stale fast: a rider who booked 30 minutes ago has almost
-// certainly been matched or given up.
-const CUSTOMER_LEAD_MAX_AGE_MS = 30 * 60 * 1000;
+// How long a customer lead stays on the feed. It follows the admin's ride search
+// expiry (the ride is closed then anyway); this also covers a restart that lost
+// the timer that would have closed it.
+const customerLeadMaxAgeMs = async () => (await resolveTransportDispatchConfig()).searchExpiryMs;
 
 // The first comma-separated part of an address is the locality, which is what a
 // driver actually scans for when skimming a feed.
@@ -347,6 +349,7 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
   const safePage = Math.max(1, Number(page) || 1);
   const safeLimit = Math.min(50, Math.max(1, Number(limit) || 20));
   const now = new Date();
+  const leadMaxAgeMs = tab === 'customer' ? await customerLeadMaxAgeMs() : 0;
 
   const baseFilter =
     tab === 'customer'
@@ -356,7 +359,7 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
           driverId: null,
           bookingMode: 'normal',
           $or: [
-            { createdAt: { $gt: new Date(now.getTime() - CUSTOMER_LEAD_MAX_AGE_MS) } },
+            { createdAt: { $gt: new Date(now.getTime() - leadMaxAgeMs) } },
             { scheduledAt: { $gt: now } },
           ],
         }

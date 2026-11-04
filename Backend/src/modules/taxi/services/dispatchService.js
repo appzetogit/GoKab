@@ -820,7 +820,15 @@ const closeRideAsUnmatched = async (rideId) => {
     rideId: String(ride._id),
     room: getRideRoom(ride._id),
     reason: 'No drivers accepted the ride request',
+    reasonCode: 'no_drivers',
   });
+
+  sendPushNotificationToEntities({
+    userIds: [String(ride.userId)],
+    title: 'No driver found',
+    body: 'We could not find a driver for your ride. You have not been charged. Please try again.',
+    data: { type: 'ride_unmatched', rideId: String(ride._id) },
+  }).catch(() => {});
 
   emitToRoom(getRideRoom(ride._id), 'rideRequestClosed', {
     rideId: String(ride._id),
@@ -1331,10 +1339,19 @@ const dispatchTierPhase = async ({ ride, rideId, phaseIndex, phases, dispatchCon
     maxAttempts: phases.length,
     matchedDrivers: targetDrivers.length,
     totalNotifiedDrivers: nextNotifiedDriverIds.length,
+    maxSearchSeconds: Math.round(dispatchConfig.searchExpiryMs / 1000),
+    backgroundAfterSeconds: dispatchConfig.backgroundAfterSeconds,
   });
 
   const isLast = phaseIndex >= phases.length - 1;
-  const waitMs = targetDrivers.length || isLast ? phase.minutes * 60 * 1000 : 0;
+  // The last phase keeps the ride searching (no more alerts, it just stays on the
+  // feed) until the admin-set expiry counted from when the rider booked.
+  const sinceBookedMs = Date.now() - new Date(ride.createdAt).getTime();
+  const waitMs = isLast
+    ? Math.max(dispatchConfig.searchExpiryMs - sinceBookedMs, 60 * 1000)
+    : targetDrivers.length
+      ? phase.minutes * 60 * 1000
+      : 0;
 
   if (isLast) {
     const timer = setTimeout(() => {
