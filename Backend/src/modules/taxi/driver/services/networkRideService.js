@@ -1116,7 +1116,7 @@ export const listNetworkRides = async ({ driverId, scope = 'created', status = '
         creatorDriver: ride.created_by_driver_id ? identityDriverMap.get(String(ride.created_by_driver_id)) : null,
       });
 
-      return serializeNetworkRide(ride, {
+      const item = serializeNetworkRide(ride, {
         assignedDriver: driverMap.get(String(ride.driverId)) || null,
         assignedBy,
         publisher: buildPublisherCard(
@@ -1128,6 +1128,12 @@ export const listNetworkRides = async ({ driverId, scope = 'created', status = '
             ? applicantsByRide.get(String(ride._id)) || { count: 0, requests: [] }
             : null,
       });
+      // "Go to pickup" time, so the publisher's card can say "on the way".
+      item.en_route_at = ride.enRouteAt || null;
+      // The publisher can read the OTP out to the customer; the driver never gets it here.
+      const isPublisher = String(ride.created_by_driver_id || '') === String(driverId);
+      if (isPublisher && String(ride.driverId || '') !== String(driverId)) item.otp = ride.otp || '';
+      return item;
     }),
     pagination: {
       page: safePage,

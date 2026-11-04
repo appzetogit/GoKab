@@ -1493,6 +1493,7 @@ const clampCount = (value, fallback, min, max) => {
 
 export const serializeRideRealtime = (ride) => ({
   carpool: carpoolSummary(ride),
+  enRouteAt: ride.enRouteAt || null,
   passengers: ride.bookingPreferences?.passengers || 1,
   luggageCount: ride.bookingPreferences?.luggageCount || 0,
   rideId: String(ride._id),
