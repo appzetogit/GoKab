@@ -1051,6 +1051,22 @@ export const createRideRecord = async ({
     });
     if (checked.error) throw new ApiError(400, checked.error, null, 'INVALID_RETURN_TIME');
     roundTripFields = { isRoundTrip: true, legType: 'outbound', returnAt: checked.value };
+
+    // The rider may choose a return pickup and drop of their own; both or neither.
+    const place = (value) => {
+      const lat = Number(value?.lat);
+      const lng = Number(value?.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+      return { coordinates: [lng, lat], address: String(value?.address || '').trim().slice(0, 300) };
+    };
+    const returnPickup = place(roundTrip.returnPickup);
+    const returnDrop = place(roundTrip.returnDrop);
+    if (returnPickup && returnDrop) {
+      roundTripFields.returnPickupAddress = returnPickup.address;
+      roundTripFields.returnPickupCoordinates = returnPickup.coordinates;
+      roundTripFields.returnDropAddress = returnDrop.address;
+      roundTripFields.returnDropCoordinates = returnDrop.coordinates;
+    }
   }
   const { retainedRideId } = user
     ? await clearUserActiveRideIfPresent(user, {

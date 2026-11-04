@@ -2,6 +2,7 @@ import { RIDE_LIVE_STATUS, RIDE_STATUS } from '../constants/index.js';
 import { Ride } from '../user/models/Ride.js';
 import { User } from '../user/models/User.js';
 import { sendPushNotificationToEntities } from './pushNotificationService.js';
+import { haversineMeters } from '../../../utils/geo.js';
 
 const MINUTE_MS = 60 * 1000;
 const REMINDER_LEAD_MINUTES = [30, 10];
@@ -47,6 +48,28 @@ export const createReturnLegIfNeeded = async (outbound) => {
   );
   if (!claimed) return null;
 
+  // The rider's own return places, else the onward route reversed.
+  const custom =
+    trip.returnPickupCoordinates?.length === 2 && trip.returnDropCoordinates?.length === 2;
+  const returnPickupPoint = custom
+    ? { type: 'Point', coordinates: trip.returnPickupCoordinates }
+    : outbound.dropLocation;
+  const returnPickupAddress = custom ? trip.returnPickupAddress : outbound.dropAddress;
+  const returnDropPoint = custom
+    ? { type: 'Point', coordinates: trip.returnDropCoordinates }
+    : outbound.pickupLocation;
+  const returnDropAddress = custom ? trip.returnDropAddress : outbound.pickupAddress;
+  // Straight-line length of the new route, with the onward trip's pace for the time.
+  const customMeters = custom
+    ? haversineMeters(trip.returnPickupCoordinates, trip.returnDropCoordinates)
+    : 0;
+  const onwardMeters = Number(outbound.estimatedDistanceMeters || 0);
+  const returnMeters = custom ? customMeters : onwardMeters;
+  const returnMinutes =
+    custom && onwardMeters > 0
+      ? (Number(outbound.estimatedDurationMinutes || 0) * customMeters) / onwardMeters
+      : Number(outbound.estimatedDurationMinutes || 0);
+
   const now = new Date();
   const returnLeg = await Ride.create({
     userId: outbound.userId,
@@ -56,14 +79,14 @@ export const createReturnLegIfNeeded = async (outbound) => {
     vehicleIconType: outbound.vehicleIconType,
     vehicleIconUrl: outbound.vehicleIconUrl,
     serviceType: outbound.serviceType,
-    pickupLocation: outbound.dropLocation,
-    pickupAddress: outbound.dropAddress,
-    dropLocation: outbound.pickupLocation,
-    dropAddress: outbound.pickupAddress,
+    pickupLocation: returnPickupPoint,
+    pickupAddress: returnPickupAddress,
+    dropLocation: returnDropPoint,
+    dropAddress: returnDropAddress,
     fare: 0,
     baseFare: 0,
-    estimatedDistanceMeters: outbound.estimatedDistanceMeters,
-    estimatedDurationMinutes: outbound.estimatedDurationMinutes,
+    estimatedDistanceMeters: returnMeters,
+    estimatedDurationMinutes: Math.round(returnMinutes),
     paymentMethod: outbound.paymentMethod,
     service_location_id: outbound.service_location_id,
     transport_type: outbound.transport_type,
@@ -86,7 +109,7 @@ export const createReturnLegIfNeeded = async (outbound) => {
   sendPushNotificationToEntities({
     driverIds: [String(outbound.driverId)],
     title: 'Return trip scheduled',
-    body: `Pickup again at ${timeLabel(trip.returnAt)} · ${outbound.dropAddress || 'see app'}`,
+    body: `Pickup again at ${timeLabel(trip.returnAt)} · ${returnPickupAddress || 'see app'}`,
     data: { type: 'return_trip_booked', rideId: String(returnLeg._id) },
   }).catch(() => {});
 

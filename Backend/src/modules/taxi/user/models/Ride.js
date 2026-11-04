@@ -674,6 +674,12 @@ const rideSchema = new mongoose.Schema(
       waitingCharge: { type: Number, default: 0 },
       // Set when the driver cancels the return leg: half of the round trip fare goes back to the rider.
       refundAmount: { type: Number, default: 0 },
+      // Where the way back starts and ends when the rider chose places of their own.
+      // Empty means the onward route reversed. Coordinates are [lng, lat].
+      returnPickupAddress: { type: String, default: '' },
+      returnPickupCoordinates: { type: [Number], default: undefined },
+      returnDropAddress: { type: String, default: '' },
+      returnDropCoordinates: { type: [Number], default: undefined },
     },
     bookingPreferences: {
       tripType: {
