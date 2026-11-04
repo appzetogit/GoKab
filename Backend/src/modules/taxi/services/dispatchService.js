@@ -698,6 +698,7 @@ const emitRideRequestToDrivers = async ({
       dropLocation: ride.dropLocation,
       dropAddress: ride.dropAddress || '',
       scheduledAt: ride.scheduledAt || null,
+      roundTrip: ride.roundTrip?.isRoundTrip ? { isRoundTrip: true, legType: ride.roundTrip.legType, returnAt: ride.roundTrip.returnAt } : null,
       estimatedDistanceMeters: ride.estimatedDistanceMeters || 0,
       estimatedDurationMinutes: ride.estimatedDurationMinutes || 0,
       vehicleTypeId: ride.vehicleTypeId ? String(ride.vehicleTypeId) : null,
@@ -766,6 +767,7 @@ const emitRideRequestToDrivers = async ({
         tripDistanceKm: km(ride.estimatedDistanceMeters),
         vehicleLabel: vehicle?.name || ride.vehicleIconType || 'Ride',
         stopCount: String(ride.stopCount || 0),
+        returnAt: ride.roundTrip?.isRoundTrip && ride.roundTrip.returnAt ? new Date(ride.roundTrip.returnAt).toISOString() : '',
         expiresInSeconds: String(dispatchConfig.retryWindowSeconds),
       },
     }).catch((error) => {

@@ -23,6 +23,7 @@ import { findZoneByPickup } from './matchingService.js';
 import { getTipSettings } from './appSettingsService.js';
 import { getBidRideSettings } from './transportSettingsService.js';
 import { assertDriverMayTakeCustomerRide } from './tierPhaseService.js';
+import { applyReturnWaitingCharge, createReturnLegIfNeeded, normalizeReturnAt } from './roundTripService.js';
 import { resolveRideVehicle, withRideVehicle } from '../driver/services/rideVehicleService.js';
 
 // Booking a ride releases whatever the rider had queued in `currentRideId`, but
@@ -995,6 +996,7 @@ export const createRideRecord = async ({
   userMaxBidFare,
   bidStepAmount,
   bookingPreferences,
+  roundTrip,
   origin = 'customer_app',
   offlineCustomer = null,
   createdByDriverId = null,
@@ -1023,6 +1025,19 @@ export const createRideRecord = async ({
   // Resolved up front because it decides whether this booking may displace the
   // ride the rider already has queued.
   const normalizedScheduledAt = normalizeScheduledAt(scheduledAt);
+
+  // A round trip books the way back for a later time; the outbound leg keeps it.
+  let roundTripFields;
+  if (roundTrip?.returnAt) {
+    if (isDriverCreated) throw new ApiError(400, 'Round trips are only for rider bookings');
+    const checked = normalizeReturnAt({
+      returnAt: roundTrip.returnAt,
+      outboundAt: normalizedScheduledAt,
+      estimatedDurationMinutes: Number(estimatedDurationMinutes || 0),
+    });
+    if (checked.error) throw new ApiError(400, checked.error, null, 'INVALID_RETURN_TIME');
+    roundTripFields = { isRoundTrip: true, legType: 'outbound', returnAt: checked.value };
+  }
   const { retainedRideId } = user
     ? await clearUserActiveRideIfPresent(user, {
         incomingRideIsScheduled: isRideScheduledForFuture({ scheduledAt: normalizedScheduledAt }),
@@ -1241,6 +1256,7 @@ export const createRideRecord = async ({
       parcel: normalizeParcelPayload(parcel),
       intercity: normalizeIntercityPayload(intercity),
       stopCount: Math.min(Math.max(Math.trunc(Number(stopCount) || 0), 0), 3),
+      ...(roundTripFields ? { roundTrip: roundTripFields } : {}),
       scheduledAt: normalizedScheduledAt,
       status: RIDE_STATUS.SEARCHING,
       liveStatus: RIDE_LIVE_STATUS.SEARCHING,
@@ -1310,6 +1326,7 @@ export const createRideRecord = async ({
             parcel: normalizeParcelPayload(parcel),
             intercity: normalizeIntercityPayload(intercity),
       stopCount: Math.min(Math.max(Math.trunc(Number(stopCount) || 0), 0), 3),
+      ...(roundTripFields ? { roundTrip: roundTripFields } : {}),
             scheduledAt: normalizedScheduledAt,
             status: RIDE_STATUS.SEARCHING,
             liveStatus: RIDE_LIVE_STATUS.SEARCHING,
@@ -1406,6 +1423,15 @@ const populateRideRealtime = async (rideId) => {
 
 export const serializeRideRealtime = (ride) => ({
   rideId: String(ride._id),
+  roundTrip: ride.roundTrip?.isRoundTrip
+    ? {
+        isRoundTrip: true,
+        legType: ride.roundTrip.legType,
+        returnAt: ride.roundTrip.returnAt,
+        waitingMinutes: ride.roundTrip.waitingMinutes || 0,
+        waitingCharge: ride.roundTrip.waitingCharge || 0,
+      }
+    : null,
   room: getRideRoom(ride._id),
   deliveryId: ride.deliveryId?._id ? String(ride.deliveryId._id) : ride.deliveryId ? String(ride.deliveryId) : null,
   type: ride.serviceType || 'ride',
@@ -2706,6 +2732,10 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
     ride.startedAt = new Date();
   }
 
+  if (nextStatus === RIDE_LIVE_STATUS.STARTED && ride.roundTrip?.legType === 'return') {
+    applyReturnWaitingCharge(ride, ride.startedAt);
+  }
+
   if (paymentMethod !== undefined && paymentMethod !== null && String(paymentMethod).trim()) {
     ride.paymentMethod = normalizeRidePaymentMethod(paymentMethod);
   }
@@ -2781,6 +2811,9 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
     await processCompletedRideReferralReward(ride);
     await processCompletedDriverReferralReward(ride);
+    await createReturnLegIfNeeded(ride).catch((error) =>
+      console.error('[rideService] return leg booking failed:', error.message),
+    );
   }
 
   const { broadcastNetworkRideLifecycle } = await import('./liveMapService.js');

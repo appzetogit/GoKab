@@ -659,6 +659,20 @@ const rideSchema = new mongoose.Schema(
         default: null,
       },
     },
+    // Round trip: the outbound leg carries the return time; the return leg is a
+    // separate scheduled ride for the same driver and rider.
+    roundTrip: {
+      isRoundTrip: { type: Boolean, default: false },
+      legType: { type: String, enum: ['', 'outbound', 'return'], default: '' },
+      returnAt: { type: Date, default: null },
+      returnRideId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ride', default: null },
+      parentRideId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ride', default: null },
+      reminder30At: { type: Date, default: null },
+      reminder10At: { type: Date, default: null },
+      lateAlertAt: { type: Date, default: null },
+      waitingMinutes: { type: Number, default: 0 },
+      waitingCharge: { type: Number, default: 0 },
+    },
     bookingPreferences: {
       tripType: {
         type: String,

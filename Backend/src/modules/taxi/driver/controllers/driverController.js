@@ -2852,6 +2852,9 @@ const serializeDriverScheduledRide = (ride = {}, currentDriverId = "", { assigne
   dropLocation: ride.dropLocation || null,
   dropAddress: ride.dropAddress || "",
   scheduledAt: ride.scheduledAt || null,
+  roundTrip: ride.roundTrip?.isRoundTrip
+    ? { isRoundTrip: true, legType: ride.roundTrip.legType, returnAt: ride.roundTrip.returnAt }
+    : null,
   parcel: ride.parcel || null,
   intercity: ride.intercity || null,
   driverId: ride.driverId ? String(ride.driverId) : null,
@@ -3457,6 +3460,7 @@ export const getDriverScheduledRides = async (req, res) => {
         "dropLocation",
         "dropAddress",
         "scheduledAt",
+        "roundTrip",
         "driverId",
         "parcel",
         "intercity",

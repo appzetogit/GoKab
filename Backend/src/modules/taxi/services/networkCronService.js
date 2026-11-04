@@ -5,6 +5,7 @@ import { Driver } from '../driver/models/Driver.js';
 import { RIDE_LIVE_STATUS, RIDE_STATUS } from '../constants/index.js';
 import { expirePublishedRides } from '../driver/services/feedService.js';
 import { releasePublishedRide, settleAwaitingPlatformEscrow } from '../driver/services/escrowService.js';
+import { sendReturnLegReminders } from './roundTripService.js';
 import {
   notifyAssignmentUnacknowledged,
   notifyScheduledRideReminder,
@@ -321,6 +322,7 @@ export const runNetworkMaintenance = async () => {
     // Independent of each other and of the sweeps above: one failing must not
     // starve the rest.
     const pickupReminders = await runGuarded('pickupReminders', () => sendScheduledRideReminders());
+    const returnLegs = await runGuarded('returnLegReminders', () => sendReturnLegReminders());
     const nudges = await runGuarded('unacknowledgedNudges', () => sendUnacknowledgedAssignmentNudges());
     const platformSettlements = await runGuarded('platformSettlements', () => settlePaidPlatformEscrows());
     const tripPosts = await runGuarded('tripPosts', () => expireTripPosts());
@@ -337,6 +339,7 @@ export const runNetworkMaintenance = async () => {
       ...finalized,
       ...pickupReminders,
       ...nudges,
+      ...returnLegs,
       ...platformSettlements,
       ...tripPosts,
       ...documentReminders,
