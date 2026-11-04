@@ -2301,6 +2301,7 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
       'dropLocation',
       'dropAddress',
       'scheduledAt',
+      'roundTrip',
       'acceptedAt',
       'arrivedAt',
       'startedAt',
