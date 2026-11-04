@@ -72,7 +72,7 @@ export const processSubscriptionExpirations = async () => {
 
 // How many days before expiry the driver is nudged. A driver who only learns
 // their plan lapsed *after* it lapsed has already lost a day of Prime rides.
-const REMINDER_DAYS = [3, 1];
+const REMINDER_DAYS = [7, 3, 1];
 
 /**
  * Warns drivers whose plan is about to expire.
@@ -113,7 +113,7 @@ export const sendRenewalReminders = async () => {
         await sendPushNotificationToEntities({
           driverIds: [String(subscription.driver_id)],
           title: days === 1 ? `${planName} expires tomorrow` : `${planName} expires in ${days} days`,
-          body: 'Recharge now to keep your current category and its features.',
+          body: 'Renew now to keep Driver Network, your routes and your team working. After expiry you move to Basic and these pause (your team is not removed).',
           data: { type: 'subscription_expiring', days_left: String(days) },
         });
 

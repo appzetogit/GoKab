@@ -525,7 +525,7 @@ export const notifyCategoryChanged = async ({ driverId, category, previousCatego
       ? 'Your plan ended because the commercial + private vehicle requirement was not met.'
       : reason === 'prime_slot_revoked_by_admin'
         ? 'Your Prime slot was released by support. You are now on the Lower plan.'
-        : 'Your plan has expired. You are now on the Lower plan.';
+        : 'Your plan has expired. You are now on the Basic plan. Driver Network services are paused, and your team and routes stay saved. Renew to turn them back on.';
 
   emitToRoom(getDriverRoom(driverId), 'driver:category:updated', {
     category,
@@ -535,7 +535,7 @@ export const notifyCategoryChanged = async ({ driverId, category, previousCatego
 
   await sendPushNotificationToEntities({
     driverIds: [String(driverId)],
-    title: upgraded ? 'Plan upgraded' : 'Plan changed',
+    title: upgraded ? 'Plan upgraded' : reason === 'subscription_expired' ? 'Your plan has expired' : 'Plan changed',
     body,
     data: { type: 'driver_category_changed', category, reason },
   }).catch(() => {});
