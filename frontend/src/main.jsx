@@ -34,14 +34,25 @@ import { installLegacyBackendShim } from './shared/api/legacyBackendShim'
 import { installBrowserFcmRegistration } from './shared/push/browserFcmRegistration'
 import { installNativeFcmBridge } from './shared/push/nativeFcmBridge'
 import { installHistoryStateProtection } from './shared/utils/historyState'
-import App from './App.jsx'
+import { API_BASE_URL } from './shared/api/runtimeConfig'
 
 installLegacyBackendShim()
 installBrowserFcmRegistration()
 installNativeFcmBridge()
 installHistoryStateProtection()
 
-createRoot(document.getElementById('root')).render(
-  <App />,
-)
+// The Google Maps key set by the admin (Admin > Map settings) wins over the
+// build-time VITE key. It has to be known before the pages load, since they
+// read it when they are first imported.
+async function boot() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/common/app-config`)
+    window.__GOOGLE_MAPS_KEY__ = (await res.json())?.data?.google_maps_key || ''
+  } catch {
+    // offline or older backend: fall back to the VITE key
+  }
+  const { default: App } = await import('./App.jsx')
+  createRoot(document.getElementById('root')).render(<App />)
+}
+boot()
 

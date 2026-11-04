@@ -1,8 +1,8 @@
 import { asyncHandler } from '../../../../utils/asyncHandler.js';
 import { mediaService } from '../../../../services/media.service.js';
 import { env } from '../../../../config/env.js';
-import { getReferralSettings, getReferralTranslationContent } from '../../admin/services/adminService.js';
-import { getPublicActivePaymentGateway } from '../../services/paymentGatewayService.js';
+import { ensureThirdPartySettings, getReferralSettings, getReferralTranslationContent } from '../../admin/services/adminService.js';
+import { getPublicActivePaymentGateway, resolveConfiguredGatewayCredentials } from '../../services/paymentGatewayService.js';
 import { buildPaymentRequestContext, logPaymentDiagnostic } from '../../services/paymentDiagnostics.js';
 
 /**
@@ -54,6 +54,27 @@ export const getPaymentGatewayConfig = asyncHandler(async (_req, res) => {
     return res.json({
         success: true,
         data,
+    });
+});
+
+// Public client config: the admin-set Google Maps browser key and the Razorpay
+// key id (never the secret), so every app uses what the admin saved.
+export const getPublicAppConfig = asyncHandler(async (_req, res) => {
+    const settings = await ensureThirdPartySettings();
+    const maps = settings?.map_apis || {};
+    let razorpayKeyId = '';
+    try {
+        razorpayKeyId = (await resolveConfiguredGatewayCredentials('razor_pay')).keyId || '';
+    } catch {
+        // gateway disabled or not configured: apps fall back to the key sent with each order
+    }
+
+    return res.json({
+        success: true,
+        data: {
+            google_maps_key: maps.google_map_key_for_web_apps || maps.google_map_key_for_distance_matrix || '',
+            razorpay_key_id: razorpayKeyId,
+        },
     });
 });
 

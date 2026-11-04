@@ -17,6 +17,8 @@ const DENSIFY_STEP_METERS = 5000;
 const resolveGoogleMapsKey = async () => {
   const settings = await AdminThirdPartySetting.findOne({ scope: 'default' }).select('map_apis').lean();
   return (
+    settings?.map_apis?.google_map_key_for_distance_matrix ||
+    settings?.map_apis?.google_map_key_for_web_apps ||
     settings?.map_apis?.google_map_key ||
     settings?.map_apis?.google_maps_key ||
     settings?.map_apis?.key ||
