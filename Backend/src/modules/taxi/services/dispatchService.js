@@ -1340,7 +1340,6 @@ const dispatchTierPhase = async ({ ride, rideId, phaseIndex, phases, dispatchCon
     matchedDrivers: targetDrivers.length,
     totalNotifiedDrivers: nextNotifiedDriverIds.length,
     maxSearchSeconds: Math.round(dispatchConfig.searchExpiryMs / 1000),
-    backgroundAfterSeconds: dispatchConfig.backgroundAfterSeconds,
   });
 
   const isLast = phaseIndex >= phases.length - 1;

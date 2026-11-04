@@ -151,14 +151,6 @@ const TransportRideSettings = () => {
                  />
 
                  <InputField
-                    label="Finding Screen Goes To Home After X Minutes (rider keeps searching in the background)"
-                    name="finding_screen_background_minutes"
-                    value={settings.finding_screen_background_minutes}
-                    onChange={handleChange}
-                    type="number"
-                 />
-
-                 <InputField
                     label="Trip Accept/Reject Duration For Driver in Seconds"
                     name="trip_accept_reject_duration_for_driver" 
                     value={settings.trip_accept_reject_duration_for_driver} 
