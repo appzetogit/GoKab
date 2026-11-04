@@ -13,7 +13,7 @@ import {
   RIDE_STATUS,
 } from '../constants/index.js';
 import { Delivery } from '../user/models/Delivery.js';
-import { getRideRoom, resolveSetPriceForRide } from './rideService.js';
+import { getRideRoom, getScheduledDispatchLeadMs, resolveSetPriceForRide } from './rideService.js';
 import { releasePromoForCancelledRide } from './promoService.js';
 import { SOCKET_EVENTS } from '../socket/events.js';
 import { resolveTransportDispatchConfig } from './transportSettingsService.js';
@@ -1458,7 +1458,9 @@ export const startDispatchFlow = async (ride) => {
   emitCustomerFeedEvent(ride, 'feed:customer:new');
 
   const scheduledAt = ride?.scheduledAt ? new Date(ride.scheduledAt) : null;
-  const delayMs = scheduledAt ? scheduledAt.getTime() - Date.now() : 0;
+  // Offered to drivers ahead of the pickup time (admin lead time, 60 min by default).
+  const leadMs = scheduledAt ? await getScheduledDispatchLeadMs() : 0;
+  const delayMs = scheduledAt ? scheduledAt.getTime() - leadMs - Date.now() : 0;
   const bookingMode = String(ride?.bookingMode || 'normal').trim().toLowerCase();
   const shouldDispatchImmediately = bookingMode === 'bidding';
 
@@ -1476,6 +1478,16 @@ export const startDispatchFlow = async (ride) => {
   }
 
   await dispatchAttempt(ride._id, 0);
+};
+
+/**
+ * Sends a ride that lost its driver back to dispatch, skipping that driver.
+ * The tier phases start again from the first one.
+ */
+export const redispatchRide = async (rideId, excludeDriverId = null) => {
+  stopDispatchFlow(rideId);
+  if (excludeDriverId) saveDispatchState(rideId, { rejectedDriverIds: [String(excludeDriverId)] });
+  await dispatchAttempt(rideId, 0);
 };
 
 export const restoreScheduledDispatches = async () => {

@@ -79,6 +79,7 @@ export const createDefaultBusinessSettings = () => ({
     // How many minutes before pickup a driver may start (arriving/started) a
     // scheduled ride, and from when it shows as their active trip.
     scheduled_start_window_minutes: '30',
+    scheduled_dispatch_lead_minutes: '60',
     can_round_the_bill_values: '1',
     enable_shipment_load_feature: '1',
     enable_shipment_unload_feature: '1',

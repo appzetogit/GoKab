@@ -455,6 +455,20 @@ export const getScheduledStartWindowMs = async () => {
   return minutes * 60 * 1000;
 };
 
+const DEFAULT_SCHEDULED_DISPATCH_LEAD_MINUTES = 60;
+
+// How long before `scheduledAt` the ride is offered to drivers, so a driver is
+// found and committed well before the pickup. Admin-tunable via
+// `transport_ride.scheduled_dispatch_lead_minutes`; 0 dispatches at pickup time.
+export const getScheduledDispatchLeadMs = async () => {
+  const setting = await AdminBusinessSetting.findOne({ scope: 'default' }).select('transport_ride').lean();
+  const configured = Number(setting?.transport_ride?.scheduled_dispatch_lead_minutes);
+  const minutes =
+    Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_SCHEDULED_DISPATCH_LEAD_MINUTES;
+
+  return minutes * 60 * 1000;
+};
+
 // True while a scheduled ride's start window has not opened yet. A ride with
 // no `scheduledAt`, or one already inside its window, is never "too early".
 export const isRideBeforeStartWindow = (ride = {}, windowMs = 0, referenceTime = new Date()) => {

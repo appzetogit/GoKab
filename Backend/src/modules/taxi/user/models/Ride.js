@@ -827,6 +827,12 @@ const rideSchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
+      // Customer scheduled rides: driver 60/30/10 min before, rider 30 min before, late alert.
+      customer_60_at: { type: Date, default: null },
+      customer_30_at: { type: Date, default: null },
+      customer_10_at: { type: Date, default: null },
+      customer_rider_at: { type: Date, default: null },
+      customer_late_at: { type: Date, default: null },
     },
     publish: {
       is_published: {

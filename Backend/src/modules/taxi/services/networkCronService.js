@@ -6,6 +6,7 @@ import { RIDE_LIVE_STATUS, RIDE_STATUS } from '../constants/index.js';
 import { expirePublishedRides } from '../driver/services/feedService.js';
 import { releasePublishedRide, settleAwaitingPlatformEscrow } from '../driver/services/escrowService.js';
 import { sendReturnLegReminders } from './roundTripService.js';
+import { reassignLateScheduledRides, sendScheduledCustomerRideReminders } from './scheduledRideService.js';
 import {
   notifyAssignmentUnacknowledged,
   notifyScheduledRideReminder,
@@ -323,6 +324,8 @@ export const runNetworkMaintenance = async () => {
     // starve the rest.
     const pickupReminders = await runGuarded('pickupReminders', () => sendScheduledRideReminders());
     const returnLegs = await runGuarded('returnLegReminders', () => sendReturnLegReminders());
+    const scheduledReminders = await runGuarded('scheduledRideReminders', () => sendScheduledCustomerRideReminders());
+    const scheduledReassign = await runGuarded('scheduledRideReassign', () => reassignLateScheduledRides());
     const nudges = await runGuarded('unacknowledgedNudges', () => sendUnacknowledgedAssignmentNudges());
     const platformSettlements = await runGuarded('platformSettlements', () => settlePaidPlatformEscrows());
     const tripPosts = await runGuarded('tripPosts', () => expireTripPosts());
@@ -340,6 +343,8 @@ export const runNetworkMaintenance = async () => {
       ...pickupReminders,
       ...nudges,
       ...returnLegs,
+      ...scheduledReminders,
+      ...scheduledReassign,
       ...platformSettlements,
       ...tripPosts,
       ...documentReminders,
