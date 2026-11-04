@@ -1783,12 +1783,12 @@ const historyOtpFor = (ride, { role, entityId }) => {
 const HISTORY_STATUSES = new Set(['all', RIDE_STATUS.COMPLETED, RIDE_STATUS.CANCELLED]);
 const HISTORY_DRIVER_ROLES = new Set(['driven', 'published', 'all']);
 
-const HISTORY_ORIGINS = new Set(['all', 'customer_app', 'driver_created']);
+const HISTORY_ORIGINS = new Set(['all', 'customer_app', 'driver_created', 'round_trip']);
 
 const parseHistoryOrigin = (origin) => {
   const normalized = String(origin || 'all').trim().toLowerCase();
   if (!HISTORY_ORIGINS.has(normalized)) {
-    throw new ApiError(422, "origin must be 'all', 'customer_app' or 'driver_created'", { origin }, 'INVALID_ORIGIN');
+    throw new ApiError(422, "origin must be 'all', 'customer_app', 'driver_created' or 'round_trip'", { origin }, 'INVALID_ORIGIN');
   }
   return normalized;
 };
@@ -1799,7 +1799,9 @@ const historyOriginClause = (origin) =>
     ? { origin: 'driver_created' }
     : origin === 'customer_app'
       ? { origin: { $ne: 'driver_created' } }
-      : null;
+      : origin === 'round_trip'
+        ? { 'roundTrip.isRoundTrip': true }
+        : null;
 
 // ---------------------------------------------------------------------------
 // Driver "All Rides": live + finished, customer + network, one paged list
@@ -2036,6 +2038,11 @@ const listDriverRideHistory = async ({ entityId, limit, page, category, from, to
             ...(statusClause ? [{ $match: statusClause }] : []),
             { $group: { _id: { $cond: [{ $eq: ['$origin', 'driver_created'] }, 'driver_created', 'customer_app'] }, n: { $sum: 1 } } },
           ],
+          roundTrips: [
+            ...(statusClause ? [{ $match: statusClause }] : []),
+            { $match: { 'roundTrip.isRoundTrip': true } },
+            { $count: 'n' },
+          ],
         },
       },
     ]);
@@ -2049,6 +2056,7 @@ const listDriverRideHistory = async ({ entityId, limit, page, category, from, to
       cancelled: statusCounts.cancelled || 0,
       customer_app: originCounts.customer_app || 0,
       driver_created: originCounts.driver_created || 0,
+      round_trip: countFacet?.roundTrips?.[0]?.n || 0,
     };
   }
 
