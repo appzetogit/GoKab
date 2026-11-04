@@ -14,6 +14,7 @@ import { BusDriver } from "../models/BusDriver.js";
 import { DriverLoginSession } from "../models/DriverLoginSession.js";
 import { WalletTransaction } from "../models/WalletTransaction.js";
 import { WithdrawalRequest } from "../../admin/models/WithdrawalRequest.js";
+import { notifyAdminsOfWithdrawal } from "../../services/withdrawalNotifyService.js";
 import { Ride } from "../../user/models/Ride.js";
 import { BusBooking } from "../../user/models/BusBooking.js";
 import { BusSeatHold } from "../../user/models/BusSeatHold.js";
@@ -6258,16 +6259,17 @@ export const createDriverWithdrawalRequest = async (req, res) => {
     );
   }
 
-  const pendingRequest = await WithdrawalRequest.findOne({
-    driver_id: req.auth.sub,
-    amount,
-    status: 'pending',
-  })
-    .sort({ createdAt: -1 })
-    .lean();
+  // The admin has to know where to send the money.
+  const payout = serializeDriverBankDetails(driver.bankDetails || {});
+  const hasBank = Boolean(payout.accountNumber && payout.ifsc);
+  if (!payout.upiId && !hasBank) {
+    throw new ApiError(400, "Add your bank account or UPI ID before withdrawing", null, "PAYOUT_METHOD_REQUIRED");
+  }
 
-  if (pendingRequest && (Date.now() - new Date(pendingRequest.createdAt).getTime()) < 60 * 1000) {
-    throw new ApiError(409, "A similar withdrawal request was just submitted");
+  // One request at a time, and what is already waiting counts against the balance.
+  const pendingRequests = await WithdrawalRequest.find({ driver_id: req.auth.sub, status: 'pending' }).lean();
+  if (pendingRequests.length) {
+    throw new ApiError(409, "You already have a withdrawal request waiting for approval", null, "WITHDRAWAL_PENDING");
   }
 
   const created = await WithdrawalRequest.create({
@@ -6275,9 +6277,11 @@ export const createDriverWithdrawalRequest = async (req, res) => {
     driver_id: req.auth.sub,
     amount: Math.round(amount * 100) / 100,
     payment_method: paymentMethod,
-    bank_details_snapshot: serializeDriverBankDetails(driver.bankDetails || {}),
+    bank_details_snapshot: payout,
     status: 'pending',
   });
+
+  notifyAdminsOfWithdrawal({ request: created, driverName: driver.name });
 
   res.status(201).json({
     success: true,
@@ -6287,6 +6291,17 @@ export const createDriverWithdrawalRequest = async (req, res) => {
     },
     message: "Withdrawal request sent to admin",
   });
+};
+
+/** The driver's own withdrawal requests, newest first. */
+export const listMyWithdrawalRequests = async (req, res) => {
+  const requests = await WithdrawalRequest.find({ driver_id: req.auth.sub })
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .select('transactionId amount payment_method status createdAt updatedAt')
+    .lean();
+
+  res.json({ success: true, data: { results: requests } });
 };
 
 export const topUpMyWallet = async (req, res) => {

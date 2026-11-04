@@ -51,6 +51,7 @@ import { PaymentGateway } from '../models/PaymentGateway.js';
 import { PaymentMethod } from '../models/PaymentMethod.js';
 import { OnboardingScreen } from '../models/OnboardingScreen.js';
 import { WithdrawalRequest } from '../models/WithdrawalRequest.js';
+import { notifyDriverOfWithdrawalDecision } from '../../services/withdrawalNotifyService.js';
 import { SupportTicket } from '../../support/models/SupportTicket.js';
 import TaxiTransportType from '../models/TaxiTransportType.js';
 import { comparePassword, hashPassword } from '../../driver/services/authService.js';
@@ -4418,6 +4419,7 @@ export const approveDriverWithdrawalRequest = async (requestId, adminId = null) 
       wallet: walletResult.wallet,
       transaction: walletResult.transaction,
     });
+    notifyDriverOfWithdrawalDecision({ request, approved: true });
 
     return {
       request: {
@@ -4451,6 +4453,7 @@ export const rejectDriverWithdrawalRequest = async (requestId) => {
 
   request.status = 'cancelled';
   await request.save();
+  notifyDriverOfWithdrawalDecision({ request, approved: false });
 
   return {
     request: {

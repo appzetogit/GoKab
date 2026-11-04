@@ -672,6 +672,8 @@ const rideSchema = new mongoose.Schema(
       lateAlertAt: { type: Date, default: null },
       waitingMinutes: { type: Number, default: 0 },
       waitingCharge: { type: Number, default: 0 },
+      // Set when the driver cancels the return leg: half of the round trip fare goes back to the rider.
+      refundAmount: { type: Number, default: 0 },
     },
     bookingPreferences: {
       tripType: {

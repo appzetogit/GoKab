@@ -12,6 +12,7 @@ import {
   enrollServiceCenterStaffBiometric,
   updateServiceCenterStaffMember,
   createDriverWithdrawalRequest,
+  listMyWithdrawalRequests,
   createServiceCenterVehicle,
   captureServiceCenterBookingFingerprint,
   completePoolingOnboardingRequest,
@@ -355,6 +356,11 @@ driverRouter.post(
   "/wallet/withdrawals",
   authenticate(["driver", "owner"]),
   asyncHandler(createDriverWithdrawalRequest),
+);
+driverRouter.get(
+  "/wallet/withdrawals",
+  authenticate(["driver"]),
+  asyncHandler(listMyWithdrawalRequests),
 );
 
 driverRouter.post(

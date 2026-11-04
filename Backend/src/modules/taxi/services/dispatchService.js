@@ -1109,6 +1109,27 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
 
     cancellationSettlement = await settleDriverCancellationFee(ride, session);
 
+    // The driver walks away from the way back of a round trip: the rider only got
+    // one of the two trips, so half of what they paid for the round trip returns
+    // to their wallet.
+    if (ride.roundTrip?.legType === 'return' && ride.roundTrip?.parentRideId && ride.userId) {
+      const outbound = await Ride.findById(ride.roundTrip.parentRideId).select('fare').session(session);
+      const refundAmount = Math.round((Number(outbound?.fare || 0) / 2) * 100) / 100;
+      if (refundAmount > 0) {
+        const credit = await applyUserWalletAdjustment({
+          userId: ride.userId,
+          amount: refundAmount,
+          kind: 'credit',
+          title: `Refund for the cancelled return trip (booking ${String(ride._id).slice(-6)})`,
+          referenceKey: `ride-cancel:driver-roundtrip:${String(ride._id)}:user-refund`,
+          walletField: 'refundWallet',
+          provider: 'ride_cancellation_refund',
+          session,
+        });
+        if (['applied', 'existing'].includes(credit.status)) ride.roundTrip.refundAmount = refundAmount;
+      }
+    }
+
     await releasePromoForCancelledRide({ ride, session });
 
     ride.status = RIDE_STATUS.CANCELLED;
@@ -1146,7 +1167,10 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
     penaltyFrom: 'acceptor',
   });
 
-  const cancelReason = 'Your scheduled ride was cancelled by the driver.';
+  const refunded = Number(ride.roundTrip?.refundAmount || 0);
+  const cancelReason = refunded > 0
+    ? `Your return trip was cancelled by the driver. ₹${refunded} (half of your round trip fare) was refunded to your wallet.`
+    : 'Your scheduled ride was cancelled by the driver.';
 
   emitToRoom(getUserRoom(ride.userId), 'rideCancelled', {
     rideId: String(ride._id),
@@ -1197,7 +1221,7 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
 
   sendPushNotificationToEntities({
     userIds: [String(ride.userId)],
-    title: 'Scheduled ride cancelled',
+    title: refunded > 0 ? 'Return trip cancelled, refund issued' : 'Scheduled ride cancelled',
     body: cancelReason,
     data: {
       type: 'ride_cancelled_by_driver',

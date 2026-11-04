@@ -8,7 +8,8 @@ import mongoose from 'mongoose';
 const cancellationReasonSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, trim: true },
-    audience: { type: String, enum: ['user', 'driver'], default: 'user', index: true },
+    // `user_return`: the rider cancelling the return half of a round trip, whose first half is done.
+    audience: { type: String, enum: ['user', 'driver', 'user_return'], default: 'user', index: true },
     // Catch-all entries ("Other") make the rider type what happened.
     requiresNote: { type: Boolean, default: false },
     order: { type: Number, default: 0 },
@@ -31,6 +32,14 @@ const DEFAULTS = {
     ['Changed my plans', false],
     ['Other', true],
   ],
+  user_return: [
+    ['I no longer need the return trip', false],
+    ['My plans changed, I will return another way', false],
+    ['I will be staying longer than planned', false],
+    ['Wrong return time or pickup place', false],
+    ['I am not able to reach the pickup', false],
+    ['Other', true],
+  ],
   driver: [
     ['Rider is not at the pickup point', false],
     ['Rider asked me to cancel', false],
@@ -41,7 +50,7 @@ const DEFAULTS = {
 };
 
 export const listCancellationReasons = async (audience = 'user') => {
-  const who = audience === 'driver' ? 'driver' : 'user';
+  const who = ['driver', 'user_return'].includes(audience) ? audience : 'user';
   const existing = await CancellationReason.countDocuments({ audience: who });
   if (existing === 0) {
     await CancellationReason.insertMany(
