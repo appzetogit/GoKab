@@ -64,7 +64,7 @@ export const sendScheduledCustomerRideReminders = async (now = new Date()) => {
         }
         push(
           driver,
-          step <= 10 ? 'Start for your pickup' : `Pickup in ${step} min`,
+          step <= 10 ? 'Start for your pickup' : `Pickup in ${Math.max(Math.round(minutesLeft), 1)} min`,
           `${label} · ${where}. Open the app and slide to go to the pickup.`,
           { type: 'scheduled_ride_reminder', rideId },
         );
