@@ -73,7 +73,7 @@ import {
 } from "../../admin/services/adminService.js";
 import { OwnerWalletTransaction } from "../../admin/models/OwnerWalletTransaction.js";
 import { resolveConfiguredGatewayCredentials } from "../../services/paymentGatewayService.js";
-import { assignPushTokenToEntity } from "../../services/pushTokenService.js";
+import { assignPushTokenToEntity, releasePushTokenFromOthers } from "../../services/pushTokenService.js";
 import {
   completeDriverOnboarding,
   getDriverOnboardingSession,
@@ -2095,6 +2095,7 @@ export const saveDriverFcmToken = async (req, res) => {
   });
 
   await entity.save();
+  await releasePushTokenFromOthers({ token: saved.token, fieldName: saved.fieldName, keepId: entity._id });
 
   res.json({
     success: true,
@@ -2105,6 +2106,19 @@ export const saveDriverFcmToken = async (req, res) => {
       role: String(req.auth?.role || "").toLowerCase(),
     },
   });
+};
+
+// Logout: this device must stop receiving this account's pushes.
+export const removeDriverFcmToken = async (req, res) => {
+  const Model = DRIVER_PUSH_ROLE_MODEL_MAP[String(req.auth?.role || "").toLowerCase()];
+  if (!Model) {
+    throw new ApiError(403, "Unsupported role for driver push notifications");
+  }
+  const token = String(req.body?.token || "").trim();
+  // With a token, clear only if it is the one saved here (another device may have taken over).
+  const filter = { _id: req.auth.sub, ...(token ? { fcmTokenMobile: token } : {}) };
+  await Model.updateOne(filter, { $set: { fcmTokenMobile: "" } });
+  res.json({ success: true, data: { message: "FCM token removed" } });
 };
 
 export const addDriverEmergencyContact = async (req, res) => {

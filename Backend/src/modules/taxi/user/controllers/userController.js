@@ -20,7 +20,7 @@ import {
   startUserOtp,
   verifyUserOtp,
 } from '../services/userOtpService.js';
-import { assignPushTokenToEntity } from '../../services/pushTokenService.js';
+import { assignPushTokenToEntity, releasePushTokenFromOthers } from '../../services/pushTokenService.js';
 import { SetPrice } from '../../admin/models/SetPrice.js';
 import { Airport } from '../../admin/models/Airport.js';
 import { RailwayStation } from '../../admin/models/RailwayStation.js';
@@ -1180,6 +1180,7 @@ export const saveUserFcmToken = async (req, res) => {
   });
 
   await user.save();
+  await releasePushTokenFromOthers({ token: saved.token, fieldName: saved.fieldName, keepId: user._id });
 
   res.json({
     success: true,

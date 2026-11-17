@@ -37,6 +37,7 @@ import {
   getDriverScheduledRides,
   getOwnerPoolingVehicles,
   saveDriverFcmToken,
+  removeDriverFcmToken,
   getOwnerFleetDrivers,
   getOwnerFleetDashboard,
   getOwnerFleetAnalytics,
@@ -207,6 +208,11 @@ driverRouter.post(
     "pooling_driver",
   ], { allowPending: true }),
   asyncHandler(saveDriverFcmToken),
+);
+driverRouter.delete(
+  "/fcm-token",
+  authenticate(["driver", "owner", "pooling_driver"], { allowPending: true }),
+  asyncHandler(removeDriverFcmToken),
 );
 import {
   getDriverSubscriptionTiersController,

@@ -71,6 +71,8 @@ const socketPayload = (ride, built) => ({
   serviceType: ride.serviceType || 'ride',
   // A ride published by another driver: the card sends a request, not an accept.
   published: true,
+  // The app ignores a card for a ride its own driver published.
+  publisherId: ride.created_by_driver_id ? String(ride.created_by_driver_id) : '',
   isSecure: built.secure,
   amountForYou: built.payout,
   totalFare: Number(ride.publish?.total_fare || ride.fare || 0),
@@ -159,8 +161,8 @@ export const alertPublishedRide = async (rideId) => {
     deletedAt: null,
     route_mode: { $ne: 'route' },
     _id: { $nin: skip },
-    ...(where.length ? { $or: where } : {}),
-    ...categoryFilter,
+    // Both filters use $or, so they go in $and (spreading them would drop one).
+    $and: [...(where.length ? [{ $or: where }] : []), categoryFilter],
   })
     .select('_id')
     .limit(MAX_ALERTS_PER_PHASE)
@@ -213,6 +215,7 @@ export const alertPublishedRide = async (rideId) => {
         type: 'ride_request',
         rideId: String(ride._id),
         published: '1',
+        publisherId: ride.created_by_driver_id ? String(ride.created_by_driver_id) : '',
         isSecure: String(built.secure),
         serviceType: ride.serviceType || 'ride',
         userId: '',
