@@ -21,6 +21,7 @@ import {
   applyCategoryFromSubscription,
   downgradeToLower,
   getPrimeSlotUsage,
+  vehicleUsageSummary,
 } from '../../services/driverCategoryService.js';
 import {
   releasePublishedRide,
@@ -208,18 +209,14 @@ export const createDriverWithPlanController = asyncHandler(async (req, res) => {
   if (usage && !['commercial', 'private'].includes(usage)) {
     throw new ApiError(422, 'vehicle_usage_type must be commercial or private', null, 'INVALID_USAGE_TYPE');
   }
-  if (plan !== 'lower') {
-    const planTier = await SubscriptionTier.findOne({ driver_category: plan, is_active: true })
-      .select('requires_commercial_at_purchase')
-      .lean();
-    if (planTier?.requires_commercial_at_purchase && usage !== 'commercial') {
-      throw new ApiError(
-        422,
-        `${PLAN_LABEL[plan]} needs a commercial vehicle. Choose Commercial and add the commercial permit.`,
-        null,
-        'COMMERCIAL_REQUIRED',
-      );
-    }
+  // Elite and Pro are for commercial vehicles only. A private vehicle never gets them.
+  if (plan !== 'lower' && usage !== 'commercial') {
+    throw new ApiError(
+      422,
+      `${PLAN_LABEL[plan]} needs a commercial vehicle. Choose Commercial and add the commercial permit.`,
+      null,
+      'COMMERCIAL_REQUIRED',
+    );
   }
 
   const cityId = body.service_location_id || body.area || body.service_location || null;
@@ -380,6 +377,17 @@ export const overrideDriverCategoryController = asyncHandler(async (req, res) =>
 
   const driver = await Driver.findById(driverId).select('service_location_id').lean();
   if (!driver) throw new ApiError(404, 'Driver not found', null, 'DRIVER_NOT_FOUND');
+
+  // Elite and Pro are for commercial vehicles only: a driver with a private vehicle never gets them.
+  const usageSummary = await vehicleUsageSummary(driverId);
+  if (usageSummary.commercial < 1) {
+    throw new ApiError(
+      422,
+      'Elite and Pro need a commercial vehicle. This driver has none (a private vehicle cannot take them).',
+      null,
+      'COMMERCIAL_REQUIRED',
+    );
+  }
 
   const tier = await SubscriptionTier.findOne({ driver_category: category, is_active: true })
     .sort({ display_order: 1 })

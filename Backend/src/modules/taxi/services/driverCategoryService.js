@@ -315,9 +315,13 @@ export const checkTierEligibility = async ({ driverId, tierId }) => {
   // vehicle before a plan that unlocks fleet ownership). Commercial only here;
   // `applyCategoryFromSubscription` starts a grace window for the private
   // vehicle once the plan is actually granted.
-  if (tier.requires_commercial_at_purchase) {
+  // Elite (prime) and Pro (middle) are for commercial vehicles only, whatever the tier flags say.
+  const paidTier = ['prime', 'middle'].includes(String(tier.driver_category || ''));
+  const needsCommercial = paidTier || tier.requires_commercial_at_purchase || tier.requires_commercial_and_private;
+  const needsPrivate = !tier.requires_commercial_at_purchase && tier.requires_commercial_and_private;
+  if (needsCommercial || needsPrivate) {
     vehicleUsage = await vehicleUsageSummary(driver);
-    if (vehicleUsage.commercial < 1) {
+    if (needsCommercial && vehicleUsage.commercial < 1) {
       reasons.push('NEED_COMMERCIAL_VEHICLE');
       // "Add a vehicle" is the wrong instruction once they already have —
       // this tells the app to say "waiting for admin approval" instead.
@@ -325,13 +329,7 @@ export const checkTierEligibility = async ({ driverId, tierId }) => {
       // client that only knows the older code still behaves correctly.
       if (vehicleUsage.commercialPending > 0) reasons.push('COMMERCIAL_VEHICLE_PENDING_APPROVAL');
     }
-  } else if (tier.requires_commercial_and_private) {
-    vehicleUsage = await vehicleUsageSummary(driver);
-    if (vehicleUsage.commercial < 1) {
-      reasons.push('NEED_COMMERCIAL_VEHICLE');
-      if (vehicleUsage.commercialPending > 0) reasons.push('COMMERCIAL_VEHICLE_PENDING_APPROVAL');
-    }
-    if (vehicleUsage.private < 1) reasons.push('NEED_PRIVATE_VEHICLE');
+    if (needsPrivate && vehicleUsage.private < 1) reasons.push('NEED_PRIVATE_VEHICLE');
   }
 
   let slotsLeft = null;
