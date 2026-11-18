@@ -1304,6 +1304,7 @@ const AdminLayout = () => {
               { label: 'Transport Ride Settings', path: '/admin/settings/business/transport-ride', permission: 'settings.view' },
               { label: 'Carpool Settings', path: '/admin/settings/business/carpool', permission: 'settings.view' },
               { label: 'Driver Routes', path: '/admin/settings/business/driver-routes', permission: 'settings.view' },
+              { label: 'Elite Slots', path: '/admin/settings/business/elite-slots', permission: 'settings.view' },
               { label: 'Bid Ride Settings', path: '/admin/settings/business/bid-ride', permission: 'settings.view' },
             ],
           },

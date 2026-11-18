@@ -124,6 +124,40 @@ export const listPrimeSlotsController = asyncHandler(async (req, res) => {
   });
 });
 
+// Every city with its Elite (Prime) limit: the city's own number, the default it falls back to,
+// and how many seats are taken.
+export const listCityPrimeLimitsController = asyncHandler(async (req, res) => {
+  assertNetworkAdmin(req);
+
+  const [cities, settings, usage] = await Promise.all([
+    ServiceLocation.find({}).select('name prime_limit').sort({ name: 1 }).lean(),
+    getDriverNetworkSettings(),
+    PrimeCitySlot.aggregate([{ $group: { _id: '$service_location_id', n: { $sum: 1 } } }]),
+  ]);
+  const usedBy = new Map(usage.map((row) => [String(row._id), row.n]));
+  const defaultLimit = Math.max(0, Number(settings.prime_per_city ?? 5));
+
+  res.json({
+    success: true,
+    data: {
+      default_limit: defaultLimit,
+      results: cities.map((city) => {
+        const own = city.prime_limit === null || city.prime_limit === undefined ? null : Number(city.prime_limit);
+        const limit = own === null ? defaultLimit : own;
+        const used = usedBy.get(String(city._id)) || 0;
+        return {
+          id: String(city._id),
+          name: city.name,
+          own_limit: own,
+          limit,
+          used,
+          left: Math.max(0, limit - used),
+        };
+      }),
+    },
+  });
+});
+
 export const revokePrimeSlotController = asyncHandler(async (req, res) => {
   assertNetworkAdmin(req);
 
