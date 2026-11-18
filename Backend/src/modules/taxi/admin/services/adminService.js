@@ -4085,6 +4085,10 @@ export const createDriver = async (payload = {}, currentAdmin = null) => {
     vehicleModel: String(payload.vehicle_model || payload.vehicleModel || payload.car_model || '').trim(),
     vehicleColor: String(payload.vehicle_color || payload.vehicleColor || payload.car_color || '').trim(),
     vehicleNumber: String(payload.vehicle_number || payload.vehicleNumber || payload.car_number || '').trim(),
+    // Commercial or private: the Elite / Pro vehicle rule counts this.
+    vehicle_usage_type: ['commercial', 'private'].includes(String(payload.vehicle_usage_type || '').toLowerCase())
+      ? String(payload.vehicle_usage_type).toLowerCase()
+      : '',
     registerFor,
     serviceCategories,
     city,

@@ -204,6 +204,24 @@ export const createDriverWithPlanController = asyncHandler(async (req, res) => {
     throw new ApiError(422, 'plan_days must be a whole number between 1 and 3650', null, 'INVALID_DAYS');
   }
 
+  const usage = String(body.vehicle_usage_type || '').trim().toLowerCase();
+  if (usage && !['commercial', 'private'].includes(usage)) {
+    throw new ApiError(422, 'vehicle_usage_type must be commercial or private', null, 'INVALID_USAGE_TYPE');
+  }
+  if (plan !== 'lower') {
+    const planTier = await SubscriptionTier.findOne({ driver_category: plan, is_active: true })
+      .select('requires_commercial_at_purchase')
+      .lean();
+    if (planTier?.requires_commercial_at_purchase && usage !== 'commercial') {
+      throw new ApiError(
+        422,
+        `${PLAN_LABEL[plan]} needs a commercial vehicle. Choose Commercial and add the commercial permit.`,
+        null,
+        'COMMERCIAL_REQUIRED',
+      );
+    }
+  }
+
   const cityId = body.service_location_id || body.area || body.service_location || null;
 
   // Elite takes one of the city's seats, so check before creating anything.

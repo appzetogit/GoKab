@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Gem, Loader2, UserPlus } from 'lucide-react';
+import { Gem, ImagePlus, Loader2, UserPlus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../../../shared/api/axiosInstance';
+import { adminService } from '../../services/adminService';
 
 const unwrap = (res) => res?.data ?? res ?? {};
 const errorText = (err, fallback) => err?.response?.data?.message || err?.message || fallback;
@@ -18,6 +19,19 @@ const Field = ({ label, hint, children }) => (
   </label>
 );
 
+const listOf = (res) => {
+  const raw = unwrap(res);
+  return Array.isArray(raw) ? raw : raw.results || raw.data?.results || [];
+};
+
+const fileToDataUrl = (file) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+
 const EMPTY = {
   name: '',
   phone: '',
@@ -32,6 +46,7 @@ const EMPTY = {
   vehicle_model: '',
   vehicle_number: '',
   vehicle_color: '',
+  vehicle_usage_type: '',
 };
 
 const EliteDriverCreate = () => {
@@ -39,16 +54,21 @@ const EliteDriverCreate = () => {
   const [form, setForm] = useState(EMPTY);
   const [cities, setCities] = useState([]);
   const [vehicles, setVehicles] = useState([]);
+  const [templates, setTemplates] = useState([]);
+  const [documents, setDocuments] = useState({});
+  const [docMeta, setDocMeta] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     (async () => {
       try {
-        const [citiesRes, vehiclesRes] = await Promise.all([
+        const [citiesRes, vehiclesRes, docsRes] = await Promise.all([
           api.get('/admin/driver-network/cities'),
           api.get('/admin/types/vehicle-types/list?transport_type=taxi').catch(() => null),
+          adminService.getDriverNeededDocuments('document').catch(() => null),
         ]);
+        setTemplates(listOf(docsRes));
         setCities(unwrap(citiesRes).results || []);
         const raw = unwrap(vehiclesRes);
         const list = raw.results || raw.data?.results || (Array.isArray(raw) ? raw : []);
@@ -62,6 +82,36 @@ const EliteDriverCreate = () => {
   }, []);
 
   const set = (name, value) => setForm((prev) => ({ ...prev, [name]: value }));
+
+  // The documents this driver must give: for a person, and for the chosen vehicle use.
+  const visibleTemplates = useMemo(
+    () =>
+      templates.filter((t) => {
+        const account = String(t.account_type || 'individual').toLowerCase();
+        if (!['both', 'individual'].includes(account)) return false;
+        const only = String(t.applies_when_usage_type || '').toLowerCase();
+        return !only || only === 'both' || only === form.vehicle_usage_type;
+      }),
+    [templates, form.vehicle_usage_type],
+  );
+
+  const pickFile = async (fieldKey, event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      setDocuments((prev) => ({
+        ...prev,
+        [fieldKey]: { previewUrl: dataUrl, secureUrl: dataUrl, fileName: file.name, mimeType: file.type || 'image/jpeg', uploaded: true },
+      }));
+    } catch {
+      toast.error('Could not read the image');
+    }
+  };
+
+  const setMeta = (templateId, key, value) =>
+    setDocMeta((prev) => ({ ...prev, [templateId]: { ...(prev[templateId] || {}), [key]: value } }));
   const city = useMemo(() => cities.find((c) => c.id === form.service_location_id) || null, [cities, form.service_location_id]);
   // Elite is offered only when the chosen city still has a free slot.
   const eliteOpen = Boolean(city && city.left > 0);
@@ -88,10 +138,40 @@ const EliteDriverCreate = () => {
     if (form.password.length < 6) return toast.error('Password must be at least 6 characters');
     if (form.password !== form.password_confirmation) return toast.error('Passwords do not match');
     if (!form.service_location_id) return toast.error('Pick the city');
+    if (form.plan !== 'lower' && !form.vehicle_usage_type) return toast.error('Choose if the vehicle is Commercial or Private');
+    if (form.plan !== 'lower' && form.vehicle_usage_type !== 'commercial') {
+      // Elite / Pro need a commercial vehicle first (the server checks this too).
+      return toast.error('Elite and Pro need a Commercial vehicle');
+    }
+    for (const t of visibleTemplates) {
+      const required = (t.fields || []).filter((f) => f.required ?? t.is_required);
+      const meta = docMeta[t.id] || {};
+      if (required.some((f) => !documents[f.key]?.uploaded)) return toast.error(`Please upload ${t.name}`);
+      if (required.length && t.has_identify_number && !String(meta.number || '').trim()) return toast.error(`${t.name} number is required`);
+      if (required.length && t.has_expiry_date && !String(meta.expiry || '').trim()) return toast.error(`${t.name} expiry date is required`);
+    }
 
     try {
       setSaving(true);
-      const body = { ...form, phone: form.phone.trim() };
+      const payloadDocuments = {};
+      for (const t of visibleTemplates) {
+        const meta = docMeta[t.id] || {};
+        for (const f of t.fields || []) {
+          const doc = documents[f.key];
+          if (!doc) continue;
+          const number = String(meta.number || '').trim();
+          const expiry = String(meta.expiry || '').trim();
+          payloadDocuments[f.key] = { ...doc, identifyNumber: number, identify_number: number, expiryDate: expiry, expiry_date: expiry };
+        }
+      }
+      const body = {
+        ...form,
+        phone: form.phone.trim(),
+        approve: true,
+        status: 'approved',
+        documents: payloadDocuments,
+        onboarding: { role: 'driver', createdFromAdminOnboarding: true },
+      };
       if (form.plan === 'lower') delete body.plan_days;
       await api.post('/admin/driver-network/elite-drivers', body);
       toast.success('Driver created');
@@ -234,6 +314,32 @@ const EliteDriverCreate = () => {
                 ))}
               </select>
             </Field>
+            <div className="md:col-span-2 space-y-2">
+              <span className="text-[13px] font-bold text-slate-700 block">Vehicle use {form.plan !== 'lower' ? '*' : ''}</span>
+              <div className="grid grid-cols-2 gap-3 max-w-[420px]">
+                {[
+                  ['commercial', 'Commercial', 'Taxi / permit vehicle'],
+                  ['private', 'Private', 'Personal vehicle'],
+                ].map(([key, label, note]) => (
+                  <button
+                    type="button"
+                    key={key}
+                    onClick={() => set('vehicle_usage_type', key)}
+                    className={`rounded-xl border px-4 py-3 text-left transition ${
+                      form.vehicle_usage_type === key ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <span className="block text-sm font-black text-slate-800">{label}</span>
+                    <span className="text-[11px] text-slate-500">{note}</span>
+                  </button>
+                ))}
+              </div>
+              {form.plan !== 'lower' && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  Elite and Pro need a Commercial vehicle. The driver can add a Private vehicle later (a few days are allowed).
+                </p>
+              )}
+            </div>
             <Field label="Plate number">
               <input className={inputClass} value={form.vehicle_number} onChange={(e) => set('vehicle_number', e.target.value.toUpperCase())} placeholder="DL1RT1234" />
             </Field>
@@ -248,6 +354,60 @@ const EliteDriverCreate = () => {
             </Field>
           </div>
           <p className="text-[11px] text-slate-400">KYC documents can be added later from the driver's details page.</p>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
+          <h2 className="text-sm font-black text-slate-800">KYC documents</h2>
+          {visibleTemplates.length === 0 ? (
+            <p className="text-sm text-slate-400">No documents are needed.</p>
+          ) : (
+            visibleTemplates.map((t) => (
+              <div key={t.id} className="rounded-xl border border-slate-100 bg-slate-50/70 p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-black text-slate-900">{t.name}</h3>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{t.is_required ? 'Required' : 'Optional'}</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {(t.fields || []).map((f) => (
+                    <div key={f.key} className="rounded-xl border border-slate-100 bg-white p-3 space-y-2">
+                      <span className="text-[11px] font-black uppercase tracking-widest text-slate-400 block">{f.label}</span>
+                      {documents[f.key]?.previewUrl ? (
+                        <img src={documents[f.key].previewUrl} alt={f.label} className="h-32 w-full rounded-lg object-cover" />
+                      ) : (
+                        <div className="h-32 rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 flex items-center justify-center text-[11px] text-slate-400">
+                          No image
+                        </div>
+                      )}
+                      <label className="relative flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white text-[11px] font-black uppercase tracking-widest text-slate-600 hover:bg-slate-50">
+                        <ImagePlus size={14} /> Choose image
+                        <input type="file" accept="image/*" className="absolute inset-0 h-full w-full cursor-pointer opacity-0" onChange={(e) => pickFile(f.key, e)} />
+                      </label>
+                    </div>
+                  ))}
+                </div>
+                {(t.has_identify_number || t.has_expiry_date) && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {t.has_identify_number && (
+                      <input
+                        className={inputClass}
+                        placeholder={`${t.name} number`}
+                        value={docMeta[t.id]?.number || ''}
+                        onChange={(e) => setMeta(t.id, 'number', e.target.value)}
+                      />
+                    )}
+                    {t.has_expiry_date && (
+                      <input
+                        className={inputClass}
+                        type="date"
+                        value={docMeta[t.id]?.expiry || ''}
+                        onChange={(e) => setMeta(t.id, 'expiry', e.target.value)}
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+            ))
+          )}
         </div>
 
         <button
