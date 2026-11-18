@@ -64,7 +64,15 @@ export const vehicleUsageSummary = async (driverOrId, { session = null } = {}) =
   // driver should be told: "add a vehicle" is wrong once they already have.
   let commercialPending = 0;
 
-  if (driver.vehicle_usage_type === 'commercial') commercial += 1;
+  if (driver.vehicle_usage_type === 'commercial') {
+    // Only when admin has seen the permit. A driver already on Elite / Pro keeps working.
+    if (driver.vehicle_usage_verified === true || ['prime', 'middle'].includes(String(driver.driver_category || ''))) {
+      commercial += 1;
+      commercialVerified += 1;
+    } else {
+      commercialPending += 1;
+    }
+  }
   if (driver.vehicle_usage_type === 'private') privateCount += 1;
 
   if (driver.owner_id) {

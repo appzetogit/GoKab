@@ -4089,6 +4089,8 @@ export const createDriver = async (payload = {}, currentAdmin = null) => {
     vehicle_usage_type: ['commercial', 'private'].includes(String(payload.vehicle_usage_type || '').toLowerCase())
       ? String(payload.vehicle_usage_type).toLowerCase()
       : '',
+    vehicle_usage_verified:
+      payload.vehicle_usage_verified === true && String(payload.vehicle_usage_type || '').toLowerCase() === 'commercial',
     registerFor,
     serviceCategories,
     city,

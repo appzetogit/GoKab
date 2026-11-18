@@ -259,6 +259,7 @@ const AdminRouteSettings = lazy(() => import('./modules/admin/pages/settings/Rou
 const AdminEliteSlots = lazy(() => import('./modules/admin/pages/settings/EliteSlots'));
 const AdminEliteDrivers = lazy(() => import('./modules/admin/pages/elite/EliteDrivers'));
 const AdminEliteDriverCreate = lazy(() => import('./modules/admin/pages/elite/EliteDriverCreate'));
+const AdminCommercialVerification = lazy(() => import('./modules/admin/pages/elite/CommercialVerification'));
 const AdminBidRideSettings = lazy(() => import('./modules/admin/pages/settings/BidRideSettings'));
 const AdminWalletSettings = lazy(() => import('./modules/admin/pages/settings/WalletSettings'));
 const AdminTipSettings = lazy(() => import('./modules/admin/pages/settings/TipSettings'));
@@ -1422,6 +1423,7 @@ function App() {
                 <Route path="elite/slots" element={<AdminEliteSlots />} />
                 <Route path="elite/drivers" element={<AdminEliteDrivers />} />
                 <Route path="elite/create" element={<AdminEliteDriverCreate />} />
+                <Route path="elite/commercial" element={<AdminCommercialVerification />} />
                 <Route
                   path="settings/business/bid-ride"
                   element={<AdminBidRideSettings />}

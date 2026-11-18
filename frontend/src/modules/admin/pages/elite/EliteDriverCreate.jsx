@@ -143,6 +143,9 @@ const EliteDriverCreate = () => {
       // Elite / Pro need a commercial vehicle first (the server checks this too).
       return toast.error('Elite and Pro need a Commercial vehicle');
     }
+    if (form.vehicle_usage_type === 'commercial' && !documents.commercial_permit?.uploaded) {
+      return toast.error('Upload the commercial permit (a Commercial vehicle needs it)');
+    }
     for (const t of visibleTemplates) {
       const required = (t.fields || []).filter((f) => f.required ?? t.is_required);
       const meta = docMeta[t.id] || {};

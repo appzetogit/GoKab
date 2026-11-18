@@ -215,6 +215,9 @@ const driverSchema = new mongoose.Schema(
       enum: ['commercial', 'private', ''],
       default: '',
     },
+    // Admin has seen the commercial permit of the vehicle the driver registered with.
+    // Until then that vehicle does not count as commercial for Elite / Pro.
+    vehicle_usage_verified: { type: Boolean, default: false },
     // `routeBooking` above is the older single-anchor version of this and is
     // kept only so existing drivers keep matching. New clients use route_mode.
     route_mode: {

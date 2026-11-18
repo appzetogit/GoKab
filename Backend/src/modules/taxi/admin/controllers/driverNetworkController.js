@@ -209,6 +209,15 @@ export const createDriverWithPlanController = asyncHandler(async (req, res) => {
   if (usage && !['commercial', 'private'].includes(usage)) {
     throw new ApiError(422, 'vehicle_usage_type must be commercial or private', null, 'INVALID_USAGE_TYPE');
   }
+  // A commercial vehicle needs its permit; the admin creating the driver is the one who saw it.
+  if (usage === 'commercial') {
+    const permit = body.documents?.commercial_permit;
+    if (!permit || !(permit.secureUrl || permit.previewUrl || permit.url || typeof permit === 'string')) {
+      throw new ApiError(422, 'Upload the commercial permit for a commercial vehicle', null, 'COMMERCIAL_PERMIT_REQUIRED');
+    }
+    body.vehicle_usage_verified = true;
+  }
+
   // Elite and Pro are for commercial vehicles only. A private vehicle never gets them.
   if (plan !== 'lower' && usage !== 'commercial') {
     throw new ApiError(
@@ -306,6 +315,61 @@ export const listEliteDriversController = asyncHandler(async (req, res) => {
       }),
     },
   });
+});
+
+// Drivers who registered with a commercial vehicle and are waiting for admin to see the permit.
+export const listCommercialVerificationController = asyncHandler(async (req, res) => {
+  assertNetworkAdmin(req);
+
+  const status = req.query.status === 'verified' ? 'verified' : 'pending';
+  const drivers = await Driver.find({
+    vehicle_usage_type: 'commercial',
+    vehicle_usage_verified: status === 'verified' ? true : { $ne: true },
+    deletedAt: null,
+  })
+    .select('name phone city vehicleNumber vehicleMake vehicleModel driver_category documents service_location_id')
+    .sort({ createdAt: -1 })
+    .limit(300)
+    .lean();
+
+  res.json({
+    success: true,
+    data: {
+      status,
+      results: drivers.map((driver) => {
+        const permit = driver.documents?.commercial_permit;
+        const url = typeof permit === 'string' ? permit : permit?.secureUrl || permit?.previewUrl || permit?.url || '';
+        return {
+          id: String(driver._id),
+          name: driver.name,
+          phone: driver.phone,
+          city: driver.city || '',
+          vehicle: [driver.vehicleMake, driver.vehicleModel].filter(Boolean).join(' '),
+          vehicle_number: driver.vehicleNumber || '',
+          plan: PLAN_LABEL[driver.driver_category] || 'Basic',
+          permit_url: url,
+          permit_number: (typeof permit === 'object' && (permit?.identifyNumber || permit?.identify_number)) || '',
+          permit_expiry: (typeof permit === 'object' && (permit?.expiryDate || permit?.expiry_date)) || '',
+        };
+      }),
+    },
+  });
+});
+
+export const setVehicleUsageVerifiedController = asyncHandler(async (req, res) => {
+  assertNetworkAdmin(req);
+
+  const driverId = objectId(req.params.driverId, 'driverId');
+  const verified = req.body?.verified !== false;
+  const updated = await Driver.updateOne(
+    { _id: driverId, vehicle_usage_type: 'commercial' },
+    { $set: { vehicle_usage_verified: verified } },
+  );
+  if (!updated.matchedCount) {
+    throw new ApiError(404, 'Driver not found or the vehicle is not marked commercial', null, 'DRIVER_NOT_FOUND');
+  }
+
+  res.json({ success: true, data: { driverId: String(driverId), verified } });
 });
 
 export const revokePrimeSlotController = asyncHandler(async (req, res) => {

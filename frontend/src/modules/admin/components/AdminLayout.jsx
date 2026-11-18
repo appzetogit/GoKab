@@ -1295,6 +1295,7 @@ const AdminLayout = () => {
               { label: 'Elite Drivers', path: '/admin/elite/drivers', permission: 'driver_network.view' },
               { label: 'Add Driver with Plan', path: '/admin/elite/create', permission: 'driver_network.view' },
               { label: 'Elite Slots', path: '/admin/elite/slots', permission: 'driver_network.view' },
+              { label: 'Commercial Vehicle Check', path: '/admin/elite/commercial', permission: 'driver_network.view' },
             ],
           },
         ],

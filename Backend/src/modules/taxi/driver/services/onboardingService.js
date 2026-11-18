@@ -1159,6 +1159,20 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
     };
   }
 
+  // Saying "commercial" is not enough: the permit that proves it has to come with the registration.
+  if (String(session.vehicle?.vehicleUsageType || '').toLowerCase() === 'commercial') {
+    const permit = normalizedDocuments?.commercial_permit;
+    const hasPermit = Boolean(permit && (permit.secureUrl || permit.previewUrl || permit.url || typeof permit === 'string'));
+    if (!hasPermit) {
+      throw new ApiError(
+        400,
+        'A commercial permit document is required for a commercial vehicle',
+        { required_document: 'commercial_permit' },
+        'DOCUMENTS_REQUIRED',
+      );
+    }
+  }
+
   const normalizedReferralCode = normalizeReferralCode(session.referralCode);
   const referrer = normalizedReferralCode
     ? await findDriverByReferralCode(normalizedReferralCode)
