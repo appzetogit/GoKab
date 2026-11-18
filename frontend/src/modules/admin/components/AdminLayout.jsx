@@ -11,6 +11,7 @@ import {
   BarChart3,
   Bell,
   Briefcase,
+  Gem,
   Car,
   ChevronDown,
   ChevronLeft,
@@ -1284,6 +1285,21 @@ const AdminLayout = () => {
         ],
       },
       {
+        title: 'Elite',
+        items: [
+          {
+            icon: Gem,
+            label: 'Elite Drivers',
+            permission: 'driver_network.view',
+            subItems: [
+              { label: 'Elite Drivers', path: '/admin/elite/drivers', permission: 'driver_network.view' },
+              { label: 'Add Driver with Plan', path: '/admin/elite/create', permission: 'driver_network.view' },
+              { label: 'Elite Slots', path: '/admin/elite/slots', permission: 'driver_network.view' },
+            ],
+          },
+        ],
+      },
+      {
         title: 'Masters',
         items: [
           { icon: Globe, label: 'Language', path: '/admin/masters/languages', permission: 'settings.view' },
@@ -1304,7 +1320,6 @@ const AdminLayout = () => {
               { label: 'Transport Ride Settings', path: '/admin/settings/business/transport-ride', permission: 'settings.view' },
               { label: 'Carpool Settings', path: '/admin/settings/business/carpool', permission: 'settings.view' },
               { label: 'Driver Routes', path: '/admin/settings/business/driver-routes', permission: 'settings.view' },
-              { label: 'Elite Slots', path: '/admin/settings/business/elite-slots', permission: 'settings.view' },
               { label: 'Bid Ride Settings', path: '/admin/settings/business/bid-ride', permission: 'settings.view' },
             ],
           },

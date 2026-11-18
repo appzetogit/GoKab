@@ -15,6 +15,7 @@ export const ADMIN_PERMISSION_GROUPS = [
       { key: 'trips.view', label: 'Trip Requests' },
       { key: 'ongoing.view', label: 'Ongoing Requests' },
       { key: 'drivers.view', label: 'Drivers' },
+      { key: 'driver_network.view', label: 'Elite Drivers and Slots' },
       { key: 'users.view', label: 'Customers' },
       { key: 'wallet.view', label: 'Wallet' },
       { key: 'owners.view', label: 'Owners' },

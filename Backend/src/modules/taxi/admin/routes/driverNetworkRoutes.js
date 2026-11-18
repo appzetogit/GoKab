@@ -17,6 +17,8 @@ import {
   updateDriverRouteLimitController,
   updateNetworkSettingsController,
   listCityPrimeLimitsController,
+  createDriverWithPlanController,
+  listEliteDriversController,
   updateVehicleUsageTypeController,
 } from '../controllers/driverNetworkController.js';
 
@@ -29,6 +31,8 @@ driverNetworkRouter.patch('/settings', adminOnly, asyncHandler(updateNetworkSett
 
 driverNetworkRouter.get('/prime-slots', adminOnly, asyncHandler(listPrimeSlotsController));
 driverNetworkRouter.get('/cities', adminOnly, asyncHandler(listCityPrimeLimitsController));
+driverNetworkRouter.post('/elite-drivers', adminOnly, asyncHandler(createDriverWithPlanController));
+driverNetworkRouter.get('/elite-drivers', adminOnly, asyncHandler(listEliteDriversController));
 driverNetworkRouter.delete('/prime-slots/:slotId', adminOnly, asyncHandler(revokePrimeSlotController));
 driverNetworkRouter.patch('/cities/:cityId/prime-limit', adminOnly, asyncHandler(updateCityPrimeLimitController));
 
