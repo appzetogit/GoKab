@@ -15,14 +15,18 @@ export const generateOtp = () => String(crypto.randomInt(1000, 10000));
  * @param {(phone: string) => string} normalize the caller's phone normaliser
  */
 export const resolveOtpForPhone = (normalizedPhone, normalize = (value) => String(value || '').trim()) => {
-  const staticPhone = env.sms?.staticOtpPhone ? normalize(env.sms.staticOtpPhone) : '';
+  // STATIC_OTP_PHONE may hold several test numbers, comma separated (a test driver, a test rider).
+  const staticPhones = String(env.sms?.staticOtpPhone || '')
+    .split(',')
+    .map((value) => normalize(value.trim()))
+    .filter(Boolean);
   const staticOtp = String(env.sms?.staticOtpCode || '').trim();
 
   if (staticOtp && isTruthy(env.sms?.useDefaultOtp)) {
     return { otp: staticOtp, isStatic: true };
   }
 
-  if (staticPhone && staticOtp && normalizedPhone === staticPhone) {
+  if (staticPhones.length && staticOtp && staticPhones.includes(normalizedPhone)) {
     return { otp: staticOtp, isStatic: true };
   }
 
