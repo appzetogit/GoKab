@@ -23,10 +23,6 @@ coverage/
 # ==========================================================
 # Environment Variables
 # ==========================================================
-.env
-.env.*
-**/.env
-**/.env.*
 
 # Keep examples
 !.env.example
@@ -123,7 +119,6 @@ certs/
 # ==========================================================
 # IDE / Editors
 # ==========================================================
-.vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
 !.vscode/tasks.json
@@ -139,7 +134,8 @@ certs/
 Thumbs.db
 Desktop.ini
 ehthumbs.db
-# NOTE: do not add "Icon?" here. It is meant for the macOS Finder "Icon"
+# NOTE: do not add "Icon?" here. It is meant for the macOS Finder "Icon
+"
 # file, but the "?" wildcard also matches src/assets/icons/ on
 # case-insensitive filesystems, which silently excluded every vehicle icon
 # from the repo and broke production builds.
@@ -197,3 +193,4 @@ temp_interactive_push.bat
 !package-lock.json
 !pnpm-lock.yaml
 !yarn.lock
+config.bat

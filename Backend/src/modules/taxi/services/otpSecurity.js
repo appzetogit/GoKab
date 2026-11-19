@@ -15,19 +15,23 @@ export const generateOtp = () => String(crypto.randomInt(1000, 10000));
  * @param {(phone: string) => string} normalize the caller's phone normaliser
  */
 export const resolveOtpForPhone = (normalizedPhone, normalize = (value) => String(value || '').trim()) => {
-  // STATIC_OTP_PHONE may hold several test numbers, comma separated (a test driver, a test rider).
-  const staticPhones = String(env.sms?.staticOtpPhone || '')
-    .split(',')
-    .map((value) => normalize(value.trim()))
-    .filter(Boolean);
+  // STATIC_OTP_PHONE may hold several test numbers, comma separated. An entry can carry its own
+  // code as "phone:code" (e.g. 1111111111:1234); one without a code uses STATIC_OTP_CODE.
+  const staticEntries = new Map();
+  for (const entry of String(env.sms?.staticOtpPhone || '').split(',')) {
+    const [rawPhone, rawCode = ''] = entry.split(':');
+    const phone = normalize(String(rawPhone || '').trim());
+    if (phone) staticEntries.set(phone, String(rawCode).trim());
+  }
   const staticOtp = String(env.sms?.staticOtpCode || '').trim();
 
   if (staticOtp && isTruthy(env.sms?.useDefaultOtp)) {
     return { otp: staticOtp, isStatic: true };
   }
 
-  if (staticPhones.length && staticOtp && staticPhones.includes(normalizedPhone)) {
-    return { otp: staticOtp, isStatic: true };
+  if (staticEntries.has(normalizedPhone)) {
+    const code = staticEntries.get(normalizedPhone) || staticOtp;
+    if (code) return { otp: code, isStatic: true };
   }
 
   return { otp: generateOtp(), isStatic: false };
