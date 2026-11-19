@@ -3,7 +3,6 @@ import {
     Car, 
     Bike, 
     Truck, 
-    Package, 
     MapPin, 
     Zap, 
     Shield, 
@@ -25,7 +24,6 @@ export const getLucideIcon = (iconName, size = 20, className = "") => {
         'bike_icon': <Bike size={size} className={className} />,
         'auto_icon': <Zap size={size} className={className} />, // Using Zap for Auto (modern look)
         'cab_icon': <Car size={size} className={className} />,
-        'delivery_icon': <Package size={size} className={className} />,
         'truck_icon': <Truck size={size} className={className} />,
         
         // General UI Icons (if needed for mapping)

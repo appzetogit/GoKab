@@ -3,6 +3,7 @@ import { ApiError } from '../../../utils/ApiError.js';
 import { normalizePoint } from '../../../utils/geo.js';
 import { DISPATCH_TOP_DRIVERS } from '../constants/index.js';
 import { Vehicle } from '../admin/models/Vehicle.js';
+import { FleetVehicle } from '../admin/models/FleetVehicle.js';
 import { Driver } from '../driver/models/Driver.js';
 import { Zone } from '../driver/models/Zone.js';
 import { getDriverIdsBlockedByUpcomingScheduledRides } from './rideService.js';
@@ -57,7 +58,7 @@ const buildFreshLocationQuery = () => {
   };
 };
 
-const buildDriverMatchFilters = ({ zoneId, serviceLocationId, vehicleTypeId, vehicleTypeIds, vehicleTypeKeys }) => {
+const buildDriverMatchFilters = ({ zoneId, serviceLocationId, vehicleTypeId, vehicleTypeIds, vehicleTypeKeys, fleetOwnerIds = [] }) => {
   const normalizedVehicleTypeIds = normalizeVehicleTypeIds(vehicleTypeIds, vehicleTypeId);
   const normalizedVehicleTypeKeys = Array.isArray(vehicleTypeKeys)
     ? [...new Set(vehicleTypeKeys.map(normalizeVehicleKey).filter(Boolean))]
@@ -70,6 +71,7 @@ const buildDriverMatchFilters = ({ zoneId, serviceLocationId, vehicleTypeId, veh
           { vehicleIconType: { $in: normalizedVehicleTypeKeys } },
         ]
       : []),
+    ...(fleetOwnerIds.length ? [{ owner_id: { $in: fleetOwnerIds }, is_self_drive_owner: true }] : []),
   ];
   const vehicleTypeFilter =
     vehicleTypeClauses.length > 1
@@ -230,18 +232,20 @@ const findDriversForZone = async ({
   limit,
   normalizedVehicleTypeIds,
   vehicleTypeKeys,
+  fleetOwnerIds = [],
 }) => {
   const commonFilters = buildDriverMatchFilters({
     zoneId,
     serviceLocationId,
     vehicleTypeIds: normalizedVehicleTypeIds,
     vehicleTypeKeys,
+    fleetOwnerIds,
   });
   // `wallet` has to be selected for the cash-debt check downstream to see a real
   // balance — without it every driver reads as balance 0 and the tier's debt
   // limit silently never applies.
   const selectedFields =
-    'name phone socketId vehicleTypeId vehicleType vehicleIconType vehicleNumber vehicleColor vehicleMake vehicleModel rating location zoneId service_location_id isOnline isOnRide routeBooking owner_id assignedFleetVehicleId wallet route_mode active_route_id driver_category';
+    'name phone socketId vehicleTypeId vehicleType vehicleIconType vehicleNumber vehicleColor vehicleMake vehicleModel rating location zoneId service_location_id isOnline isOnRide routeBooking owner_id is_self_drive_owner assignedFleetVehicleId wallet route_mode active_route_id driver_category';
 
   // Staleness only matters for drivers matched on their *live* position. A
   // route-booking driver is matched on their saved anchor point, which never
@@ -283,7 +287,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
     vehicleTypeId,
     vehicleTypeIds,
     serviceLocationId = null,
-    rideModuleCode = null, // e.g. 'outstation', 'airport', 'parcel', 'carpool'
+    rideModuleCode = null, // e.g. 'outstation', 'airport', 'carpool'
     paymentMethod = 'cash',
     dropCoords = null,
   } = options;
@@ -292,6 +296,13 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
     ? await Vehicle.find({ _id: { $in: normalizedVehicleTypeIds } }).select('name vehicle_type icon_types').lean()
     : [];
   const vehicleTypeKeys = normalizeVehicleKeys(allowedVehicles);
+  const fleetOwnerIds = normalizedVehicleTypeIds.length
+    ? await FleetVehicle.distinct('owner_id', {
+        vehicle_type_id: { $in: normalizedVehicleTypeIds },
+        status: 'approved',
+        active: true,
+      })
+    : [];
 
   const zone = await findZoneByPickup(coordinates);
   const zoneBoundaryCapMeters = zone ? getZoneBoundaryCapMeters(zone, coordinates) : null;
@@ -307,6 +318,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
     limit: limit * 2, // Fetch extra candidate buffer before filtering
     normalizedVehicleTypeIds,
     vehicleTypeKeys,
+    fleetOwnerIds,
   });
 
   const blockedDriverIds = await getDriverIdsBlockedByUpcomingScheduledRides(
@@ -323,6 +335,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
       limit: limit * 2,
       normalizedVehicleTypeIds,
       vehicleTypeKeys,
+      fleetOwnerIds,
     });
 
     const fallbackBlockedDriverIds = await getDriverIdsBlockedByUpcomingScheduledRides(
@@ -335,7 +348,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
   // still be the right match (parked in Indore, pickup in Ujjain on their
   // route). Radius search can never surface them, so pull them in separately
   // and de-duplicate.
-  if (dropCoords) {
+  if (coordinates) {
     const routeMatched = await findDriversWhoseActiveRouteMatches({
       pickup: coordinates,
       drop: dropCoords,
@@ -365,7 +378,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
   for (const driver of rawDrivers) {
     // Honour the corridor the driver selected: in `route` mode they only want
     // trips that run along it, in the right direction.
-    if (dropCoords && driver.route_mode === 'route') {
+    if (driver.route_mode === 'route') {
       const routeResult = await driverAcceptsTrip({
         driver,
         pickup: coordinates,

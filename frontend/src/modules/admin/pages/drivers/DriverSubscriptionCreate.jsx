@@ -23,7 +23,6 @@ const DriverSubscriptionCreate = () => {
   const navigate = useNavigate();
   const [transportTypes, setTransportTypes] = useState([
     { transport_type: 'taxi', label: 'Taxi' },
-    { transport_type: 'delivery', label: 'Delivery' },
     { transport_type: 'all', label: 'All' }
   ]);
   const [vehicleTypes, setVehicleTypes] = useState([]);

@@ -5,12 +5,14 @@ import { RIDE_LIVE_STATUS, RIDE_STATUS } from '../../constants/index.js';
 import { Owner } from '../../admin/models/Owner.js';
 import { Vehicle } from '../../admin/models/Vehicle.js';
 import { Ride } from '../../user/models/Ride.js';
+import { TripPost } from '../../user/models/TripPost.js';
+import { tripPostAsRide } from './leadService.js';
 import { Driver } from '../models/Driver.js';
 import { DriverRoute } from '../models/DriverRoute.js';
 import { LeadContact } from '../models/LeadContact.js';
 import { getDriverNetworkSettings } from '../../services/appSettingsService.js';
 import { getDriverPermissions } from '../../services/driverCategoryService.js';
-import { matchRideToRoute } from '../../services/routeMatchService.js';
+import { matchRideToRoute, refreshRouteLimits } from '../../services/routeMatchService.js';
 import {
   emitToRoom,
   getFeedRoom,
@@ -18,6 +20,7 @@ import {
   notifyRideAccepted,
 } from '../../services/dispatchService.js';
 import { acceptRideAssignment, isRideScheduledForFuture } from '../../services/rideService.js';
+import { categoryOf, getTierPhases, isRideOpenToCategory, withoutTeamMembers } from '../../services/tierPhaseService.js';
 import { holdForPublishedRide } from './escrowService.js';
 import {
   notifyNetworkAssignment,
@@ -26,12 +29,15 @@ import {
 } from '../../services/networkNotificationService.js';
 import { applyDriverWalletAdjustment, getWalletSnapshot } from './walletService.js';
 import { buildPublisherCard, PUBLISHER_DRIVER_FIELDS } from './publisherCardService.js';
+import { driverDefaultVehicle, rideVehicleSetFields } from './rideVehicleService.js';
+import { resolveTransportDispatchConfig } from '../../services/transportSettingsService.js';
 
 const round2 = (value) => Math.round(Number(value || 0) * 100) / 100;
 
-// Customer leads go stale fast: a rider who booked 30 minutes ago has almost
-// certainly been matched or given up.
-const CUSTOMER_LEAD_MAX_AGE_MS = 30 * 60 * 1000;
+// How long a customer lead stays on the feed. It follows the admin's ride search
+// expiry (the ride is closed then anyway); this also covers a restart that lost
+// the timer that would have closed it.
+const customerLeadMaxAgeMs = async () => (await resolveTransportDispatchConfig()).searchExpiryMs;
 
 // The first comma-separated part of an address is the locality, which is what a
 // driver actually scans for when skimming a feed.
@@ -183,9 +189,37 @@ export const unpublishRide = async ({ driverId, rideId }) => {
     rideId: String(updated._id),
     reason: 'UNPUBLISHED',
   });
+  import('../../services/publishedAlertService.js').then((m) => m.closePublishedAlerts(updated, 'unpublished')).catch(() => {});
   await closeLeadConversationsForRide(updated._id, 'UNPUBLISHED');
+  const { rejectPendingRequestsForRide } = await import('./rideRequestService.js');
+  await rejectPendingRequestsForRide({ ride: updated, reason: 'ride_cancelled' });
 
   return { unpublished: true };
+};
+
+/**
+ * Takes a ride off the feed when it is cancelled from anywhere (owner, admin,
+ * customer). The admin and customer paths used to leave `publish.status` open,
+ * so a cancelled ride stayed in the feed and could still be taken.
+ */
+export const closePublishedListingForCancelledRide = async (ride) => {
+  if (!ride?._id || ride.origin !== 'driver_created') return;
+
+  if (ride.publish?.status === 'open') {
+    await Ride.updateOne(
+      { _id: ride._id, 'publish.status': 'open' },
+      { $set: { 'publish.status': 'cancelled', 'publish.is_published': false } },
+    );
+    emitToRoom(getFeedRoom(ride.service_location_id), 'feed:driver:removed', {
+      rideId: String(ride._id),
+      reason: 'CANCELLED',
+    });
+    import('../../services/publishedAlertService.js').then((m) => m.closePublishedAlerts(ride, 'cancelled')).catch(() => {});
+  }
+
+  await closeLeadConversationsForRide(ride._id, 'CANCELLED');
+  const { rejectPendingRequestsForRide } = await import('./rideRequestService.js');
+  await rejectPendingRequestsForRide({ ride, reason: 'ride_cancelled' });
 };
 
 // A city can hold thousands of drivers; a publish must not turn into an
@@ -193,6 +227,15 @@ export const unpublishRide = async ({ driverId, rideId }) => {
 const MAX_LEAD_PUSHES = 200;
 
 const broadcastNewDriverLead = async (ride) => {
+  // The first phase's plans get the ring card and push now; later phases follow as
+  // their time comes (publishedAlertService, run by the maintenance cron).
+  try {
+    const { alertPublishedRide } = await import('../../services/publishedAlertService.js');
+    await alertPublishedRide(ride._id);
+  } catch (error) {
+    console.error('[feedService] tiered alert failed:', error.message);
+  }
+
   emitToRoom(getFeedRoom(ride.service_location_id), 'feed:driver:new', {
     rideId: String(ride._id),
     pickup: ride.pickupAddress || '',
@@ -217,7 +260,11 @@ const broadcastNewDriverLead = async (ride) => {
       ignoreServiceLocation: true,
     });
 
+    // Same plan phases as the ring card: Basic drivers wait for their phase.
+    const phases = await getTierPhases();
+    const { isPublishedOpenToCategory } = await import('../../services/publishedAlertService.js');
     const driverIds = matched
+      .filter((driver) => isPublishedOpenToCategory(ride, categoryOf(driver), phases))
       .map((driver) => String(driver._id))
       .filter((id) => id !== String(ride.created_by_driver_id))
       .slice(0, MAX_LEAD_PUSHES);
@@ -251,7 +298,15 @@ export const closeLeadConversationsForRide = async (rideId, reason = 'RIDE_TAKEN
   }
 };
 
-export const serializeFeedItem = (ride, { lead_type, publisher = null, distanceFromMeKm = null, routeMatch = null, contact = null, accept = null, vehicle = null, vehicle_mismatch = false } = {}) => ({
+export const serializeFeedItem = (ride, { lead_type, publisher = null, distanceFromMeKm = null, routeMatch = null, contact = null, accept = null, vehicle = null, vehicle_mismatch = false, request = null } = {}) => ({
+  // Published rides are requested, then the publisher approves (driver tab only).
+  ...(request
+    ? {
+        has_requested: Boolean(request.status),
+        my_request_status: request.status || null,
+        applicants_count: request.applicantsCount ?? 0,
+      }
+    : {}),
   id: String(ride._id),
   lead_type,
   pickup: {
@@ -268,7 +323,11 @@ export const serializeFeedItem = (ride, { lead_type, publisher = null, distanceF
   serviceType: ride.serviceType,
   // Free text the booking was posted with ("Persons: 2 • Luggage: 1 •
   // Vehicle: SUV") — the app reads its trip-detail cells out of this.
-  notes: ride.network_notes || '',
+  notes: ride._post
+    ? [`Persons: ${ride._post.passengers}`, ride._post.budget ? `Budget: Rs ${ride._post.budget}` : '', ride._post.note]
+        .filter(Boolean)
+        .join(' • ')
+    : ride.network_notes || '',
   distance_km: ride.estimatedDistanceMeters
     ? Math.round((ride.estimatedDistanceMeters / 1000) * 10) / 10
     : null,
@@ -288,6 +347,7 @@ export const serializeFeedItem = (ride, { lead_type, publisher = null, distanceF
   accept,
   vehicle_mismatch,
   expires_at: ride.publish?.expires_at || null,
+  is_trip_post: ride.origin === 'customer_post',
   createdAt: ride.createdAt,
 });
 
@@ -304,6 +364,7 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
   const safePage = Math.max(1, Number(page) || 1);
   const safeLimit = Math.min(50, Math.max(1, Number(limit) || 20));
   const now = new Date();
+  const leadMaxAgeMs = tab === 'customer' ? await customerLeadMaxAgeMs() : 0;
 
   const baseFilter =
     tab === 'customer'
@@ -313,7 +374,7 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
           driverId: null,
           bookingMode: 'normal',
           $or: [
-            { createdAt: { $gt: new Date(now.getTime() - CUSTOMER_LEAD_MAX_AGE_MS) } },
+            { createdAt: { $gt: new Date(now.getTime() - leadMaxAgeMs) } },
             { scheduledAt: { $gt: now } },
           ],
         }
@@ -321,6 +382,10 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
           origin: 'driver_created',
           'publish.status': 'open',
           'publish.expires_at': { $gt: now },
+          // A cancelled ride can be left with publish.status open by older
+          // data; never offer it.
+          status: RIDE_STATUS.SEARCHING,
+          driverId: null,
           created_by_driver_id: { $ne: new mongoose.Types.ObjectId(String(driverId)) },
         };
 
@@ -333,11 +398,40 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
 
   // Over-fetch, because the corridor filter below runs in JS and can reject a
   // large share of a page.
-  const candidates = await Ride.find(baseFilter)
+  let candidates = await Ride.find(baseFilter)
     .sort({ createdAt: -1 })
     .limit(safeLimit * safePage * 3)
     .lean();
 
+  // Customer bookings follow the plan phases, and a team member never sees them:
+  // their lead takes the ride and assigns it.
+  if (tab === 'customer') {
+    const phases = await getTierPhases();
+    const isTeamMember = (await withoutTeamMembers([driver])).length === 0;
+    candidates = isTeamMember
+      ? []
+      : candidates.filter((ride) => isRideOpenToCategory(ride, categoryOf(driver), phases));
+  }
+
+  // Rides other drivers published follow the same plan phases: Elite first, then
+  // Elite + Pro, then everyone (they stay on the feed for everyone after that).
+  if (tab === 'driver') {
+    const phases = await getTierPhases();
+    const { isPublishedOpenToCategory } = await import('../../services/publishedAlertService.js');
+    candidates = candidates.filter((ride) => isPublishedOpenToCategory(ride, categoryOf(driver), phases));
+  }
+
+  // Riders' advertised trips ride along on the customer tab, until pickup time.
+  if (tab === 'customer') {
+    const posts = await TripPost.find({ status: 'open', scheduledAt: { $gt: now } })
+      .sort({ createdAt: -1 })
+      .limit(safeLimit * safePage * 3)
+      .lean();
+    candidates.push(...posts.map(tripPostAsRide));
+    candidates.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  }
+
+  await refreshRouteLimits();
   const activeRoute =
     driver.route_mode === 'route' && driver.active_route_id
       ? await DriverRoute.findOne({ _id: driver.active_route_id, deletedAt: null, is_active: true }).lean()
@@ -412,6 +506,10 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
     const { previewRideCommission } = await import('./walletService.js');
     await Promise.all(
       paged.map(async (item) => {
+        if (item.ride.origin === 'customer_post') {
+          item.ride.estimatedEarnings = item.ride.fare || null;
+          return;
+        }
         const preview = await previewRideCommission({ ...item.ride, driverId });
         item.ride.estimatedEarnings = preview?.driverEarnings ?? null;
       }),
@@ -422,6 +520,20 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
   // destructive default — a driver who owns more than one vehicle, or whose
   // catalogue entry is simply mismatched, still sees the work.
   const myVehicleTypeId = String(driver.vehicleTypeId || '');
+
+  // My request on each published ride, and how many others asked for it.
+  let myRequestStates = new Map();
+  let applicantsByRide = new Map();
+  let requiresApproval = false;
+  if (tab !== 'customer' && paged.length) {
+    const { loadApplicantsForRides, loadMyRequestStates } = await import('./rideRequestService.js');
+    const settings = await getDriverNetworkSettings();
+    requiresApproval = readBooleanSetting(settings.feed_requires_approval, true);
+    [myRequestStates, applicantsByRide] = await Promise.all([
+      loadMyRequestStates(driverId, paged.map((item) => item.ride)),
+      loadApplicantsForRides(paged.map((item) => item.ride)),
+    ]);
+  }
 
   const results = paged.map(({ ride, routeMatch, distanceFromMeKm }) => {
     const publisherDriver = publisherMap.get(String(ride.created_by_driver_id));
@@ -446,10 +558,19 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
         fee: alreadyContacted ? 0 : acceptFee,
         hold_required: holdRequired,
         wallet_available: wallet.available,
+        // Published rides: request instead of accept; the publisher approves.
+        ...(tab !== 'customer' ? { requires_approval: requiresApproval } : {}),
       },
       vehicle_mismatch: Boolean(
         ride.vehicleTypeId && myVehicleTypeId && String(ride.vehicleTypeId) !== myVehicleTypeId,
       ),
+      request:
+        tab !== 'customer'
+          ? {
+              status: myRequestStates.get(String(ride._id)) || null,
+              applicantsCount: applicantsByRide.get(String(ride._id))?.count ?? 0,
+            }
+          : null,
     });
   });
 
@@ -470,6 +591,9 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
  * and the ride goes straight back on the feed.
  */
 export const acceptFeedRide = async ({ driverId, rideId }) => {
+  if (await TripPost.exists({ _id: rideId })) {
+    throw new ApiError(409, 'This is a trip post. Contact the rider to agree on the trip.', null, 'TRIP_POST_CONTACT_ONLY');
+  }
   const ride = await Ride.findById(rideId).lean();
   if (!ride) throw new ApiError(404, 'Ride not found', null, 'RIDE_NOT_FOUND');
 
@@ -478,10 +602,75 @@ export const acceptFeedRide = async ({ driverId, rideId }) => {
     : acceptCustomerLead({ driverId, ride });
 };
 
+/**
+ * The one guarded write that hands a published ride to `driverId`: used by the
+ * publisher approving a request and by the legacy instant accept. Returns null
+ * when the ride is no longer open (taken, expired, unpublished, cancelled).
+ *
+ * `status: searching` is part of the guard: an admin or customer cancel used
+ * to leave `publish.status` open, and taking such a ride brought it back.
+ */
+export const claimPublishedRide = async ({ ride, driverId, approvedByDriverId = null, session, vehicle = null }) => {
+  const now = new Date();
+  const assignedBy = approvedByDriverId || ride.created_by_driver_id;
+
+  return Ride.findOneAndUpdate(
+    {
+      _id: ride._id,
+      'publish.status': 'open',
+      driverId: null,
+      status: RIDE_STATUS.SEARCHING,
+      'publish.expires_at': { $gt: now },
+      ...(approvedByDriverId ? { created_by_driver_id: approvedByDriverId } : {}),
+    },
+    {
+      $set: {
+        'publish.status': 'taken',
+        'publish.taken_by_driver_id': driverId,
+        'publish.taken_at': now,
+        driverId,
+        status: RIDE_STATUS.ACCEPTED,
+        liveStatus: RIDE_LIVE_STATUS.ACCEPTED,
+        acceptedAt: now,
+        'assignment.mode': 'published',
+        'assignment.assigned_by_driver_id': assignedBy,
+        'assignment.assigned_at': now,
+        ...rideVehicleSetFields(vehicle),
+      },
+      $push: {
+        'assignment.history': {
+          driver_id: driverId,
+          action: 'assigned',
+          by_driver_id: assignedBy,
+          at: now,
+        },
+      },
+    },
+    { new: true, session },
+  );
+};
+
 const acceptPublishedRide = async ({ driverId, ride }) => {
   if (String(ride.created_by_driver_id) === String(driverId)) {
     throw new ApiError(409, 'You published this ride', null, 'RIDE_NOT_OPEN');
   }
+
+  // Published rides go to whoever the publisher approves (POST
+  // /feed/rides/:id/request). Old app builds still call accept: they get a
+  // clear error instead of silently skipping the publisher's approval.
+  const settings = await getDriverNetworkSettings();
+  if (readBooleanSetting(settings.feed_requires_approval, true)) {
+    throw new ApiError(
+      409,
+      'Send a request instead — the publisher approves who gets this ride.',
+      null,
+      'APPROVAL_REQUIRED',
+    );
+  }
+
+  const taker = await Driver.findById(driverId)
+    .select('vehicleNumber vehicleMake vehicleModel vehicleType vehicleColor assignedFleetVehicleId')
+    .lean();
 
   const session = await mongoose.startSession();
   let claimed = null;
@@ -489,38 +678,7 @@ const acceptPublishedRide = async ({ driverId, ride }) => {
   try {
     session.startTransaction();
 
-    const now = new Date();
-    claimed = await Ride.findOneAndUpdate(
-      {
-        _id: ride._id,
-        'publish.status': 'open',
-        driverId: null,
-        'publish.expires_at': { $gt: now },
-      },
-      {
-        $set: {
-          'publish.status': 'taken',
-          'publish.taken_by_driver_id': driverId,
-          'publish.taken_at': now,
-          driverId,
-          status: RIDE_STATUS.ACCEPTED,
-          liveStatus: RIDE_LIVE_STATUS.ACCEPTED,
-          acceptedAt: now,
-          'assignment.mode': 'published',
-          'assignment.assigned_by_driver_id': ride.created_by_driver_id,
-          'assignment.assigned_at': now,
-        },
-        $push: {
-          'assignment.history': {
-            driver_id: driverId,
-            action: 'assigned',
-            by_driver_id: ride.created_by_driver_id,
-            at: now,
-          },
-        },
-      },
-      { new: true, session },
-    );
+    claimed = await claimPublishedRide({ ride, driverId, session, vehicle: driverDefaultVehicle(taker) });
 
     if (!claimed) {
       throw new ApiError(409, 'Another driver just took this ride', null, 'RIDE_ALREADY_TAKEN');
@@ -568,9 +726,20 @@ const acceptPublishedRide = async ({ driverId, ride }) => {
     }),
   );
   await afterCommit('closing lead conversations', () => closeLeadConversationsForRide(claimed._id, 'RIDE_TAKEN'));
+  await afterCommit('rejecting pending requests', async () => {
+    const { rejectPendingRequestsForRide } = await import('./rideRequestService.js');
+    await rejectPendingRequestsForRide({ ride: claimed, reason: 'ride_taken' });
+  });
   await afterCommit('assignment notification', () => notifyNetworkAssignment(claimed));
 
   return { accepted: true, rideId: String(claimed._id), escrow: secure ? 'held' : 'none', is_secure: secure };
+};
+
+/** Admin settings are stored as sent, so a boolean may arrive as "false". */
+export const readBooleanSetting = (value, fallback) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  return !['false', '0', 'no', 'off'].includes(String(value).trim().toLowerCase());
 };
 
 const acceptCustomerLead = async ({ driverId, ride }) => {
@@ -623,7 +792,6 @@ const acceptCustomerLead = async ({ driverId, ride }) => {
 
   await Ride.updateOne({ _id: ride._id }, { $set: { 'assignment.mode': 'feed_accept' } });
 
-  stopDispatchFlow(ride._id);
   await notifyRideAccepted(accepted);
 
   return {
@@ -636,28 +804,38 @@ const acceptCustomerLead = async ({ driverId, ride }) => {
 /** Sweeps leads whose window has closed so the feed never shows a dead ride. */
 export const expirePublishedRides = async () => {
   const now = new Date();
-  const expired = await Ride.find({
+  const candidates = await Ride.find({
     'publish.status': 'open',
     'publish.expires_at': { $lte: now },
   })
-    .select('_id service_location_id created_by_driver_id')
+    .select('_id service_location_id created_by_driver_id pickupAddress dropAddress publish.published_at')
     .lean();
 
-  if (!expired.length) return { expired: 0 };
+  if (!candidates.length) return { expired: 0 };
 
-  await Ride.updateMany(
-    { _id: { $in: expired.map((ride) => ride._id) } },
-    { $set: { 'publish.status': 'expired', 'publish.is_published': false, 'assignment.mode': 'dispatch' } },
-  );
+  const { rejectPendingRequestsForRide } = await import('./rideRequestService.js');
+  let expiredCount = 0;
 
-  for (const ride of expired) {
+  for (const ride of candidates) {
+    // Guarded per ride: an unpublish + republish between the read above and
+    // this write must not expire the fresh listing.
+    const result = await Ride.updateOne(
+      { _id: ride._id, 'publish.status': 'open', 'publish.expires_at': { $lte: now } },
+      { $set: { 'publish.status': 'expired', 'publish.is_published': false, 'assignment.mode': 'dispatch' } },
+    );
+    if (!result.modifiedCount) continue;
+    expiredCount += 1;
+
     emitToRoom(getFeedRoom(ride.service_location_id), 'feed:driver:removed', {
       rideId: String(ride._id),
       reason: 'EXPIRED',
     });
     await notifyPublishedRideExpired(ride);
     await closeLeadConversationsForRide(ride._id, 'EXPIRED');
+    await rejectPendingRequestsForRide({ ride, reason: 'ride_expired' }).catch((error) =>
+      console.error('[feedService] rejecting requests on expiry failed:', error.message),
+    );
   }
 
-  return { expired: expired.length };
+  return { expired: expiredCount };
 };

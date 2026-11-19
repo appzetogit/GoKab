@@ -4,7 +4,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Check, X, Loader2, AlertTriangle, ArrowRight, RefreshCcw } from 'lucide-react';
 import api from '../../../shared/api/axiosInstance';
 import { userAuthService } from '../../user/services/authService';
-import { userService } from '../../user/services/userService';
 import {
   clearPendingPhonePeRedirect,
   readPendingPhonePeRedirect,
@@ -25,13 +24,6 @@ const FLOWS = {
     label: 'Driver wallet top-up',
     paidRedirectPath: '/taxi/driver/wallet',
     verify: (merchantTransactionId) => api.get(`/drivers/wallet/top-up/phonepe/status/${merchantTransactionId}`),
-  },
-  'user-rental': {
-    flowKey: 'user-rental-advance',
-    targetPath: '/rental/deposit',
-    label: 'Rental advance',
-    paidRedirectPath: null,
-    verify: (merchantTransactionId) => userService.verifyPhonePeRentalAdvancePayment(merchantTransactionId),
   },
 };
 

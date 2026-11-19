@@ -281,7 +281,6 @@ const OwnerBookings = () => {
                   <label className="text-[12px] font-bold text-slate-600">Trip Type</label>
                   <select value={formData.trip_type} onChange={(event) => setFormData((prev) => ({ ...prev, trip_type: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-slate-300">
                     <option value="city">City</option>
-                    <option value="rental">Rental</option>
                     <option value="outstation">Outstation</option>
                   </select>
                 </div>

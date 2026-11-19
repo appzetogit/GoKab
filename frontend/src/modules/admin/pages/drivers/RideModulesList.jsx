@@ -56,7 +56,7 @@ export default function RideModulesList() {
             type="text"
             value={code}
             onChange={(e) => setCode(e.target.value)}
-            placeholder="e.g. airport, outstation, parcel"
+            placeholder="e.g. airport, outstation"
             className="w-full px-3.5 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm font-mono"
           />
         </div>

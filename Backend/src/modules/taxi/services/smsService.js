@@ -196,6 +196,43 @@ const buildSmsPayload = ({ phone, otp, appName, authMode = 'apiKey' }) => {
   return payload;
 };
 
+/**
+ * Sends free text through SMS India Hub. Indian SMS needs the text to match a
+ * DLT-approved template, so this works only when SMS_CUSTOMER_TEMPLATE_ID names
+ * one that fits; without it nothing is sent (and nothing breaks).
+ */
+export const sendCustomText = async ({ phone, text }) => {
+  const templateId = String(process.env.SMS_CUSTOMER_TEMPLATE_ID || '').trim();
+  if (!templateId) return { delivered: false, reason: 'no-template' };
+  if (isTruthy(env.sms.useDefaultOtp)) return { delivered: false, reason: 'default-otp-mode' };
+
+  const config = getSmsIndiaHubConfig();
+  const normalizedPhone = normalizeIndianPhone(phone);
+  if (!/^91\d{10}$/.test(normalizedPhone) || !config.senderId) return { delivered: false, reason: 'not-configured' };
+
+  const payload = new URLSearchParams({
+    senderid: config.senderId,
+    channel: 'Trans',
+    DCS: '0',
+    flashsms: '0',
+    number: normalizedPhone,
+    text,
+    TemplateId: templateId,
+  });
+  if (config.apiKey) payload.set('APIKey', config.apiKey);
+  else {
+    payload.set('user', config.user);
+    payload.set('password', config.password);
+  }
+  const response = await fetch(SMS_INDIA_HUB_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: payload.toString(),
+  });
+  const body = (await response.text()).trim();
+  return { delivered: isSuccessfulProviderResponse(response, body) };
+};
+
 export const sendOtpSms = async ({ phone, otp, purpose = 'otp' }) => {
   // Skipping delivery is only safe when the OTP is the configured static code;
   // otherwise a random OTP would be generated that nobody ever receives.

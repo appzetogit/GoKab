@@ -64,7 +64,15 @@ export const vehicleUsageSummary = async (driverOrId, { session = null } = {}) =
   // driver should be told: "add a vehicle" is wrong once they already have.
   let commercialPending = 0;
 
-  if (driver.vehicle_usage_type === 'commercial') commercial += 1;
+  if (driver.vehicle_usage_type === 'commercial') {
+    // Only when admin has seen the permit. A driver already on Elite / Pro keeps working.
+    if (driver.vehicle_usage_verified === true || ['prime', 'middle'].includes(String(driver.driver_category || ''))) {
+      commercial += 1;
+      commercialVerified += 1;
+    } else {
+      commercialPending += 1;
+    }
+  }
   if (driver.vehicle_usage_type === 'private') privateCount += 1;
 
   if (driver.owner_id) {
@@ -229,6 +237,13 @@ export const releasePrimeSlot = async ({ driverId, session = null }) => {
   return { released: (result?.deletedCount || 0) > 0 };
 };
 
+/** Vehicles a plan may hold in total, the registration vehicle included. 0 = unlimited. */
+export const effectiveMaxVehicles = (tier) => {
+  const configured = Math.max(0, Number(tier?.max_vehicles ?? 0));
+  if (configured > 0) return configured;
+  return String(tier?.driver_category || 'lower') === 'lower' ? 1 : 0;
+};
+
 export const resolveTierPermissions = (tier) => ({
   can_create_rides: Boolean(tier?.can_create_rides),
   can_publish_rides: Boolean(tier?.can_publish_rides),
@@ -240,7 +255,7 @@ export const resolveTierPermissions = (tier) => ({
   requires_commercial_and_private: Boolean(tier?.requires_commercial_and_private),
   requires_commercial_at_purchase: Boolean(tier?.requires_commercial_at_purchase),
   max_routes: Math.max(0, Number(tier?.max_routes ?? 0)),
-  max_vehicles: Math.max(0, Number(tier?.max_vehicles ?? 0)),
+  max_vehicles: effectiveMaxVehicles(tier),
   max_fleet_drivers: Math.max(0, Number(tier?.max_fleet_drivers ?? 0)),
   customer_lead_contact_fee: Math.max(0, Number(tier?.customer_lead_contact_fee ?? 0)),
   driver_lead_contact_fee: Math.max(0, Number(tier?.driver_lead_contact_fee ?? 0)),
@@ -308,9 +323,13 @@ export const checkTierEligibility = async ({ driverId, tierId }) => {
   // vehicle before a plan that unlocks fleet ownership). Commercial only here;
   // `applyCategoryFromSubscription` starts a grace window for the private
   // vehicle once the plan is actually granted.
-  if (tier.requires_commercial_at_purchase) {
+  // Elite (prime) and Pro (middle) are for commercial vehicles only, whatever the tier flags say.
+  const paidTier = ['prime', 'middle'].includes(String(tier.driver_category || ''));
+  const needsCommercial = paidTier || tier.requires_commercial_at_purchase || tier.requires_commercial_and_private;
+  const needsPrivate = !tier.requires_commercial_at_purchase && tier.requires_commercial_and_private;
+  if (needsCommercial || needsPrivate) {
     vehicleUsage = await vehicleUsageSummary(driver);
-    if (vehicleUsage.commercial < 1) {
+    if (needsCommercial && vehicleUsage.commercial < 1) {
       reasons.push('NEED_COMMERCIAL_VEHICLE');
       // "Add a vehicle" is the wrong instruction once they already have —
       // this tells the app to say "waiting for admin approval" instead.
@@ -318,13 +337,7 @@ export const checkTierEligibility = async ({ driverId, tierId }) => {
       // client that only knows the older code still behaves correctly.
       if (vehicleUsage.commercialPending > 0) reasons.push('COMMERCIAL_VEHICLE_PENDING_APPROVAL');
     }
-  } else if (tier.requires_commercial_and_private) {
-    vehicleUsage = await vehicleUsageSummary(driver);
-    if (vehicleUsage.commercial < 1) {
-      reasons.push('NEED_COMMERCIAL_VEHICLE');
-      if (vehicleUsage.commercialPending > 0) reasons.push('COMMERCIAL_VEHICLE_PENDING_APPROVAL');
-    }
-    if (vehicleUsage.private < 1) reasons.push('NEED_PRIVATE_VEHICLE');
+    if (needsPrivate && vehicleUsage.private < 1) reasons.push('NEED_PRIVATE_VEHICLE');
   }
 
   let slotsLeft = null;

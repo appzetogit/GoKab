@@ -1,10 +1,7 @@
 import crypto from 'node:crypto';
 import { ApiError } from '../../../../utils/ApiError.js';
 import { Owner } from '../../admin/models/Owner.js';
-import { ServiceStore } from '../../admin/models/ServiceStore.js';
-import { ServiceCenterStaff } from '../../admin/models/ServiceCenterStaff.js';
 import { Driver } from '../models/Driver.js';
-import { BusDriver } from '../models/BusDriver.js';
 import { PoolingVehicle } from '../../admin/models/PoolingVehicle.js';
 import { DriverLoginSession } from '../models/DriverLoginSession.js';
 import { signAccessToken } from './authService.js';
@@ -43,24 +40,6 @@ const normalizeRole = (role) => {
     normalized === 'superfleetowner'
   ) {
     return 'owner';
-  }
-  if (
-    normalized === 'service_center' ||
-    normalized === 'service-center' ||
-    normalized === 'servicecenter'
-  ) {
-    return 'service_center';
-  }
-  if (
-    normalized === 'service_center_staff' ||
-    normalized === 'service-center-staff' ||
-    normalized === 'servicecenterstaff' ||
-    normalized === 'center_staff'
-  ) {
-    return 'service_center_staff';
-  }
-  if (normalized === 'bus_driver' || normalized === 'bus-driver' || normalized === 'busdriver') {
-    return 'bus_driver';
   }
   if (normalized === 'pooling_driver' || normalized === 'pooling-driver' || normalized === 'poolingdriver') {
     return 'pooling_driver';
@@ -121,40 +100,6 @@ const publicOwnerPayload = (owner) => ({
   status: owner.status,
 });
 
-const publicServiceCenterPayload = (center) => ({
-  id: center._id,
-  name: center.name || '',
-  owner_name: center.owner_name || '',
-  phone: center.owner_phone || '',
-  address: center.address || '',
-  status: center.status || 'active',
-});
-
-const publicServiceCenterStaffPayload = (staff) => ({
-  id: staff._id,
-  name: staff.name || '',
-  phone: staff.phone || '',
-  status: staff.status || 'active',
-  serviceCenterId: staff.serviceCenterId ? String(staff.serviceCenterId) : '',
-});
-
-const publicBusDriverPayload = (driver) => ({
-  id: driver._id,
-  name: driver.name || '',
-  phone: driver.phone || '',
-  email: driver.email || '',
-  approve: driver.approve,
-  active: driver.active,
-  status: driver.status || 'approved',
-  assignedBusServiceId: driver.assignedBusServiceId ? String(driver.assignedBusServiceId) : '',
-  operatorName: driver.operatorName || '',
-  busName: driver.busName || '',
-  serviceNumber: driver.serviceNumber || '',
-  routeName: driver.routeName || '',
-  originCity: driver.originCity || '',
-  destinationCity: driver.destinationCity || '',
-});
-
 const isApprovedDriver = (driver) =>
   Boolean(driver) &&
   driver.approve !== false &&
@@ -165,26 +110,10 @@ const isApprovedOwner = (owner) =>
   owner.active !== false &&
   (owner.approve === true || String(owner.status || '').toLowerCase() === 'approved');
 
-const isApprovedBusDriver = (driver) =>
-  Boolean(driver) &&
-  driver.active !== false &&
-  driver.approve !== false &&
-  !['pending', 'blocked'].includes(String(driver.status || '').toLowerCase());
-
-const isApprovedServiceCenter = (center) =>
-  Boolean(center) &&
-  center.active !== false &&
-  String(center.status || '').toLowerCase() !== 'inactive';
-
-const isApprovedServiceCenterStaff = (staff) =>
-  Boolean(staff) &&
-  staff.active !== false &&
-  String(staff.status || '').toLowerCase() !== 'inactive';
-
 export const findExistingDriverAccount = async ({ phone, role }) => {
   const normalizedPhone = normalizePhone(phone);
   const rawRole = String(role || 'driver').toLowerCase();
-  const normalizedRole = ['vendor', 'owner', 'super_fleet_owner', 'service_center'].includes(rawRole) ? 'owner' : rawRole;
+  const normalizedRole = ['vendor', 'owner', 'super_fleet_owner'].includes(rawRole) ? 'owner' : rawRole;
   const phoneCandidates = buildPhoneCandidates(phone);
 
   if (!normalizedPhone) return null;
@@ -199,12 +128,6 @@ export const findExistingDriverAccount = async ({ phone, role }) => {
     if (account) {
       detectedRole = account.account_type || 'vendor';
     }
-  } else if (normalizedRole === 'service_center') {
-    account = await ServiceStore.findOne({ owner_phone: { $in: phoneCandidates } });
-  } else if (normalizedRole === 'service_center_staff') {
-    account = await ServiceCenterStaff.findOne({ phone: { $in: phoneCandidates } });
-  } else if (normalizedRole === 'bus_driver') {
-    account = await BusDriver.findOne({ phone: { $in: phoneCandidates } });
   } else if (normalizedRole === 'pooling_driver') {
     account = await PoolingVehicle.findOne({ driverPhone: { $in: phoneCandidates } });
   } else {
@@ -222,24 +145,9 @@ export const findExistingDriverAccount = async ({ phone, role }) => {
       if (account) {
         detectedRole = account.account_type || 'vendor';
       } else {
-        account = await ServiceStore.findOne({ owner_phone: { $in: phoneCandidates } });
+        account = await PoolingVehicle.findOne({ driverPhone: { $in: phoneCandidates } });
         if (account) {
-          detectedRole = 'super_fleet_owner';
-        } else {
-          account = await ServiceCenterStaff.findOne({ phone: { $in: phoneCandidates } });
-          if (account) {
-            detectedRole = 'service_center_staff';
-          } else {
-            account = await BusDriver.findOne({ phone: { $in: phoneCandidates } });
-            if (account) {
-              detectedRole = 'bus_driver';
-            } else {
-              account = await PoolingVehicle.findOne({ driverPhone: { $in: phoneCandidates } });
-              if (account) {
-                detectedRole = 'pooling_driver';
-              }
-            }
-          }
+          detectedRole = 'pooling_driver';
         }
       }
     }
@@ -264,44 +172,14 @@ export const startDriverLoginOtp = async ({ phone, role = 'driver' }) => {
       404,
       `${normalizedRole === 'owner'
         ? 'Owner'
-        : normalizedRole === 'service_center'
-          ? 'Service center'
-          : normalizedRole === 'service_center_staff'
-            ? 'Service center staff'
-            : normalizedRole === 'bus_driver'
-              ? 'Bus driver'
-              : normalizedRole === 'pooling_driver'
-                ? 'Pooling driver'
-                : 'Driver'
+        : normalizedRole === 'pooling_driver'
+          ? 'Pooling driver'
+          : 'Driver'
       } account not found`,
     );
   }
 
   const { account, role: activeRole } = found;
-
-  // Allow login even if account is pending approval to show registration status
-  // if (
-  //   (normalizedRole === 'owner' && !isApprovedOwner(account)) ||
-  //   (normalizedRole === 'service_center' && !isApprovedServiceCenter(account)) ||
-  //   (normalizedRole === 'service_center_staff' && !isApprovedServiceCenterStaff(account)) ||
-  //   (normalizedRole === 'driver' && !isApprovedDriver(account)) ||
-  //   (normalizedRole === 'bus_driver' && !isApprovedBusDriver(account))
-  // ) {
-  //   throw new ApiError(
-  //     403,
-  //     `${
-  //       normalizedRole === 'owner'
-  //         ? 'Owner'
-  //         : normalizedRole === 'service_center'
-  //           ? 'Service center'
-  //         : normalizedRole === 'service_center_staff'
-  //           ? 'Service center staff'
-  //         : normalizedRole === 'bus_driver'
-  //           ? 'Bus driver'
-  //           : 'Driver'
-  //     } account is pending approval`,
-  //   );
-  // }
 
   const { otp, isStatic } = resolveDriverLoginOtpForPhone(normalizedPhone);
   const now = Date.now();
@@ -380,61 +258,20 @@ export const verifyDriverLoginOtp = async ({ phone, otp }) => {
   const account =
     normalizedRole === 'owner'
       ? await Owner.findById(session.driverId)
-      : normalizedRole === 'service_center'
-        ? await ServiceStore.findById(session.driverId)
-        : normalizedRole === 'service_center_staff'
-          ? await ServiceCenterStaff.findById(session.driverId)
-          : normalizedRole === 'bus_driver'
-            ? await BusDriver.findById(session.driverId)
-            : normalizedRole === 'pooling_driver'
-              ? await PoolingVehicle.findById(session.driverId)
-              : await Driver.findById(session.driverId);
+      : normalizedRole === 'pooling_driver'
+        ? await PoolingVehicle.findById(session.driverId)
+        : await Driver.findById(session.driverId);
 
   if (!account) {
     throw new ApiError(
       404,
       `${normalizedRole === 'owner'
         ? 'Owner'
-        : normalizedRole === 'service_center'
-          ? 'Service center'
-          : normalizedRole === 'service_center_staff'
-            ? 'Service center staff'
-            : normalizedRole === 'bus_driver'
-              ? 'Bus driver'
-              : normalizedRole === 'pooling_driver'
-                ? 'Pooling driver'
-                : 'Driver'
+        : normalizedRole === 'pooling_driver'
+          ? 'Pooling driver'
+          : 'Driver'
       } account not found`,
     );
-  }
-
-  // Allow verification even if account is pending approval
-  // if (
-  //   (normalizedRole === 'owner' && !isApprovedOwner(account)) ||
-  //   (normalizedRole === 'service_center' && !isApprovedServiceCenter(account)) ||
-  //   (normalizedRole === 'service_center_staff' && !isApprovedServiceCenterStaff(account)) ||
-  //   (normalizedRole === 'driver' && !isApprovedDriver(account)) ||
-  //   (normalizedRole === 'bus_driver' && !isApprovedBusDriver(account))
-  // ) {
-  //   throw new ApiError(
-  //     403,
-  //     `${
-  //       normalizedRole === 'owner'
-  //         ? 'Owner'
-  //         : normalizedRole === 'service_center'
-  //           ? 'Service center'
-  //         : normalizedRole === 'service_center_staff'
-  //           ? 'Service center staff'
-  //         : normalizedRole === 'bus_driver'
-  //           ? 'Bus driver'
-  //           : 'Driver'
-  //       } account is pending approval`,
-  //     );
-  //   }
-
-  if (normalizedRole === 'bus_driver') {
-    account.lastLoginAt = new Date();
-    await account.save();
   }
 
   session.verifiedAt = new Date();
@@ -448,20 +285,14 @@ export const verifyDriverLoginOtp = async ({ phone, otp }) => {
     driver:
       normalizedRole === 'owner'
         ? publicOwnerPayload(account)
-        : normalizedRole === 'service_center'
-          ? publicServiceCenterPayload(account)
-          : normalizedRole === 'service_center_staff'
-            ? publicServiceCenterStaffPayload(account)
-            : normalizedRole === 'bus_driver'
-              ? publicBusDriverPayload(account)
-              : normalizedRole === 'pooling_driver'
-                ? {
-                  id: account._id,
-                  name: account.driverName || 'Pooling Driver',
-                  phone: account.driverPhone || '',
-                  approve: account.approve !== false,
-                  status: account.status || 'active',
-                }
-                : publicDriverPayload(account),
+        : normalizedRole === 'pooling_driver'
+          ? {
+            id: account._id,
+            name: account.driverName || 'Pooling Driver',
+            phone: account.driverPhone || '',
+            approve: account.approve !== false,
+            status: account.status || 'active',
+          }
+          : publicDriverPayload(account),
   };
 };

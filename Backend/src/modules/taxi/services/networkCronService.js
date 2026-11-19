@@ -1,9 +1,12 @@
+import { expireTripPosts } from '../user/services/tripPostService.js';
 import { Ride } from '../user/models/Ride.js';
 import { FleetVehicle } from '../admin/models/FleetVehicle.js';
 import { Driver } from '../driver/models/Driver.js';
 import { RIDE_LIVE_STATUS, RIDE_STATUS } from '../constants/index.js';
 import { expirePublishedRides } from '../driver/services/feedService.js';
 import { releasePublishedRide, settleAwaitingPlatformEscrow } from '../driver/services/escrowService.js';
+import { sendReturnLegReminders } from './roundTripService.js';
+import { reassignLateScheduledRides, sendScheduledCustomerRideReminders } from './scheduledRideService.js';
 import {
   notifyAssignmentUnacknowledged,
   notifyScheduledRideReminder,
@@ -312,6 +315,14 @@ const runGuarded = async (label, task) => {
 };
 
 export const runNetworkMaintenance = async () => {
+  // Published rides: alert the next plan phase when its time comes.
+  import('./publishedAlertService.js').then((m) => m.advancePublishedAlerts()).catch(() => {});
+  // Plan ended / has no routes: route mode drivers go back to All Locations.
+  import('../driver/services/driverRouteService.js').then((m) => m.resetRouteModeForDriversWithoutPlan()).catch(() => {});
+  // A publisher is told once when the driver's location goes quiet mid-trip.
+  import('./networkTripService.js').then((m) => m.alertLostDriverLocations()).catch(() => {});
+  // Carpool riders the driver never answered for go on their own.
+  import('./carpoolService.js').then((m) => m.releaseExpiredAddRiderRequests()).catch(() => {});
   try {
     const expired = await expirePublishedRides();
     const orphans = await releaseOrphanedEscrow();
@@ -320,8 +331,12 @@ export const runNetworkMaintenance = async () => {
     // Independent of each other and of the sweeps above: one failing must not
     // starve the rest.
     const pickupReminders = await runGuarded('pickupReminders', () => sendScheduledRideReminders());
+    const returnLegs = await runGuarded('returnLegReminders', () => sendReturnLegReminders());
+    const scheduledReminders = await runGuarded('scheduledRideReminders', () => sendScheduledCustomerRideReminders());
+    const scheduledReassign = await runGuarded('scheduledRideReassign', () => reassignLateScheduledRides());
     const nudges = await runGuarded('unacknowledgedNudges', () => sendUnacknowledgedAssignmentNudges());
     const platformSettlements = await runGuarded('platformSettlements', () => settlePaidPlatformEscrows());
+    const tripPosts = await runGuarded('tripPosts', () => expireTripPosts());
 
     let documentReminders = {};
     if (Date.now() - lastDocumentSweepAt >= DOCUMENT_SWEEP_INTERVAL_MS) {
@@ -335,7 +350,11 @@ export const runNetworkMaintenance = async () => {
       ...finalized,
       ...pickupReminders,
       ...nudges,
+      ...returnLegs,
+      ...scheduledReminders,
+      ...scheduledReassign,
       ...platformSettlements,
+      ...tripPosts,
       ...documentReminders,
     };
   } catch (error) {

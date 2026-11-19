@@ -46,8 +46,14 @@ export const resolveTransportDispatchConfig = async () => {
     toPositiveNumber(defaultTransportRideSettings.maximum_time_for_find_drivers_for_regular_ride, 300),
   );
 
+  const searchExpiryMinutes = toPositiveNumber(
+    settings.ride_search_expiry_minutes,
+    toPositiveNumber(defaultTransportRideSettings.ride_search_expiry_minutes, 60),
+  );
+
   return {
     settings,
+    searchExpiryMs: Math.round(searchExpiryMinutes * 60 * 1000),
     dispatchType: String(settings.trip_dispatch_type || defaultTransportRideSettings.trip_dispatch_type) === '2'
       ? 'broadcast'
       : 'one_by_one',

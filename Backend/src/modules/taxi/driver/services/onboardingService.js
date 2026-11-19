@@ -34,7 +34,7 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const VEHICLE_NUMBER_PATTERNS = [
   /^[A-Z]{2}\d{1,2}[A-Z]{1,5}\d{4}$/,
 ];
-const ALLOWED_SERVICE_CATEGORIES = ['taxi', 'outstation', 'delivery', 'pooling'];
+const ALLOWED_SERVICE_CATEGORIES = ['taxi', 'outstation', 'pooling'];
 
 const VEHICLE_TYPE_MAP = {
   v1: 'bike',
@@ -101,7 +101,6 @@ const getPrimaryRegisterFor = (serviceCategories = [], fallback = 'taxi') => {
 
   if (normalized.includes('taxi')) return 'taxi';
   if (normalized.includes('outstation')) return 'outstation';
-  if (normalized.includes('delivery')) return 'delivery';
   if (normalized.includes('pooling')) return 'pooling';
 
   return String(fallback || 'taxi').trim().toLowerCase() || 'taxi';
@@ -715,6 +714,7 @@ export const saveDriverVehicle = async ({
   companyAddress,
   city,
   postalCode,
+  state,
   taxNumber,
   vehicles = [],
   customFields = {},
@@ -835,6 +835,7 @@ export const saveDriverVehicle = async ({
         'companyAddress',
         'city',
         'postalCode',
+        'state',
         'taxNumber',
       ].includes(key);
     })
@@ -884,6 +885,7 @@ export const saveDriverVehicle = async ({
     companyAddress: String(companyAddress || '').trim(),
     city: String(city || selectedLocation).trim(),
     postalCode: normalizedPostalCode,
+    state: String(state || '').trim(),
     taxNumber: String(taxNumber || '').trim().toUpperCase(),
     // Commercial vs private. Blank is allowed here so existing app builds
     // can still finish onboarding; it only blocks Prime/Middle plans later.
@@ -1095,6 +1097,7 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
       phone: normalizedMobile,
       address: String(session.vehicle.companyAddress || '').trim() || null,
       postal_code: String(session.vehicle.postalCode || '').trim() || null,
+      state: String(session.vehicle.state || '').trim() || null,
       city: String(session.vehicle.city || session.vehicle.locationName || '').trim() || null,
       tax_number: String(session.vehicle.taxNumber || '').trim() || null,
       account_type: targetAccountType,
@@ -1157,6 +1160,20 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
     };
   }
 
+  // Saying "commercial" is not enough: the permit that proves it has to come with the registration.
+  if (String(session.vehicle?.vehicleUsageType || '').toLowerCase() === 'commercial') {
+    const permit = normalizedDocuments?.commercial_permit;
+    const hasPermit = Boolean(permit && (permit.secureUrl || permit.previewUrl || permit.url || typeof permit === 'string'));
+    if (!hasPermit) {
+      throw new ApiError(
+        400,
+        'A commercial permit document is required for a commercial vehicle',
+        { required_document: 'commercial_permit' },
+        'DOCUMENTS_REQUIRED',
+      );
+    }
+  }
+
   const normalizedReferralCode = normalizeReferralCode(session.referralCode);
   const referrer = normalizedReferralCode
     ? await findDriverByReferralCode(normalizedReferralCode)
@@ -1189,6 +1206,7 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
     vehicleColor: session.vehicle.color,
     vehicle_usage_type: session.vehicle.vehicleUsageType || '',
     city: session.vehicle.city || session.vehicle.locationName,
+    state: session.vehicle.state || '',
     referredBy: referrer?._id || null,
     approve: false,
     status: 'pending',
@@ -1219,6 +1237,7 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
         number: session.vehicle.number,
         color: session.vehicle.color,
         city: session.vehicle.city,
+        state: session.vehicle.state || '',
         customFields: session.vehicle.customFields || {},
       },
     },

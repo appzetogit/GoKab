@@ -11,7 +11,6 @@ import { clearCurrentRide, getCurrentRide, saveCurrentRide } from '../../service
 import carIcon from '../../../../assets/icons/car.png';
 import bikeIcon from '../../../../assets/icons/bike.png';
 import autoIcon from '../../../../assets/icons/auto.png';
-import deliveryIcon from '../../../../assets/icons/Delivery.png';
 import { useSettings } from '../../../../shared/context/SettingsContext';
 
 const MAP_CONTAINER_STYLE = { width: '100%', height: '100%' };
@@ -133,10 +132,8 @@ const getTrackingVehicleIcon = (ride, driver) => {
 
   if (customIcon) return customIcon;
 
-  const serviceType = String(ride?.serviceType || ride?.type || '').toLowerCase();
   const iconType = String(ride?.vehicleIconType || driver?.vehicleIconType || driver?.vehicleType || '').toLowerCase();
 
-  if (serviceType === 'parcel') return deliveryIcon;
   if (iconType.includes('bike')) return bikeIcon;
   if (iconType.includes('auto')) return autoIcon;
   return carIcon;
@@ -466,7 +463,7 @@ const RideTracking = () => {
       calculateBearing(driverPosition, activeDestination),
     );
   }, [activeDestination, driverPosition, rideRealtime?.driverLocation?.heading, routePath]);
-  const vehicleLabel = driver.vehicle || driver.vehicleType || (serviceType === 'parcel' ? 'Parcel' : 'Taxi');
+  const vehicleLabel = driver.vehicle || driver.vehicleType || 'Taxi';
   const nextDriverImage = resolveAssetUrl(
     driver.profileImage || driver.profile_image || driver.image || driver.avatar || driver.selfie || '',
   );
@@ -476,20 +473,18 @@ const RideTracking = () => {
   const driverImage = driverImageBroken ? '' : (nextDriverImage || driverImageFallback);
   const vehicleImage = vehicleImageBroken ? '' : (nextVehicleImage || vehicleImageFallback);
   const hasVehiclePhoto = isLikelyVehiclePhoto(vehicleImage) && !vehicleImageBroken;
-  const arrivalDriverName = driver.name || (serviceType === 'parcel' ? 'Agent' : 'Driver');
+  const arrivalDriverName = driver.name || 'Driver';
   const driverSubtitle = isWaitingForOtp
     ? `${arrivalDriverName} has arrived`
     : isScheduledUpcoming && !hasLiveDriverLocation
     ? 'Driver assigned. Live tracking starts closer to pickup time'
     : tripStatus === 'arrived'
-    ? (serviceType === 'parcel' ? 'Parcel reached destination' : 'Driver reached destination')
+    ? 'Driver reached destination'
     : tripStatus === 'started' || tripStatus === 'ongoing'
-    ? (serviceType === 'parcel' ? 'Parcel picked up' : 'Trip started')
-    : serviceType === 'parcel'
-      ? 'Delivery agent is on the way'
-      : 'Captain is on the way';
+    ? 'Trip started'
+    : 'Captain is on the way';
   const vehicleDetails = [driver.vehicleColor, driver.vehicleMake, driver.vehicleModel].filter(Boolean).join(' ');
-  const activeRideEndpoint = serviceType === 'parcel' ? '/deliveries/active/me' : '/rides/active/me';
+  const activeRideEndpoint = '/rides/active/me';
   const latestStateRef = useRef(state);
   const latestFallbackDriverRef = useRef(fallbackDriver);
   const latestDriverRef = useRef(driver);

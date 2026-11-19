@@ -1,8 +1,8 @@
 import { asyncHandler } from '../../../../utils/asyncHandler.js';
 import { mediaService } from '../../../../services/media.service.js';
 import { env } from '../../../../config/env.js';
-import { getReferralSettings, getReferralTranslationContent } from '../../admin/services/adminService.js';
-import { getPublicActivePaymentGateway } from '../../services/paymentGatewayService.js';
+import { ensureThirdPartySettings, getReferralSettings, getReferralTranslationContent } from '../../admin/services/adminService.js';
+import { getPublicActivePaymentGateway, resolveConfiguredGatewayCredentials } from '../../services/paymentGatewayService.js';
 import { buildPaymentRequestContext, logPaymentDiagnostic } from '../../services/paymentDiagnostics.js';
 
 /**
@@ -55,6 +55,58 @@ export const getPaymentGatewayConfig = asyncHandler(async (_req, res) => {
         success: true,
         data,
     });
+});
+
+// Public client config: the admin-set Google Maps browser key and the Razorpay
+// key id (never the secret), so every app uses what the admin saved.
+export const getPublicAppConfig = asyncHandler(async (_req, res) => {
+    const settings = await ensureThirdPartySettings();
+    const maps = settings?.map_apis || {};
+    let razorpayKeyId = '';
+    try {
+        razorpayKeyId = (await resolveConfiguredGatewayCredentials('razor_pay')).keyId || '';
+    } catch {
+        // gateway disabled or not configured: apps fall back to the key sent with each order
+    }
+
+    return res.json({
+        success: true,
+        data: {
+            google_maps_key: maps.google_map_key_for_web_apps || maps.google_map_key_for_distance_matrix || '',
+            razorpay_key_id: razorpayKeyId,
+        },
+    });
+});
+
+// What the rider app needs to price and offer carpool.
+export const getCarpoolPublicConfig = asyncHandler(async (_req, res) => {
+    const { getCarpoolSettings } = await import('../../services/carpoolService.js');
+    const cfg = await getCarpoolSettings();
+    return res.json({
+        success: true,
+        data: {
+            enabled_airport: cfg.enabledAirport,
+            enabled_railway: cfg.enabledRailway,
+            seat_fare_percent: cfg.seatFarePercent,
+        },
+    });
+});
+
+// The link a customer without the app gets: a map page and the data it polls.
+const TRACK_TOKEN = /^[A-Za-z0-9_-]{6,40}$/;
+
+export const getTrackingPage = asyncHandler(async (req, res) => {
+    if (!TRACK_TOKEN.test(req.params.token)) return res.status(404).send('Link not found');
+    const { trackingPageHtml } = await import('../../services/networkTripService.js');
+    res.set('Cache-Control', 'no-store');
+    return res.type('html').send(trackingPageHtml(req.params.token));
+});
+
+export const getTrackingData = asyncHandler(async (req, res) => {
+    if (!TRACK_TOKEN.test(req.params.token)) return res.json({ success: true, data: null });
+    const { getTrackingData: load } = await import('../../services/networkTripService.js');
+    res.set('Cache-Control', 'no-store');
+    return res.json({ success: true, data: await load(req.params.token) });
 });
 
 export const acknowledgePhonePeCallback = asyncHandler(async (req, res) => {

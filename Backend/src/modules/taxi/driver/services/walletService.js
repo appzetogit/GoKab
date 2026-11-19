@@ -68,12 +68,8 @@ const resolveCommissionConfigForRide = async (ride, session) => {
   }
 
   if (ride?.vehicleTypeId) {
-    const normalizedServiceType = String(ride?.serviceType || '').trim().toLowerCase();
     const savedTransportType = String(ride.transport_type || '').trim().toLowerCase();
-    const normalizedTransportType =
-      normalizedServiceType === 'parcel'
-        ? (savedTransportType === 'delivery' || savedTransportType === 'both' ? savedTransportType : 'delivery')
-        : (savedTransportType || 'taxi');
+    const normalizedTransportType = savedTransportType || 'taxi';
     const filters = [
       {
         vehicle_type: ride.vehicleTypeId,
@@ -368,11 +364,16 @@ export const settleCompletedRideWallet = async ({ rideId }) => {
     const actualFare = normalizeAmount(ride.fare || 0, 'fare');
     const commissionBaseFare = normalizeAmount(ride.baseFare || ride.fare || 0, 'fare');
     const commissionConfig = await resolveCommissionConfigForRide(ride, session);
-    const commissionAmount = computeCommissionAmount({
+    let commissionAmount = computeCommissionAmount({
       fare: commissionBaseFare,
       type: commissionConfig.type,
       value: commissionConfig.value,
     });
+    // A carpool where the driver ended up with one rider keeps most of the commission.
+    if (ride.carpool?.groupId) {
+      const { carpoolCommissionFactor } = await import('../../services/carpoolService.js');
+      commissionAmount = Math.round(commissionAmount * (await carpoolCommissionFactor(ride)) * 100) / 100;
+    }
     const paymentMethod = normalizePaymentMethod(ride.paymentMethod);
     const driverEarnings = Math.max(Math.round((commissionBaseFare - commissionAmount) * 100) / 100, 0);
     // Cash rides: the driver only ever physically collects `actualFare` from
@@ -403,8 +404,14 @@ export const settleCompletedRideWallet = async ({ rideId }) => {
       return null;
     }
 
+    // A customer ride the lead handed to a team driver settles on the lead's
+    // wallet: they hold the contract, and how they pay their driver is their own.
+    const handedOver = ride.origin === 'customer_app'
+      && ride.assignment?.target_type === 'fleet'
+      && ride.assignment?.assigned_by_driver_id;
+
     const result = await applyDriverWalletAdjustment({
-      driverId: ride.driverId,
+      driverId: handedOver ? ride.assignment.assigned_by_driver_id : ride.driverId,
       rideId: ride._id,
       amount,
       type,

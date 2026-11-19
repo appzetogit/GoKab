@@ -123,6 +123,7 @@ const sendPushToTargets = async ({
   body,
   image = '',
   data = {},
+  dataOnly = false,
 }) => {
   const messaging = getFirebaseMessaging();
 
@@ -158,9 +159,22 @@ const sendPushToTargets = async ({
   const safeData = Object.fromEntries(
     Object.entries(data || {}).map(([key, value]) => [key, String(value ?? '')]),
   );
+  const isRideRequest = safeData.type === 'ride_request';
 
   for (const batch of chunk(dedupedTargets, 500)) {
-    const response = await messaging.sendEachForMulticast({
+    // A `notification` block is drawn into the system tray by FCM while the app
+    // is backgrounded or killed, and the app's native service never runs. Ride
+    // offers must reach that service (it rings and shows the full-screen card),
+    // so they travel as data-only messages with the text inside `data`.
+    const response = await messaging.sendEachForMulticast(dataOnly ? {
+      tokens: batch.map((target) => target.token),
+      data: { ...safeData, title: String(title ?? ''), body: String(body ?? '') },
+      android: { priority: 'high', ttl: 30000 },
+      apns: {
+        payload: { aps: { 'content-available': 1 } },
+        headers: { 'apns-priority': '5', 'apns-push-type': 'background' },
+      },
+    } : {
       tokens: batch.map((target) => target.token),
       notification: {
         title,
@@ -173,7 +187,14 @@ const sendPushToTargets = async ({
       },
       android: {
         priority: 'high',
-        notification: image ? { imageUrl: image } : undefined,
+        // A ride request is only answerable for its offer window: let FCM drop
+        // it after 30 s instead of delivering a stale "new ride" later, and ring
+        // on the driver app's loud channel.
+        ...(isRideRequest ? { ttl: 30000 } : {}),
+        notification: {
+          ...(image ? { imageUrl: image } : {}),
+          ...(isRideRequest ? { channelId: 'gokab_ride_requests', sound: 'default' } : {}),
+        },
       },
       webpush: {
         notification: {
@@ -347,6 +368,7 @@ export const sendPushNotificationToEntities = async ({
   body,
   image = '',
   data = {},
+  dataOnly = false,
 }) => {
   const targets = await collectDirectTargets({ userIds, driverIds });
   return sendPushToTargets({
@@ -355,5 +377,6 @@ export const sendPushNotificationToEntities = async ({
     body,
     image,
     data,
+    dataOnly,
   });
 };

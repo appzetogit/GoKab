@@ -22,7 +22,6 @@ const unwrap = (response) => response?.data?.data || response?.data || response;
 const normalizeDriverRole = (role) => {
     const normalized = String(role || 'driver').toLowerCase();
     if (normalized === 'vendor' || normalized === 'owner' || normalized === 'super_fleet_owner' || normalized === 'service_center') return 'owner';
-    if (normalized === 'bus_driver') return 'bus_driver';
     if (normalized === 'pooling_driver') return 'pooling_driver';
     return 'driver';
 };
@@ -46,7 +45,6 @@ const getPostLoginRoute = (role, driver, routePrefix) => {
             ? '/taxi/owner/home'
             : `${routePrefix}/registration-status`;
     }
-    if (normalizedRole === 'bus_driver') return '/taxi/driver/bus-home';
     if (normalizedRole === 'pooling_driver') {
         return isDriverApproved(driver) ? '/taxi/driver/pooling' : '/taxi/driver/pooling/status';
     }

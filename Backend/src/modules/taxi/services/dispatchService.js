@@ -7,16 +7,18 @@ import { Driver } from '../driver/models/Driver.js';
 import { WalletTransaction } from '../driver/models/WalletTransaction.js';
 import { applyDriverWalletAdjustment } from '../driver/services/walletService.js';
 import { matchDrivers, findZoneByPickup } from './matchingService.js';
+import { categoryOf, getTierPhases, phaseCategories, withoutTeamMembers } from './tierPhaseService.js';
 import {
   RIDE_LIVE_STATUS,
   RIDE_STATUS,
 } from '../constants/index.js';
-import { Delivery } from '../user/models/Delivery.js';
-import { getRideRoom, resolveSetPriceForRide } from './rideService.js';
+import { getRideRoom, getScheduledDispatchLeadMs, resolveSetPriceForRide } from './rideService.js';
 import { releasePromoForCancelledRide } from './promoService.js';
 import { SOCKET_EVENTS } from '../socket/events.js';
 import { resolveTransportDispatchConfig } from './transportSettingsService.js';
 import { sendPushNotificationToEntities } from './pushNotificationService.js';
+import { Vehicle } from '../admin/models/Vehicle.js';
+import { haversineMeters } from '../../../utils/geo.js';
 
 const activeDispatches = new Map();
 let ioInstance = null;
@@ -39,10 +41,6 @@ const ensureUserWallet = async (userId, session = null) => {
 const normalizeRideTransportType = (ride) => {
   const serviceType = String(ride?.serviceType || '').trim().toLowerCase();
   const transportType = String(ride?.transport_type || '').trim().toLowerCase();
-
-  if (serviceType === 'parcel') {
-    return transportType === 'both' ? 'delivery' : (transportType || 'delivery');
-  }
 
   if (serviceType === 'intercity') {
     return 'intercity';
@@ -520,7 +518,6 @@ const getDispatchVehicleTypeIds = (ride) => {
 // airport bookings are matched as 'city' until that gets its own field.
 const getRideModuleCode = (ride) => {
   const serviceType = String(ride?.serviceType || 'ride').toLowerCase();
-  if (serviceType === 'parcel') return 'parcel';
   if (serviceType === 'intercity') return 'outstation';
   return 'city';
 };
@@ -531,9 +528,37 @@ const emitToSocket = (socketId, event, payload) => {
   }
 };
 
+const recentClosedPushes = new Map();
+
+/**
+ * Takes a driver's native ride-offer card down. The socket event only reaches an
+ * app that is awake, which is exactly when the card is not needed.
+ */
+export const sendRideOfferClosedPush = (driverId, rideId) => {
+  if (!driverId || !rideId) return;
+  const key = `${driverId}:${rideId}`;
+  const now = Date.now();
+  // Several code paths close the same offer; one push is enough.
+  if (now - (recentClosedPushes.get(key) || 0) < 10_000) return;
+  recentClosedPushes.set(key, now);
+  if (recentClosedPushes.size > 500) {
+    for (const [k, t] of recentClosedPushes) if (now - t > 10_000) recentClosedPushes.delete(k);
+  }
+  sendPushNotificationToEntities({
+    driverIds: [String(driverId)],
+    title: 'Ride request closed',
+    body: 'This booking is no longer available.',
+    dataOnly: true,
+    data: { type: 'ride_request_closed', rideId: String(rideId) },
+  }).catch(() => {});
+};
+
 export const emitToRoom = (room, event, payload) => {
   if (ioInstance) {
     ioInstance.to(room).emit(event, payload);
+  }
+  if (event === 'rideRequestClosed' && typeof room === 'string' && room.startsWith('driver:')) {
+    sendRideOfferClosedPush(room.slice('driver:'.length), payload?.rideId);
   }
 };
 
@@ -648,6 +673,10 @@ const emitRideRequestToDrivers = async ({
   }
 
   const requestExpiresAt = new Date(Date.now() + dispatchConfig.retryDelayMs).toISOString();
+  // Set for an airport / railway carpool: riders so far, this seat's fare, and the most the trip can pay.
+  const carpoolInfo = ride.carpool?.enabled
+    ? await import('./carpoolService.js').then((m) => m.requestCardInfo(ride)).catch(() => null)
+    : null;
 
   for (const driver of targetDrivers) {
     emitToDriver(driver._id, 'rideRequest', {
@@ -667,6 +696,7 @@ const emitRideRequestToDrivers = async ({
       dropLocation: ride.dropLocation,
       dropAddress: ride.dropAddress || '',
       scheduledAt: ride.scheduledAt || null,
+      roundTrip: ride.roundTrip?.isRoundTrip ? { isRoundTrip: true, legType: ride.roundTrip.legType, returnAt: ride.roundTrip.returnAt } : null,
       estimatedDistanceMeters: ride.estimatedDistanceMeters || 0,
       estimatedDurationMinutes: ride.estimatedDurationMinutes || 0,
       vehicleTypeId: ride.vehicleTypeId ? String(ride.vehicleTypeId) : null,
@@ -693,8 +723,9 @@ const emitRideRequestToDrivers = async ({
       fareIncreaseWaitMinutes: Number(ride.fareIncreaseWaitMinutes || 0),
       nextFareIncreaseAt: ride.nextFareIncreaseAt || null,
       paymentMethod: ride.paymentMethod,
-      parcel: ride.parcel || null,
       intercity: ride.intercity || null,
+      stopCount: ride.stopCount || 0,
+      carpool: carpoolInfo,
       radius: effectiveRadius,
       attempt: attemptIndex + 1,
       maxAttempts: dispatchConfig.maxAttempts,
@@ -705,21 +736,45 @@ const emitRideRequestToDrivers = async ({
     });
   }
 
-  sendPushNotificationToEntities({
-    driverIds: targetDrivers.map((driver) => String(driver._id)),
-    title: ride.serviceType === 'parcel' ? 'New delivery request' : 'New ride request',
-    body: ride.pickupAddress
-      ? `Pickup: ${ride.pickupAddress}`
-      : 'A new booking is waiting for your response.',
-    data: {
-      type: 'ride_request',
-      rideId: String(ride._id),
-      serviceType: ride.serviceType || 'ride',
-      userId: String(ride.userId?._id || ride.userId || ''),
-    },
-  }).catch((error) => {
-    console.error('Failed to send driver ride-request push notification', error);
-  });
+  // One push per driver: the card shows how far *this* driver is from pickup.
+  // Data-only, so the app's native service gets it even when the app is killed;
+  // everything the card draws has to be in `data` (nothing can be fetched then).
+  const vehicle = ride.vehicleTypeId
+    ? await Vehicle.findById(ride.vehicleTypeId).select('name').lean().catch(() => null)
+    : null;
+  const km = (meters) => (Number.isFinite(Number(meters)) && Number(meters) >= 0 ? (Number(meters) / 1000).toFixed(1) : '');
+  for (const driver of targetDrivers) {
+    sendPushNotificationToEntities({
+      driverIds: [String(driver._id)],
+      title: 'New ride request',
+      body: ride.pickupAddress ? `Pickup: ${ride.pickupAddress}` : 'A new booking is waiting for your response.',
+      dataOnly: true,
+      data: {
+        type: 'ride_request',
+        rideId: String(ride._id),
+        serviceType: ride.serviceType || 'ride',
+        userId: String(ride.userId?._id || ride.userId || ''),
+        riderName: ride.userId?.name || 'Customer',
+        fare: String(Math.round(Number(ride.fare) || 0)),
+        pickupAddress: ride.pickupAddress || '',
+        dropAddress: ride.dropAddress || '',
+        pickupDistanceKm:
+          driver?.location?.coordinates?.length === 2 && ride.pickupLocation?.coordinates?.length === 2
+            ? km(haversineMeters(driver.location.coordinates, ride.pickupLocation.coordinates))
+            : '',
+        tripDistanceKm: km(ride.estimatedDistanceMeters),
+        vehicleLabel: vehicle?.name || ride.vehicleIconType || 'Ride',
+        stopCount: String(ride.stopCount || 0),
+        carpool: carpoolInfo ? '1' : '',
+        carpoolRiders: carpoolInfo ? String(carpoolInfo.riders) : '',
+        carpoolMaxFare: carpoolInfo ? String(carpoolInfo.maxFare) : '',
+        returnAt: ride.roundTrip?.isRoundTrip && ride.roundTrip.returnAt ? new Date(ride.roundTrip.returnAt).toISOString() : '',
+        expiresInSeconds: String(dispatchConfig.retryWindowSeconds),
+      },
+    }).catch((error) => {
+      console.error('Failed to send driver ride-request push notification', error);
+    });
+  }
 };
 
 export const markDriverRejectedFromDispatch = (rideId, driverId) => {
@@ -753,20 +808,25 @@ const closeRideAsUnmatched = async (rideId) => {
   await releasePromoForCancelledRide({ ride });
   emitCustomerFeedEvent(ride, 'feed:customer:removed', { reason: 'UNMATCHED' });
 
-  if (ride.deliveryId) {
-    await Delivery.findByIdAndUpdate(ride.deliveryId, {
-      status: ride.status,
-      liveStatus: ride.liveStatus,
-    });
-  }
-
   await User.updateOne({ _id: ride.userId, currentRideId: ride._id }, { currentRideId: null });
+  if (ride.carpool?.groupId) {
+    const { onRideCancelled } = await import('./carpoolService.js');
+    await onRideCancelled(ride).catch((error) => console.error('[dispatch] carpool cancel failed:', error.message));
+  }
 
   emitToRoom(getUserRoom(ride.userId), 'rideCancelled', {
     rideId: String(ride._id),
     room: getRideRoom(ride._id),
     reason: 'No drivers accepted the ride request',
+    reasonCode: 'no_drivers',
   });
+
+  sendPushNotificationToEntities({
+    userIds: [String(ride.userId)],
+    title: 'No driver found',
+    body: 'We could not find a driver for your ride. You have not been charged. Please try again.',
+    data: { type: 'ride_unmatched', rideId: String(ride._id) },
+  }).catch(() => {});
 
   emitToRoom(getRideRoom(ride._id), 'rideRequestClosed', {
     rideId: String(ride._id),
@@ -806,6 +866,15 @@ const releaseEscrowAfterCancel = async (ride, { penaltyFrom = null, reason = 'ri
   }
 };
 
+const closeListingAfterCancel = async (ride) => {
+  try {
+    const { closePublishedListingForCancelledRide } = await import('../driver/services/feedService.js');
+    await closePublishedListingForCancelledRide(ride);
+  } catch (error) {
+    console.error('[dispatchService] closing the published listing failed:', error.message);
+  }
+};
+
 export const cancelRideByAdmin = async (rideId) => {
   stopDispatchFlow(rideId);
 
@@ -838,20 +907,18 @@ export const cancelRideByAdmin = async (rideId) => {
   }
   await ride.save();
 
-  if (ride.deliveryId) {
-    await Delivery.findByIdAndUpdate(ride.deliveryId, {
-      driverId: ride.driverId || null,
-      status: ride.status,
-      liveStatus: ride.liveStatus,
-    });
-  }
-
   await Promise.all([
     User.updateOne({ _id: ride.userId, currentRideId: ride._id }, { currentRideId: null }),
     ride.driverId ? Driver.findByIdAndUpdate(ride.driverId, { isOnRide: false }) : Promise.resolve(),
   ]);
 
   await releaseEscrowAfterCancel(ride, { reason: 'cancelled_by_admin' });
+  if (ride.carpool?.groupId) {
+    const { onRideCancelled } = await import('./carpoolService.js');
+    await onRideCancelled(ride).catch((error) => console.error('[dispatch] carpool cancel failed:', error.message));
+  }
+  // A published driver-created ride also leaves the feed, and its applicants are told.
+  await closeListingAfterCancel(ride);
   emitCustomerFeedEvent(ride, 'feed:customer:removed', { reason: 'CANCELLED' });
 
   emitToRoom(getUserRoom(ride.userId), 'rideCancelled', {
@@ -881,7 +948,7 @@ export const cancelRideByAdmin = async (rideId) => {
   return ride;
 };
 
-export const cancelRideByUser = async ({ rideId, userId }) => {
+export const cancelRideByUser = async ({ rideId, userId, reason = '', reasonId = '', note = '' }) => {
   const dispatchState = getDispatchState(rideId);
   stopDispatchFlow(rideId);
   const session = await mongoose.startSession();
@@ -915,18 +982,17 @@ export const cancelRideByUser = async ({ rideId, userId }) => {
 
     ride.status = RIDE_STATUS.CANCELLED;
     ride.liveStatus = RIDE_LIVE_STATUS.CANCELLED;
+    ride.cancellation = {
+      by: 'user',
+      reasonId: String(reasonId || '').trim().slice(0, 64),
+      reason: String(reason || '').trim().slice(0, 120),
+      note: String(note || '').trim().slice(0, 200),
+      at: new Date(),
+    };
     if (ride.bookingMode === 'bidding') {
       ride.biddingStatus = 'cancelled';
     }
     await ride.save({ session });
-
-    if (ride.deliveryId) {
-      await Delivery.findByIdAndUpdate(ride.deliveryId, {
-        driverId: ride.driverId || null,
-        status: ride.status,
-        liveStatus: ride.liveStatus,
-      }, { session });
-    }
 
     await Promise.all([
       User.updateOne({ _id: ride.userId, currentRideId: ride._id }, { currentRideId: null }, { session }),
@@ -942,6 +1008,12 @@ export const cancelRideByUser = async ({ rideId, userId }) => {
   }
 
   await releaseEscrowAfterCancel(ride, { reason: 'cancelled_by_user' });
+  if (ride.carpool?.groupId) {
+    const { onRideCancelled } = await import('./carpoolService.js');
+    await onRideCancelled(ride).catch((error) => console.error('[dispatch] carpool cancel failed:', error.message));
+  }
+  // A published driver-created ride also leaves the feed, and its applicants are told.
+  await closeListingAfterCancel(ride);
   emitCustomerFeedEvent(ride, 'feed:customer:removed', { reason: 'CANCELLED' });
 
   emitToRoom(getUserRoom(ride.userId), 'rideCancelled', {
@@ -1035,6 +1107,27 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
 
     cancellationSettlement = await settleDriverCancellationFee(ride, session);
 
+    // The driver walks away from the way back of a round trip: the rider only got
+    // one of the two trips, so half of what they paid for the round trip returns
+    // to their wallet.
+    if (ride.roundTrip?.legType === 'return' && ride.roundTrip?.parentRideId && ride.userId) {
+      const outbound = await Ride.findById(ride.roundTrip.parentRideId).select('fare').session(session);
+      const refundAmount = Math.round((Number(outbound?.fare || 0) / 2) * 100) / 100;
+      if (refundAmount > 0) {
+        const credit = await applyUserWalletAdjustment({
+          userId: ride.userId,
+          amount: refundAmount,
+          kind: 'credit',
+          title: `Refund for the cancelled return trip (booking ${String(ride._id).slice(-6)})`,
+          referenceKey: `ride-cancel:driver-roundtrip:${String(ride._id)}:user-refund`,
+          walletField: 'refundWallet',
+          provider: 'ride_cancellation_refund',
+          session,
+        });
+        if (['applied', 'existing'].includes(credit.status)) ride.roundTrip.refundAmount = refundAmount;
+      }
+    }
+
     await releasePromoForCancelledRide({ ride, session });
 
     ride.status = RIDE_STATUS.CANCELLED;
@@ -1043,14 +1136,6 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
       ride.biddingStatus = 'cancelled';
     }
     await ride.save({ session });
-
-    if (ride.deliveryId) {
-      await Delivery.findByIdAndUpdate(ride.deliveryId, {
-        driverId: ride.driverId || null,
-        status: ride.status,
-        liveStatus: ride.liveStatus,
-      }, { session });
-    }
 
     await Promise.all([
       User.updateOne({ _id: ride.userId, currentRideId: ride._id }, { currentRideId: null }, { session }),
@@ -1071,8 +1156,15 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
     reason: 'cancelled_by_driver',
     penaltyFrom: 'acceptor',
   });
+  if (ride.carpool?.groupId) {
+    const { onRideCancelled } = await import('./carpoolService.js');
+    await onRideCancelled(ride).catch((error) => console.error('[dispatch] carpool cancel failed:', error.message));
+  }
 
-  const cancelReason = 'Your scheduled ride was cancelled by the driver.';
+  const refunded = Number(ride.roundTrip?.refundAmount || 0);
+  const cancelReason = refunded > 0
+    ? `Your return trip was cancelled by the driver. ₹${refunded} (half of your round trip fare) was refunded to your wallet.`
+    : 'Your scheduled ride was cancelled by the driver.';
 
   emitToRoom(getUserRoom(ride.userId), 'rideCancelled', {
     rideId: String(ride._id),
@@ -1123,7 +1215,7 @@ export const cancelScheduledRideByDriver = async ({ rideId, driverId }) => {
 
   sendPushNotificationToEntities({
     userIds: [String(ride.userId)],
-    title: 'Scheduled ride cancelled',
+    title: refunded > 0 ? 'Return trip cancelled, refund issued' : 'Scheduled ride cancelled',
     body: cancelReason,
     data: {
       type: 'ride_cancelled_by_driver',
@@ -1154,6 +1246,111 @@ const getAttemptRadiusMeters = (baseDistanceMeters, attemptIndex) => {
   return Math.round(safeBaseDistance * growthMultiplier);
 };
 
+/**
+ * One phase of tiered dispatch. Every driver of the plans allowed in this phase
+ * is alerted at once (and the ride shows on their feed); drivers alerted in
+ * earlier phases stay free to accept. A phase nobody can serve is skipped at
+ * once, so an instant ride never waits minutes for plans that are not around.
+ */
+const dispatchTierPhase = async ({ ride, rideId, phaseIndex, phases, dispatchConfig }) => {
+  const phase = phases[phaseIndex];
+  const radius = getAttemptRadiusMeters(
+    dispatchConfig.baseDistanceMeters || dispatchConfig.maxDistanceMeters,
+    phaseIndex,
+  );
+  const dispatchVehicleTypeIds = getDispatchVehicleTypeIds(ride);
+  const dispatchState = getDispatchState(rideId);
+
+  await Ride.updateOne(
+    { _id: rideId, status: RIDE_STATUS.SEARCHING },
+    { $set: { tierPhaseIndex: phaseIndex, ...(phaseIndex === 0 ? { dispatchStartedAt: new Date() } : {}) } },
+  );
+
+  const { zone, drivers, searchRadiusMeters } = await matchDrivers(ride.pickupLocation.coordinates, {
+    maxDistance: radius,
+    vehicleTypeId: ride.vehicleTypeId,
+    vehicleTypeIds: dispatchVehicleTypeIds,
+    rideModuleCode: getRideModuleCode(ride),
+    paymentMethod: ride.paymentMethod,
+    dropCoords: ride.dropLocation?.coordinates || null,
+  });
+  const effectiveRadius = Number.isFinite(searchRadiusMeters) && searchRadiusMeters > 0
+    ? searchRadiusMeters
+    : radius;
+
+  const rejectedDriverIds = new Set(dispatchState.rejectedDriverIds);
+  const notifiedDriverIds = new Set(dispatchState.notifiedDriverIds);
+  const allowed = phaseCategories(phases, phaseIndex);
+  const targetDrivers = (await withoutTeamMembers(drivers)).filter((driver) => {
+    const driverId = String(driver._id);
+    return allowed.includes(categoryOf(driver)) && !rejectedDriverIds.has(driverId) && !notifiedDriverIds.has(driverId);
+  });
+  const nextNotifiedDriverIds = [
+    ...dispatchState.notifiedDriverIds,
+    ...targetDrivers.map((driver) => String(driver._id)),
+  ];
+
+  saveDispatchState(rideId, {
+    radiusIndex: phaseIndex,
+    driverIds: nextNotifiedDriverIds,
+    notifiedDriverIds: nextNotifiedDriverIds,
+    timer: null,
+  });
+
+  if (targetDrivers.length) {
+    // The card rings for a minute at most; the ride stays on the feed after that.
+    const remainingSeconds = phases.slice(phaseIndex).reduce((sum, item) => sum + item.minutes * 60, 0);
+    await emitRideRequestToDrivers({
+      ride,
+      targetDrivers,
+      zone,
+      effectiveRadius,
+      dispatchVehicleTypeIds,
+      dispatchConfig: {
+        ...dispatchConfig,
+        dispatchType: 'broadcast',
+        retryWindowSeconds: Math.min(remainingSeconds, 60),
+        maxAttempts: phases.length,
+      },
+      attemptIndex: phaseIndex,
+    });
+  }
+
+  emitToRoom(getUserRoom(ride.userId), 'rideSearchUpdate', {
+    rideId: String(ride._id),
+    status: ride.status,
+    radius: effectiveRadius,
+    dispatchType: 'broadcast',
+    attempt: phaseIndex + 1,
+    maxAttempts: phases.length,
+    matchedDrivers: targetDrivers.length,
+    totalNotifiedDrivers: nextNotifiedDriverIds.length,
+    maxSearchSeconds: Math.round(dispatchConfig.searchExpiryMs / 1000),
+  });
+
+  const isLast = phaseIndex >= phases.length - 1;
+  // The last phase keeps the ride searching (no more alerts, it just stays on the
+  // feed) until the admin-set expiry counted from when the rider booked.
+  const sinceBookedMs = Date.now() - new Date(ride.createdAt).getTime();
+  const waitMs = isLast
+    ? Math.max(dispatchConfig.searchExpiryMs - sinceBookedMs, 60 * 1000)
+    : targetDrivers.length
+      ? phase.minutes * 60 * 1000
+      : 0;
+
+  if (isLast) {
+    const timer = setTimeout(() => {
+      closeRideAsUnmatched(rideId)
+        .catch((error) => console.error('Failed to mark ride unmatched', error))
+        .finally(() => stopDispatchFlow(rideId));
+    }, waitMs);
+    saveDispatchState(rideId, { timer });
+    return;
+  }
+
+  scheduleNextAttempt(rideId, phaseIndex + 1, waitMs);
+};
+
 const dispatchAttempt = async (rideId, attemptIndex = 0) => {
   const ride = await Ride.findById(rideId).populate('userId', 'name phone countryCode');
 
@@ -1164,6 +1361,11 @@ const dispatchAttempt = async (rideId, attemptIndex = 0) => {
 
   try {
     const dispatchConfig = await resolveTransportDispatchConfig();
+    const tierPhases = String(ride.bookingMode || 'normal') === 'normal' ? await getTierPhases() : null;
+    if (tierPhases) {
+      await dispatchTierPhase({ ride, rideId, phaseIndex: attemptIndex, phases: tierPhases, dispatchConfig });
+      return;
+    }
     const radius = getAttemptRadiusMeters(
       dispatchConfig.baseDistanceMeters || dispatchConfig.maxDistanceMeters,
       attemptIndex,
@@ -1282,7 +1484,9 @@ export const startDispatchFlow = async (ride) => {
   emitCustomerFeedEvent(ride, 'feed:customer:new');
 
   const scheduledAt = ride?.scheduledAt ? new Date(ride.scheduledAt) : null;
-  const delayMs = scheduledAt ? scheduledAt.getTime() - Date.now() : 0;
+  // Offered to drivers ahead of the pickup time (admin lead time, 60 min by default).
+  const leadMs = scheduledAt ? await getScheduledDispatchLeadMs() : 0;
+  const delayMs = scheduledAt ? scheduledAt.getTime() - leadMs - Date.now() : 0;
   const bookingMode = String(ride?.bookingMode || 'normal').trim().toLowerCase();
   const shouldDispatchImmediately = bookingMode === 'bidding';
 
@@ -1302,11 +1506,22 @@ export const startDispatchFlow = async (ride) => {
   await dispatchAttempt(ride._id, 0);
 };
 
+/**
+ * Sends a ride that lost its driver back to dispatch, skipping that driver.
+ * The tier phases start again from the first one.
+ */
+export const redispatchRide = async (rideId, excludeDriverId = null) => {
+  stopDispatchFlow(rideId);
+  if (excludeDriverId) saveDispatchState(rideId, { rejectedDriverIds: [String(excludeDriverId)] });
+  await dispatchAttempt(rideId, 0);
+};
+
 export const restoreScheduledDispatches = async () => {
   const rides = await Ride.find({
     status: RIDE_STATUS.SEARCHING,
     liveStatus: RIDE_LIVE_STATUS.SEARCHING,
     scheduledAt: { $ne: null },
+    'carpool.role': { $ne: 'member' },
   }).select('_id scheduledAt');
 
   for (const ride of rides) {
@@ -1320,7 +1535,7 @@ export const notifyLateAvailableDriver = async (driverId) => {
   }
 
   const driver = await Driver.findById(driverId)
-    .select('_id isOnline isOnRide wallet location zoneId vehicleTypeId vehicleType vehicleIconType');
+    .select('_id isOnline isOnRide wallet location zoneId vehicleTypeId vehicleType vehicleIconType driver_category owner_id is_self_drive_owner');
 
   if (!driver?.isOnline || driver?.isOnRide || driver?.wallet?.isBlocked || !driver?.location?.coordinates?.length) {
     return;
@@ -1342,6 +1557,18 @@ export const notifyLateAvailableDriver = async (driverId) => {
       dispatchState.notifiedDriverIds.includes(driverKey) ||
       dispatchState.rejectedDriverIds.includes(driverKey)
     ) {
+      continue;
+    }
+
+    // Same rules as the phased dispatch: no team members, and only plans the
+    // ride is currently open to.
+    if (ride.tierPhaseIndex != null) {
+      const phases = await getTierPhases();
+      if (phases && !phaseCategories(phases, ride.tierPhaseIndex).includes(categoryOf(driver))) {
+        continue;
+      }
+    }
+    if ((await withoutTeamMembers([driver])).length === 0) {
       continue;
     }
 
@@ -1424,7 +1651,6 @@ export const notifyRideAccepted = async (ride) => {
     vehicleIconType: populatedRide.vehicleIconType || '',
     vehicleIconUrl: populatedRide.vehicleIconUrl || '',
     driver: populatedRide.driverId,
-    parcel: populatedRide.parcel || null,
   });
 
   emitToRoom(getUserRoom(populatedRide.userId), SOCKET_EVENTS.RIDE_STATE, {
@@ -1441,8 +1667,8 @@ export const notifyRideAccepted = async (ride) => {
     otp: populatedRide.otp || '',
     vehicleIconType: populatedRide.vehicleIconType || '',
     vehicleIconUrl: populatedRide.vehicleIconUrl || '',
-    parcel: populatedRide.parcel || null,
     intercity: populatedRide.intercity || null,
+    stopCount: populatedRide.stopCount || 0,
     commissionAmount: populatedRide.commissionAmount,
     driverEarnings: populatedRide.driverEarnings,
     pickupLocation: populatedRide.pickupLocation,

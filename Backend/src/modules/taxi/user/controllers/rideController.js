@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { safeEqualHex } from '../../services/razorpaySecurity.js';
 import { loadPublisherCardForRide } from '../../driver/services/publisherCardService.js';
+import { resolveRideVehicle, withRideVehicle } from '../../driver/services/rideVehicleService.js';
 import mongoose from 'mongoose';
 import { ApiError } from '../../../../utils/ApiError.js';
 import { normalizePoint } from '../../../../utils/geo.js';
@@ -36,6 +37,7 @@ import {
   startDispatchFlow,
 } from '../../services/dispatchService.js';
 import { getTipSettings } from '../../services/appSettingsService.js';
+import { loadRoundTripSummaries } from '../../services/roundTripService.js';
 import { Ride } from '../models/Ride.js';
 import { UserWallet } from '../models/UserWallet.js';
 
@@ -311,7 +313,7 @@ const razorpayRequest = async ({ method, path, body, keyId, keySecret }) => {
 };
 
 export const createRide = async (req, res) => {
-  const { pickup, drop, pickupAddress, dropAddress, fare, estimatedDistanceMeters, estimatedDurationMinutes, vehicleTypeId, vehicleTypeIds, vehicleIconType, vehicleIconUrl, paymentMethod, serviceType, intercity, promo_code, service_location_id, transport_type, scheduledAt, bookingMode, userMaxBidFare, bidStepAmount, bookingPreferences } =
+  const { pickup, drop, pickupAddress, dropAddress, fare, estimatedDistanceMeters, estimatedDurationMinutes, vehicleTypeId, vehicleTypeIds, vehicleIconType, vehicleIconUrl, paymentMethod, serviceType, intercity, stopCount, promo_code, service_location_id, transport_type, scheduledAt, bookingMode, userMaxBidFare, bidStepAmount, bookingPreferences, roundTrip, carpool } =
     req.body;
 
   if (!pickup || !drop) {
@@ -334,6 +336,7 @@ export const createRide = async (req, res) => {
     paymentMethod,
     serviceType,
     intercity,
+    stopCount,
     promo_code,
     service_location_id,
     transport_type,
@@ -342,9 +345,15 @@ export const createRide = async (req, res) => {
     userMaxBidFare,
     bidStepAmount,
     bookingPreferences,
+    roundTrip,
+    carpool,
   });
 
-  await startDispatchFlow(ride);
+  // A carpool rider may join a cab that is already being found; then it is not
+  // offered to drivers again on its own.
+  const { attachRideToCarpool } = await import('../../services/carpoolService.js');
+  const { dispatch: shouldDispatch } = await attachRideToCarpool(ride);
+  if (shouldDispatch) await startDispatchFlow(ride);
 
   res.status(201).json({
     success: true,
@@ -370,6 +379,9 @@ export const getRideById = async (req, res) => {
   });
 
   const ride = await getRideDetails(req.params.rideId);
+  const roundTrip = ride.roundTrip?.isRoundTrip
+    ? (await loadRoundTripSummaries([ride])).get(String(ride._id)) || null
+    : null;
 
   // Driver-created rides show who created them (images included) on the detail
   // screen, same card as the feed. Other rides are returned exactly as before.
@@ -377,10 +389,25 @@ export const getRideById = async (req, res) => {
     const data = ride.toJSON();
     data.publisher = await loadPublisherCardForRide(ride);
     data.is_secure = ride.publish?.is_secure !== false;
+    // Who booked it: the customer is shown this name and number.
+    const { loadPublisherInfo } = await import('../../services/networkTripService.js');
+    const booked = await loadPublisherInfo(ride);
+    data.bookedBy = { name: booked.businessName, phone: booked.contactPhone };
+    // The vehicle chosen for this ride, on its own and on the driver card.
+    data.vehicle = resolveRideVehicle(ride, ride.driverId?._id ? ride.driverId : null);
+    if (data.driverId && typeof data.driverId === 'object') data.driverId = withRideVehicle(ride, data.driverId);
     if (access.$locals.viewerIsCreatorOnly) {
       // The chat is between the rider and the driver who took the ride.
       delete data.messages;
     }
+    if (roundTrip) data.round_trip = roundTrip;
+    res.json({ success: true, data });
+    return;
+  }
+
+  if (roundTrip) {
+    const data = ride.toJSON();
+    data.round_trip = roundTrip;
     res.json({ success: true, data });
     return;
   }
@@ -416,6 +443,7 @@ export const getMyActiveRide = async (req, res) => {
       publisher_hold: Number(ride.escrow?.publisher_hold || 0),
       acceptor_hold: Number(ride.escrow?.acceptor_hold || 0),
     };
+    data.vehicle = resolveRideVehicle(ride, ride.driverId?._id ? ride.driverId : null);
   }
 
   res.json({ success: true, data });
@@ -433,6 +461,10 @@ export const listMyRides = async (req, res) => {
     status: req.query.status,
     // `role` here is the driver's side of the ride, not the auth role.
     rideRole: req.query.role,
+    explicitRole: req.query.role !== undefined,
+    origin: req.query.origin,
+    q: req.query.q,
+    includeCounts: String(req.query.include_counts ?? '1') !== '0',
   });
 
   res.json({
@@ -441,6 +473,7 @@ export const listMyRides = async (req, res) => {
       results: history.results,
       total: history.pagination.total,
       pagination: history.pagination,
+      ...(history.counts ? { counts: history.counts } : {}),
     },
   });
 };
@@ -461,6 +494,7 @@ export const updateRideStatus = async (req, res) => {
     driverId: req.auth.sub,
     nextStatus,
     paymentMethod: req.body.paymentMethod,
+    otp: req.body.otp,
     riderRating: req.body.riderRating,
     // Who physically took the fare, for published rides settled between two
     // drivers rather than against platform commission.
@@ -471,6 +505,13 @@ export const updateRideStatus = async (req, res) => {
     success: true,
     data: serializeRideRealtime(ride),
   });
+};
+
+// "Go to pickup": the driver is on the way. Starts the publisher's live location.
+export const markRideEnRoute = async (req, res) => {
+  const { markDriverEnRoute } = await import('../../services/networkTripService.js');
+  const ride = await markDriverEnRoute({ rideId: req.params.rideId, driverId: req.auth.sub });
+  res.json({ success: true, data: { rideId: String(ride._id), enRouteAt: ride.enRouteAt } });
 };
 
 export const submitRideReview = async (req, res) => {
@@ -1032,6 +1073,9 @@ export const cancelRide = async (req, res) => {
   const ride = await cancelRideByUser({
     rideId: req.params.rideId,
     userId: req.auth.sub,
+    reason: req.body?.reason,
+    reasonId: req.body?.reasonId,
+    note: req.body?.note,
   });
 
   if (!ride) {
@@ -1054,11 +1098,9 @@ export const listAvailableDrivers = async (req, res) => {
   const longitude = Number(lng);
   const distance = Number(maxDistance);
 
-  if (!vehicleTypeId) {
-    throw new ApiError(400, 'vehicleTypeId is required');
-  }
-
-  if (!mongoose.Types.ObjectId.isValid(vehicleTypeId)) {
+  // Optional: the home map lists nearby drivers before any vehicle type is chosen,
+  // and used to get a 400 every refresh.
+  if (vehicleTypeId && !mongoose.Types.ObjectId.isValid(vehicleTypeId)) {
     throw new ApiError(400, 'vehicleTypeId is invalid');
   }
 

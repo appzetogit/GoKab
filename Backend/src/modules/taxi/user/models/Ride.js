@@ -62,22 +62,36 @@ const rideSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    // Never a data: URL. The vehicle's own icon is stored as base64 on the
+    // vehicle record, and copying it onto the ride made every ride response
+    // (polled every 3 seconds by both apps) about 320 KB.
     vehicleIconUrl: {
       type: String,
       default: '',
       trim: true,
-    },
-    deliveryId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Delivery',
-      default: null,
+      set: (value) => (typeof value === 'string' && value.startsWith('data:') ? '' : value),
+      get: (value) => (typeof value === 'string' && value.startsWith('data:') ? '' : value),
     },
     serviceType: {
       type: String,
-      enum: ['ride', 'parcel', 'intercity'],
+      enum: ['ride', 'intercity'],
       default: 'ride',
       lowercase: true,
       trim: true,
+    },
+    // How many stops the rider expects on the way (count only, no addresses).
+    stopCount: { type: Number, default: 0, min: 0, max: 3 },
+    // Phased dispatch: when the search started and which phase it is in now.
+    // null means the ride is not phase-gated (scheduled for later, bidding).
+    dispatchStartedAt: { type: Date, default: null },
+    tierPhaseIndex: { type: Number, default: null },
+    // Why and by whom the ride was cancelled (rider's pick from the cancel sheet).
+    cancellation: {
+      by: { type: String, default: '', trim: true },
+      reasonId: { type: String, default: '', trim: true },
+      reason: { type: String, default: '', trim: true },
+      note: { type: String, default: '', trim: true },
+      at: { type: Date, default: null },
     },
     intercity: {
       bookingId: {
@@ -116,64 +130,6 @@ const rideSchema = new mongoose.Schema(
         min: 0,
       },
       vehicleName: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-    },
-    parcel: {
-      category: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      weight: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      description: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      deliveryCategory: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      goodsTypeFor: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      deliveryScope: {
-        type: String,
-        enum: ['city', 'outstation'],
-        default: 'city',
-        lowercase: true,
-        trim: true,
-      },
-      isOutstation: {
-        type: Boolean,
-        default: false,
-      },
-      senderName: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      senderMobile: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      receiverName: {
-        type: String,
-        default: '',
-        trim: true,
-      },
-      receiverMobile: {
         type: String,
         default: '',
         trim: true,
@@ -640,6 +596,51 @@ const rideSchema = new mongoose.Schema(
         default: null,
       },
     },
+    // Round trip: the outbound leg carries the return time; the return leg is a
+    // separate scheduled ride for the same driver and rider.
+    roundTrip: {
+      isRoundTrip: { type: Boolean, default: false },
+      legType: { type: String, enum: ['', 'outbound', 'return'], default: '' },
+      returnAt: { type: Date, default: null },
+      returnRideId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ride', default: null },
+      parentRideId: { type: mongoose.Schema.Types.ObjectId, ref: 'Ride', default: null },
+      reminder30At: { type: Date, default: null },
+      reminder10At: { type: Date, default: null },
+      lateAlertAt: { type: Date, default: null },
+      waitingMinutes: { type: Number, default: 0 },
+      waitingCharge: { type: Number, default: 0 },
+      // Set when the driver cancels the return leg: half of the round trip fare goes back to the rider.
+      refundAmount: { type: Number, default: 0 },
+      // Where the way back starts and ends when the rider chose places of their own.
+      // Empty means the onward route reversed. Coordinates are [lng, lat].
+      returnPickupAddress: { type: String, default: '' },
+      returnPickupCoordinates: { type: [Number], default: undefined },
+      returnDropAddress: { type: String, default: '' },
+      returnDropCoordinates: { type: [Number], default: undefined },
+    },
+    // The driver tapped "Go to pickup": from here the publisher sees their live location.
+    enRouteAt: { type: Date, default: null },
+    // Public tracking link for a customer who has no app (see networkTripService).
+    tracking: {
+      token: { type: String, default: null, index: true, sparse: true },
+      lostAlertedAt: { type: Date, default: null },
+    },
+    // Airport / railway carpool: riders sharing one cab to the same station.
+    carpool: {
+      enabled: { type: Boolean, default: false },
+      groupId: { type: mongoose.Schema.Types.ObjectId, ref: 'CarpoolGroup', default: null, index: true },
+      role: { type: String, enum: ['', 'lead', 'member'], default: '' },
+      kind: { type: String, enum: ['', 'airport', 'railway'], default: '' },
+      // How many seats this rider takes (their passengers).
+      seats: { type: Number, default: 1, min: 1 },
+      // What the whole cab would have cost; `fare` is this rider's seat.
+      fullFare: { type: Number, default: 0 },
+      stationName: { type: String, default: '' },
+      stationCoordinates: { type: [Number], default: undefined },
+      // Joined a cab a driver already has: waits for the driver's yes.
+      pendingApproval: { type: Boolean, default: false },
+      pendingUntil: { type: Date, default: null },
+    },
     bookingPreferences: {
       tripType: {
         type: String,
@@ -661,6 +662,12 @@ const rideSchema = new mongoose.Schema(
       luggage: {
         type: Boolean,
         default: false,
+      },
+      // How many bags the rider is bringing (0 = none).
+      luggageCount: {
+        type: Number,
+        default: 0,
+        min: 0,
       },
       pooling: {
         type: Boolean,
@@ -746,6 +753,27 @@ const rideSchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
+      // The vehicle this ride runs with, chosen when it is assigned (the
+      // driver's own, one of the organisation's fleet vehicles, or a custom
+      // one). A per-ride copy: the driver's profile is never changed, and the
+      // copy survives the fleet vehicle being edited or deleted later. Empty
+      // (number '') means "use the driver's current vehicle".
+      vehicle: {
+        source: {
+          type: String,
+          enum: ['driver_default', 'fleet', 'custom', null],
+          default: null,
+        },
+        fleet_vehicle_id: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'TaxiFleetVehicle',
+          default: null,
+        },
+        number: { type: String, default: '', trim: true },
+        model: { type: String, default: '', trim: true },
+        type: { type: String, default: '', trim: true },
+        color: { type: String, default: '', trim: true },
+      },
       history: {
         type: [
           {
@@ -773,6 +801,12 @@ const rideSchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
+      // Customer scheduled rides: driver 60/30/10 min before, rider 30 min before, late alert.
+      customer_60_at: { type: Date, default: null },
+      customer_30_at: { type: Date, default: null },
+      customer_10_at: { type: Date, default: null },
+      customer_rider_at: { type: Date, default: null },
+      customer_late_at: { type: Date, default: null },
     },
     publish: {
       is_published: {
@@ -804,6 +838,9 @@ const rideSchema = new mongoose.Schema(
         default: 0,
         min: 0,
       },
+      // Tiered alerts: the last phase whose plans were alerted, and who got the alert.
+      alerted_phase: { type: Number, default: -1 },
+      alerted_driver_ids: { type: [mongoose.Schema.Types.ObjectId], default: [] },
       // Secure (default): both sides' shares are frozen in escrow at accept and
       // settled through the wallets. Unsecure: no wallet check, no hold, cash
       // only — the two drivers settle the split between themselves offline.
@@ -922,7 +959,18 @@ const rideSchema = new mongoose.Schema(
       },
     },
   },
-  { timestamps: true },
+  {
+    timestamps: true,
+    toJSON: {
+      // Rides saved before the setter above still carry the base64 icon.
+      transform: (_doc, ret) => {
+        if (typeof ret.vehicleIconUrl === 'string' && ret.vehicleIconUrl.startsWith('data:')) {
+          ret.vehicleIconUrl = '';
+        }
+        return ret;
+      },
+    },
+  },
 );
 
 rideSchema.index({ userId: 1, createdAt: -1 });
@@ -931,5 +979,10 @@ rideSchema.index({ origin: 1, 'publish.status': 1, service_location_id: 1, creat
 rideSchema.index({ status: 1, driverId: 1, service_location_id: 1, createdAt: -1 });
 rideSchema.index({ organization_owner_id: 1, status: 1 });
 rideSchema.index({ created_by_driver_id: 1, status: 1, createdAt: -1 });
+// "All Rides" list: created-by queries sorted by time without a status
+// equality, and the per-vehicle busy check.
+rideSchema.index({ created_by_driver_id: 1, createdAt: -1 });
+rideSchema.index({ driverId: 1, status: 1, createdAt: -1 });
+rideSchema.index({ 'assignment.vehicle.number': 1, status: 1 }, { partialFilterExpression: { 'assignment.vehicle.number': { $type: 'string', $gt: '' } } });
 
 export const Ride = mongoose.models.TaxiRide || mongoose.model('TaxiRide', rideSchema);

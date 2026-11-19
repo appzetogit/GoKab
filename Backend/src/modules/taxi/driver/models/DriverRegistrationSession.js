@@ -89,6 +89,7 @@ const driverRegistrationSessionSchema = new mongoose.Schema(
       companyAddress: { type: String, default: '' },
       city: { type: String, default: '' },
       postalCode: { type: String, default: '' },
+      state: { type: String, default: '' },
       taxNumber: { type: String, default: '' },
       vehicleUsageType: { type: String, enum: ['commercial', 'private', ''], default: '' },
       customFields: {

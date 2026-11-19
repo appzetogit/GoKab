@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import {
   Plus, Search, Filter, Edit, Trash, Check, X, Shield, Globe, Car, Bike, Info, LayoutGrid,
   Trash2, ChevronRight, MapPin, CheckCircle2, AlertCircle, ToggleLeft, ToggleRight,
-  Settings2, Package, Zap, ArrowRight, Edit3, MoreHorizontal, Rocket
+  Settings2, Zap, ArrowRight, Edit3, MoreHorizontal, Rocket
 } from 'lucide-react';
 
 // ─── Tiny helpers ──────────────────────────────────────────────────────────────
@@ -27,7 +27,6 @@ const getLucideIcon = (iconId, size = 18) => {
   switch(iconId) {
     case 'taxi_icon': return <Car size={size} />;
     case 'bike_icon': return <Bike size={size} />;
-    case 'delivery_icon': return <Package size={size} />;
     case 'auto_icon': return <Zap size={size} />;
     case 'cab_icon': return <Car size={size} />;
     default: return <Car size={size} />;
@@ -329,7 +328,7 @@ const ServiceConfig = () => {
                 <Pill label="Always On" variant="green" />
               </div>
               <h3 className="text-[16px] font-black leading-none">Both Services</h3>
-              <p className="text-[11px] font-bold text-gray-400 mt-1">Taxi + Delivery combined</p>
+              <p className="text-[11px] font-bold text-gray-400 mt-1">Taxi + Outstation combined</p>
               <div className="mt-5 pt-4 border-t border-white/10 flex items-center gap-2">
                 <CheckCircle2 size={14} className="text-emerald-400" />
                 <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Fixed — cannot be removed</span>
@@ -543,7 +542,7 @@ const ServiceConfig = () => {
               />
             </div>
             <div className="col-span-2">
-              <Field label="Service Name" placeholder="e.g. Taxi, Delivery..." value={draft.label || ''} onChange={e => setDraft(p => ({ ...p, label: e.target.value }))} />
+              <Field label="Service Name" placeholder="e.g. Taxi, Outstation..." value={draft.label || ''} onChange={e => setDraft(p => ({ ...p, label: e.target.value }))} />
             </div>
           </div>
           <Field label="Short Description" placeholder="City rides, courier drops..." value={draft.desc || ''} onChange={e => setDraft(p => ({ ...p, desc: e.target.value }))} />

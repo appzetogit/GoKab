@@ -31,7 +31,8 @@ const loadRideMeta = async (ride) => {
     isPublished: Boolean(ride.publish?.is_published),
     driverName: driver?.name || '',
     driverPhone: driver?.phone || '',
-    vehicleNumber: driver?.vehicleNumber || '',
+    // The vehicle chosen for the ride, else the driver's own.
+    vehicleNumber: ride.assignment?.vehicle?.number || driver?.vehicleNumber || '',
     pickup: ride.pickupAddress || '',
     drop: ride.dropAddress || '',
   };
@@ -43,13 +44,17 @@ const loadRideMeta = async (ride) => {
 /**
  * Pushes a driver's position to the people entitled to watch it.
  *
- * Location is only shared **after the pickup OTP is entered** — before that the
- * owner sees status only. That boundary is the requirement, and it also keeps a
- * driver's movements private while they are merely on their way.
+ * Location is shared once the driver taps "Go to pickup" and until the ride ends;
+ * before that the owner sees status only, which keeps a driver's movements private
+ * while they are not on a job.
  */
 export const broadcastNetworkLocation = async ({ ride, coordinates, heading, speed }) => {
   if (!ride) return;
-  if (ride.liveStatus !== RIDE_LIVE_STATUS.STARTED) return;
+  // From "Go to pickup" (enRouteAt) until the ride ends; before that, status only.
+  const sharing =
+    ride.liveStatus === RIDE_LIVE_STATUS.STARTED ||
+    (ride.enRouteAt && [RIDE_LIVE_STATUS.ACCEPTED, RIDE_LIVE_STATUS.ARRIVING].includes(ride.liveStatus));
+  if (!sharing) return;
 
   const meta = await loadRideMeta(ride);
   if (!meta.organizationOwnerId && !meta.isPublished) return;
@@ -150,7 +155,7 @@ export const getLiveMapSnapshot = async (driverId) => {
   const rides = await Ride.find(filter)
     .select(
       '_id driverId liveStatus status pickupAddress dropAddress lastDriverLocation dropLocation ' +
-        'organization_owner_id created_by_driver_id publish',
+        'organization_owner_id created_by_driver_id publish assignment.vehicle',
     )
     .lean();
 
@@ -171,7 +176,7 @@ export const getLiveMapSnapshot = async (driverId) => {
         driverId: ride.driverId ? String(ride.driverId) : null,
         name: rideDriver?.name || '',
         phone: rideDriver?.phone || '',
-        vehicleNumber: rideDriver?.vehicleNumber || '',
+        vehicleNumber: ride.assignment?.vehicle?.number || rideDriver?.vehicleNumber || '',
         // The label describes *who is driving*, not who sold the ride. A ride
         // created under the owner's organisation but picked up off the network
         // is being run by an outsider, and the map has to say so.

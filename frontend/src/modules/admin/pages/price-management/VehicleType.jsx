@@ -12,7 +12,6 @@ import {
   Activity,
   X,
   CheckCircle2,
-  Package,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -32,9 +31,6 @@ import LuxuryIcon from '../../../../assets/icons/Luxury.png';
 import PremiumIcon from '../../../../assets/icons/Premium.png';
 import SuvIcon from '../../../../assets/icons/SUV.png';
 import MapBackground from '../../../../assets/map_image.png';
-import trucksImg from '@/assets/images/delivery/trucks.png';
-import bikeImg from '@/assets/images/delivery/bike.png';
-import moversImg from '@/assets/images/delivery/movers.png';
 
 const inputClass = 'w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition-all focus:border-orange-300 focus:ring-2 focus:ring-orange-100';
 const labelClass = 'mb-2 block text-[12px] font-bold text-slate-700';
@@ -80,7 +76,6 @@ const OBJECT_ID_PATTERN = /^[a-fA-F0-9]{24}$/;
 
 const normalizeTransportType = (value = '') => {
   const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'delivery') return 'delivery';
   if (normalized === 'pooling') return 'pooling';
   if (normalized === 'both' || normalized === 'all') return 'both';
   return 'taxi';
@@ -88,7 +83,6 @@ const normalizeTransportType = (value = '') => {
 
 const normalizeTaxiMode = (value = '') => {
   const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'delivery') return 'delivery';
   if (normalized === 'pooling') return 'pooling';
   if (normalized === 'both' || normalized === 'all') return 'both';
   return 'taxi';
@@ -118,15 +112,6 @@ const defaultFormData = {
   size: '',
   is_taxi: 'taxi',
   is_accept_share_ride: 0,
-  delivery_category: '',
-  delivery_distance_pricing: {
-    enabled: false,
-    base_price: '',
-    free_distance: '',
-    distance_price: '',
-    free_time: '',
-    time_price: '',
-  },
   status: 1,
   active: true,
   airport: false,
@@ -134,44 +119,13 @@ const defaultFormData = {
   vehicle_preference: [],
 };
 
-const DELIVERY_CATEGORY_OPTIONS = [
-  {
-    id: 'trucks',
-    title: 'Trucks',
-    image: trucksImg,
-    description: 'Heavy goods, loaders, and cargo-style delivery vehicles.',
-  },
-  {
-    id: '2wheeler',
-    title: '2 Wheeler',
-    image: bikeImg,
-    description: 'Fast lightweight parcel bikes and two-wheel delivery options.',
-  },
-  {
-    id: 'movers',
-    title: 'Packers & Movers',
-    image: moversImg,
-    description: 'Home shifting, helper-based, and larger move services.',
-  },
-];
-
 const TRANSPORT_TYPE_OPTIONS = [
   { id: 'taxi', name: 'taxi', display_name: 'Ride' },
-  { id: 'delivery', name: 'delivery', display_name: 'Delivery' },
   { id: 'pooling', name: 'pooling', display_name: 'Pooling' },
   { id: 'both', name: 'both', display_name: 'Both' },
 ];
 
 const unwrap = (response) => response?.data?.data || response?.data || response;
-
-const normalizeDeliveryDistancePricing = (value = {}) => ({
-  enabled: Boolean(value?.enabled),
-  base_price: String(value?.base_price ?? ''),
-  free_distance: String(value?.free_distance ?? ''),
-  distance_price: String(value?.distance_price ?? ''),
-  free_time: String(value?.free_time ?? ''),
-  time_price: String(value?.time_price ?? ''),
-});
 
 const normalizeVehicle = (item = {}) => ({
   ...item,
@@ -341,8 +295,6 @@ const VehicleType = ({ mode: propMode }) => {
               size: String(selectedVehicle.size || ''),
               is_taxi: selectedVehicle.is_taxi || 'taxi',
               is_accept_share_ride: Number(selectedVehicle.is_accept_share_ride || 0),
-              delivery_category: String(selectedVehicle.delivery_category || ''),
-              delivery_distance_pricing: normalizeDeliveryDistancePricing(selectedVehicle.delivery_distance_pricing),
               status: Number(selectedVehicle.status ?? (selectedVehicle.active !== false ? 1 : 0)),
               active: selectedVehicle.active !== false && Number(selectedVehicle.status ?? 1) !== 0,
               airport: Boolean(selectedVehicle.airport),
@@ -401,11 +353,6 @@ const VehicleType = ({ mode: propMode }) => {
     [vehiclePreferences],
   );
 
-  const showsDeliveryCategorySelector = useMemo(
-    () => ['delivery', 'both'].includes(normalizeTransportType(formData.transport_type)),
-    [formData.transport_type],
-  );
-
   const updateForm = (field, value) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
@@ -425,10 +372,6 @@ const VehicleType = ({ mode: propMode }) => {
     setErrorMessage('');
 
     try {
-      if (showsDeliveryCategorySelector && !formData.delivery_category) {
-        throw new Error('Choose a delivery category for this delivery-enabled vehicle type.');
-      }
-
       const payload = {
         name: formData.name.trim(),
         short_description: formData.short_description.trim(),
@@ -443,24 +386,6 @@ const VehicleType = ({ mode: propMode }) => {
         size: formData.size,
         is_taxi: normalizeTaxiMode(formData.is_taxi || formData.transport_type),
         is_accept_share_ride: Number(formData.is_accept_share_ride || 0),
-        delivery_category: showsDeliveryCategorySelector ? formData.delivery_category : '',
-        delivery_distance_pricing: showsDeliveryCategorySelector
-          ? {
-              enabled: Boolean(formData.delivery_distance_pricing?.enabled),
-              base_price: Number(formData.delivery_distance_pricing?.base_price || 0),
-              free_distance: Number(formData.delivery_distance_pricing?.free_distance || 0),
-              distance_price: Number(formData.delivery_distance_pricing?.distance_price || 0),
-              free_time: Number(formData.delivery_distance_pricing?.free_time || 0),
-              time_price: Number(formData.delivery_distance_pricing?.time_price || 0),
-            }
-          : {
-              enabled: false,
-              base_price: 0,
-              free_distance: 0,
-              distance_price: 0,
-              free_time: 0,
-              time_price: 0,
-            },
         status: formData.active ? 1 : 0,
         active: formData.active,
         airport: Boolean(formData.airport),
@@ -521,7 +446,7 @@ const VehicleType = ({ mode: propMode }) => {
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-bold text-slate-900">Vehicle Type</h1>
-              <p className="mt-1 text-sm text-slate-500">Manage the ride and delivery vehicle catalog.</p>
+              <p className="mt-1 text-sm text-slate-500">Manage the ride vehicle catalog.</p>
             </div>
             <button
               onClick={() => navigate('/admin/pricing/vehicle-type/create')}
@@ -533,7 +458,7 @@ const VehicleType = ({ mode: propMode }) => {
           </div>
         </div>
 
-        <div className="mb-6 grid grid-cols-1 gap-5 md:grid-cols-3">
+        <div className="mb-6 grid grid-cols-1 gap-5 md:grid-cols-2">
           <div className="rounded-2xl border border-slate-200 bg-white p-5">
             <div className="flex items-center gap-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-orange-50 text-orange-500">
@@ -553,17 +478,6 @@ const VehicleType = ({ mode: propMode }) => {
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Active</p>
                 <p className="text-2xl font-bold text-slate-900">{vehicles.filter((item) => item.active !== false).length}</p>
-              </div>
-            </div>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-white p-5">
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-500">
-                <Package size={20} />
-              </div>
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Delivery Types</p>
-                <p className="text-2xl font-bold text-slate-900">{vehicles.filter((item) => ['delivery', 'both'].includes(String(item.transport_type || '').toLowerCase())).length}</p>
               </div>
             </div>
           </div>
@@ -611,11 +525,9 @@ const VehicleType = ({ mode: propMode }) => {
                     </td>
                     <td className="px-6 py-5">
                       <span className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                        String(vehicle.transport_type || '').toLowerCase() === 'delivery'
-                          ? 'bg-orange-50 text-orange-600'
-                          : String(vehicle.transport_type || '').toLowerCase() === 'both'
-                            ? 'bg-emerald-50 text-emerald-600'
-                            : 'bg-blue-50 text-blue-600'
+                        String(vehicle.transport_type || '').toLowerCase() === 'both'
+                          ? 'bg-emerald-50 text-emerald-600'
+                          : 'bg-blue-50 text-blue-600'
                       }`}>
                         {vehicle.transport_type}
                       </span>
@@ -685,14 +597,7 @@ const VehicleType = ({ mode: propMode }) => {
             <label className={labelClass}>Transport Type *</label>
             <select
               value={formData.transport_type}
-              onChange={(e) => {
-                const nextTransportType = e.target.value;
-                updateForm('transport_type', nextTransportType);
-                if (!['delivery', 'both'].includes(normalizeTransportType(nextTransportType))) {
-                  updateForm('delivery_category', '');
-                  updateForm('delivery_distance_pricing', normalizeDeliveryDistancePricing());
-                }
-              }}
+              onChange={(e) => updateForm('transport_type', e.target.value)}
               className={inputClass}
             >
                <option value="">Select Transport Type</option>
@@ -700,9 +605,6 @@ const VehicleType = ({ mode: propMode }) => {
                  <option key={t.id || t._id || t.name} value={t.name}>{t.display_name}</option>
                ))}
             </select>
-            <p className="mt-2 text-xs text-slate-500">
-              Choose `Both` for vehicle types like bikes that can handle ride and parcel flows.
-            </p>
           </div>
 
           <div>
@@ -713,159 +615,6 @@ const VehicleType = ({ mode: propMode }) => {
               ))}
             </select>
           </div>
-
-          {showsDeliveryCategorySelector ? (
-            <div className="lg:col-span-2">
-              <label className={labelClass}>Delivery Category *</label>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                {DELIVERY_CATEGORY_OPTIONS.map((option) => {
-                  const selected = formData.delivery_category === option.id;
-
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      onClick={() => updateForm('delivery_category', option.id)}
-                      className={`rounded-[24px] border p-4 text-left transition-all ${
-                        selected
-                          ? 'border-[#0047AB] bg-[#EEF4FF] shadow-md'
-                          : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm'
-                      }`}
-                    >
-                      <div className="rounded-[20px] bg-slate-50 p-3">
-                        <img src={option.image} alt={option.title} className="mx-auto h-24 w-full object-contain" />
-                      </div>
-                      <div className="mt-4 flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-black text-slate-900">{option.title}</p>
-                          <p className="mt-1 text-xs font-medium leading-5 text-slate-500">{option.description}</p>
-                        </div>
-                        <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
-                          selected ? 'border-[#0047AB] bg-[#0047AB] text-white' : 'border-slate-300 bg-white'
-                        }`}>
-                          {selected ? <CheckCircle2 size={12} /> : null}
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="mt-2 text-xs text-slate-500">
-                This decides which delivery card this vehicle type appears under in the user parcel flow.
-              </p>
-            </div>
-          ) : null}
-
-          {showsDeliveryCategorySelector ? (
-            <div className="lg:col-span-2 rounded-[28px] border border-slate-200 bg-slate-50/70 p-5">
-              <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <label className={labelClass}>Delivery Distance Based Charges</label>
-                  <p className="text-xs text-slate-500">
-                    Enable quick parcel pricing defaults for this delivery-enabled vehicle type.
-                  </p>
-                </div>
-                <label className="inline-flex items-center gap-3 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(formData.delivery_distance_pricing?.enabled)}
-                    onChange={(e) => updateForm('delivery_distance_pricing', {
-                      ...formData.delivery_distance_pricing,
-                      enabled: e.target.checked,
-                    })}
-                    className="h-4 w-4 rounded border-slate-300"
-                  />
-                  Enable distance based charges
-                </label>
-              </div>
-
-              <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-                <div>
-                  <label className={labelClass}>Base Price</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={formData.delivery_distance_pricing?.base_price ?? ''}
-                    onChange={(e) => updateForm('delivery_distance_pricing', {
-                      ...formData.delivery_distance_pricing,
-                      base_price: e.target.value,
-                    })}
-                    className={inputClass}
-                    placeholder="45"
-                    disabled={!formData.delivery_distance_pricing?.enabled}
-                  />
-                </div>
-
-                <div>
-                  <label className={labelClass}>Free Distance (KM)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={formData.delivery_distance_pricing?.free_distance ?? ''}
-                    onChange={(e) => updateForm('delivery_distance_pricing', {
-                      ...formData.delivery_distance_pricing,
-                      free_distance: e.target.value,
-                    })}
-                    className={inputClass}
-                    placeholder="2"
-                    disabled={!formData.delivery_distance_pricing?.enabled}
-                  />
-                </div>
-
-                <div>
-                  <label className={labelClass}>Distance Price</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={formData.delivery_distance_pricing?.distance_price ?? ''}
-                    onChange={(e) => updateForm('delivery_distance_pricing', {
-                      ...formData.delivery_distance_pricing,
-                      distance_price: e.target.value,
-                    })}
-                    className={inputClass}
-                    placeholder="12"
-                    disabled={!formData.delivery_distance_pricing?.enabled}
-                  />
-                </div>
-
-                <div>
-                  <label className={labelClass}>Free Time (Min)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={formData.delivery_distance_pricing?.free_time ?? ''}
-                    onChange={(e) => updateForm('delivery_distance_pricing', {
-                      ...formData.delivery_distance_pricing,
-                      free_time: e.target.value,
-                    })}
-                    className={inputClass}
-                    placeholder="0"
-                    disabled={!formData.delivery_distance_pricing?.enabled}
-                  />
-                </div>
-
-                <div>
-                  <label className={labelClass}>Time Price</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={formData.delivery_distance_pricing?.time_price ?? ''}
-                    onChange={(e) => updateForm('delivery_distance_pricing', {
-                      ...formData.delivery_distance_pricing,
-                      time_price: e.target.value,
-                    })}
-                    className={inputClass}
-                    placeholder="0"
-                    disabled={!formData.delivery_distance_pricing?.enabled}
-                  />
-                </div>
-              </div>
-
-              <p className="mt-3 text-xs text-slate-500">
-                This section only appears when the vehicle supports `Delivery` or `Both`.
-              </p>
-            </div>
-          ) : null}
 
           <div>
             <label className={labelClass}>Preview Image</label>
@@ -964,7 +713,7 @@ const VehicleType = ({ mode: propMode }) => {
                 value={formData.short_description}
                 onChange={(e) => updateForm('short_description', e.target.value)}
                 className={inputClass}
-                placeholder="Normal Delivery"
+                placeholder="Normal Ride"
               />
             </div>
           </div>
@@ -976,7 +725,7 @@ const VehicleType = ({ mode: propMode }) => {
               value={formData.name}
               onChange={(e) => updateForm('name', e.target.value)}
               className={inputClass}
-              placeholder="Parcel"
+              placeholder="Sedan"
             />
           </div>
 
@@ -1017,7 +766,7 @@ const VehicleType = ({ mode: propMode }) => {
               value={formData.description}
               onChange={(e) => updateForm('description', e.target.value)}
               className={inputClass}
-              placeholder="Parcel Delivery"
+              placeholder="Comfortable sedan rides"
             />
           </div>
 

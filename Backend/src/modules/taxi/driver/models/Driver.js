@@ -55,6 +55,9 @@ const driverSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    // Shown to a customer who is sent a ride this driver published or assigned.
+    business_name: { type: String, default: '', trim: true, maxlength: 80 },
+    customer_contact_phone: { type: String, default: '', trim: true, maxlength: 15 },
     owner_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'TaxiOwner',
@@ -217,6 +220,9 @@ const driverSchema = new mongoose.Schema(
       enum: ['commercial', 'private', ''],
       default: '',
     },
+    // Admin has seen the commercial permit of the vehicle the driver registered with.
+    // Until then that vehicle does not count as commercial for Elite / Pro.
+    vehicle_usage_verified: { type: Boolean, default: false },
     // `routeBooking` above is the older single-anchor version of this and is
     // kept only so existing drivers keep matching. New clients use route_mode.
     route_mode: {
@@ -229,16 +235,15 @@ const driverSchema = new mongoose.Schema(
       ref: 'TaxiDriverRoute',
       default: null,
     },
+    // Mode / route changes made today, for the admin per-day limit.
+    route_switch_day: { type: String, default: '' },
+    route_switch_count: { type: Number, default: 0 },
     max_routes_override: {
       type: Number,
       default: null,
       min: 0,
     },
     pooling_enabled: {
-      type: Boolean,
-      default: false,
-    },
-    delivery_enabled: {
       type: Boolean,
       default: false,
     },
@@ -265,6 +270,11 @@ const driverSchema = new mongoose.Schema(
       },
     },
     city: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    state: {
       type: String,
       default: '',
       trim: true,

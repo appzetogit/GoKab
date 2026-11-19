@@ -8,7 +8,6 @@ import { clearCurrentRide, getCurrentRide } from '../../services/currentRideServ
 import carIcon from '../../../../assets/icons/car.png';
 import bikeIcon from '../../../../assets/icons/bike.png';
 import autoIcon from '../../../../assets/icons/auto.png';
-import deliveryIcon from '../../../../assets/icons/Delivery.png';
 import { useSettings } from '../../../../shared/context/SettingsContext';
 
 const TIP_OPTIONS = [0, 20, 50, 100];
@@ -43,14 +42,12 @@ const isLikelyVehiclePhoto = (value = '') => /^(https?:|data:image\/|blob:|\/upl
 const isCollectionPaid = (collection = null) =>
   Boolean(collection?.paidAt) || PAID_COLLECTION_STATUSES.has(String(collection?.status || '').trim().toLowerCase());
 
-const getVehicleIcon = (serviceType = 'ride', driver = {}) => {
+const getVehicleIcon = (driver = {}) => {
   const customIcon = String(driver.vehicleIconUrl || driver.map_icon || driver.icon || '').trim();
   if (customIcon) return customIcon;
 
-  const normalizedService = String(serviceType || '').toLowerCase();
   const iconType = String(driver.vehicleIconType || driver.vehicleType || '').toLowerCase();
 
-  if (normalizedService === 'parcel') return deliveryIcon;
   if (iconType.includes('bike')) return bikeIcon;
   if (iconType.includes('auto')) return autoIcon;
   return carIcon;
@@ -110,20 +107,19 @@ const RideComplete = () => {
   const paymentMethodLabel = PAYMENT_OPTIONS.find((option) => option.id === selectedPaymentMethod)?.label || paymentMethod;
   const pickup = state.pickup || 'Pickup';
   const drop = state.drop || 'Drop';
-  const serviceType = String(state.serviceType || state.type || 'ride').toLowerCase();
   const driver = state.driver || {
     name: 'Captain',
     rating: '4.9',
-    vehicle: serviceType === 'parcel' ? 'Delivery' : 'Taxi',
+    vehicle: 'Taxi',
     plate: 'Assigned',
     profileImage: '',
     vehicleImage: '',
   };
 
   const driverImage = driver.profileImage || '';
-  const vehicleLabel = driver.vehicle || driver.vehicleType || (serviceType === 'parcel' ? 'Delivery' : 'Taxi');
+  const vehicleLabel = driver.vehicle || driver.vehicleType || 'Taxi';
   const hasVehiclePhoto = isLikelyVehiclePhoto(driver.vehicleImage) && !vehicleImageBroken;
-  const vehicleVisual = hasVehiclePhoto ? driver.vehicleImage : getVehicleIcon(serviceType, {
+  const vehicleVisual = hasVehiclePhoto ? driver.vehicleImage : getVehicleIcon({
     ...driver,
     vehicleIconUrl: driver.vehicleIconUrl || state.vehicleIconUrl || state.vehicle?.vehicleIconUrl || state.vehicle?.icon || '',
   });
@@ -477,13 +473,13 @@ const RideComplete = () => {
           <div>
             <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">
               {isRideFinalized
-                ? (serviceType === 'parcel' ? 'Delivery Completed' : 'Ride Completed')
-                : (serviceType === 'parcel' ? 'Reached Destination' : 'Reached Destination')}
+                ? 'Ride Completed'
+                : 'Reached Destination'}
             </p>
             <h1 className="text-[22px] font-black text-slate-900">
               {isRideFinalized
-                ? (serviceType === 'parcel' ? 'Package delivered' : 'You have arrived')
-                : (serviceType === 'parcel' ? 'Package reached destination' : 'Driver reached destination')}
+                ? 'You have arrived'
+                : 'Driver reached destination'}
             </h1>
           </div>
         </div>

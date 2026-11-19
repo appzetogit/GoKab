@@ -428,7 +428,6 @@ const createScheduledRidePreview = (ride) => ({
         fare: ride.fare,
         baseFare: ride.baseFare,
         bookingMode: ride.bookingMode || 'normal',
-        parcel: ride.parcel || null,
         intercity: ride.intercity || null,
         user: ride.user || null,
         pickupAddress: ride.pickupAddress || '',
@@ -440,13 +439,11 @@ const createScheduledRidePreview = (ride) => ({
 
 const normalizeJobType = (job = {}) => {
     const value = String(job.type || job.serviceType || 'ride').toLowerCase();
-    if (value === 'parcel') return 'parcel';
     if (value === 'intercity') return 'intercity';
     return 'ride';
 };
 
 const getJobTitle = (type) => {
-    if (type === 'parcel') return 'Delivery';
     if (type === 'intercity') return 'Intercity Ride';
     return 'Taxi Ride';
 };
@@ -868,7 +865,7 @@ const DriverHome = () => {
 
     const fetchActiveJob = useCallback(async (type = 'ride') => {
         const normalizedType = String(type || 'ride').toLowerCase();
-        const endpoint = normalizedType === 'parcel' ? '/deliveries/active/me' : '/rides/active/me';
+        const endpoint = '/rides/active/me';
         const driverToken = getLocalDriverToken();
         const response = await api.get(endpoint, {
             ...withDriverAuthorization(driverToken),
@@ -1071,9 +1068,8 @@ const DriverHome = () => {
 
         (async () => {
             try {
-                const [dRes, activeDelivery, activeRide] = await Promise.allSettled([
+                const [dRes, activeRide] = await Promise.allSettled([
                     hydrateDriverState(),
-                    fetchActiveJob('parcel'),
                     fetchActiveJob('ride')
                 ]);
 
@@ -1087,16 +1083,12 @@ const DriverHome = () => {
                     return;
                 }
 
-                const deliveryPayload =
-                    activeDelivery.status === 'fulfilled' ? activeDelivery.value : null;
                 const ridePayload =
                     activeRide.status === 'fulfilled' ? activeRide.value : null;
 
-                const currentJob = deliveryPayload?.rideId
-                    ? deliveryPayload
-                    : ridePayload?.rideId
-                        ? ridePayload
-                        : null;
+                const currentJob = ridePayload?.rideId
+                    ? ridePayload
+                    : null;
 
                 if (currentJob?.rideId) {
                     const currentType = normalizeJobType(currentJob);
@@ -1522,17 +1514,13 @@ const DriverHome = () => {
             }
 
             try {
-                const [activeDelivery, activeRide] = await Promise.allSettled([
-                    fetchActiveJob('parcel'),
+                const [activeRide] = await Promise.allSettled([
                     fetchActiveJob('ride'),
                 ]);
-                const deliveryPayload = activeDelivery.status === 'fulfilled' ? activeDelivery.value : null;
                 const ridePayload = activeRide.status === 'fulfilled' ? activeRide.value : null;
-                const currentJob = deliveryPayload?.rideId
-                    ? deliveryPayload
-                    : ridePayload?.rideId
-                        ? ridePayload
-                        : null;
+                const currentJob = ridePayload?.rideId
+                    ? ridePayload
+                    : null;
 
                 if (currentJob?.rideId) {
                     openActiveJob(currentJob);
@@ -2181,7 +2169,7 @@ const DriverHome = () => {
                                                     <div className="flex items-start justify-between gap-3">
                                                         <div className="min-w-0">
                                                             <p className="truncate text-[14px] font-black text-slate-950">
-                                                                {ride.type === 'parcel' ? 'Scheduled delivery' : ride.type === 'intercity' ? 'Scheduled intercity ride' : 'Scheduled ride'}
+                                                                {ride.type === 'intercity' ? 'Scheduled intercity ride' : 'Scheduled ride'}
                                                             </p>
                                                             <p className="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-blue-500">
                                                                 {formatScheduledDateTime(ride.scheduledAt)}

@@ -11,6 +11,13 @@ import {
   unpublishRide,
 } from '../services/feedService.js';
 import { getLiveMapSnapshot } from '../../services/liveMapService.js';
+import {
+  approveRideApplicant,
+  listRideApplicants,
+  rejectRideApplicant,
+  requestPublishedRide,
+  withdrawRideRequest,
+} from '../services/rideRequestService.js';
 import { openEscrowDispute, reportUnsecureRide } from '../services/escrowService.js';
 import { getEarningsSummary, listCommissionEarnings, setWeeklyEarningsGoal } from '../services/earningsService.js';
 import { addContact, listContacts, listWorkedWith, removeContact } from '../services/contactService.js';
@@ -439,4 +446,52 @@ export const postDriverLeadMessageController = asyncHandler(async (req, res) => 
 
 export const liveMapController = asyncHandler(async (req, res) => {
   res.json({ success: true, data: await getLiveMapSnapshot(req.auth.sub) });
+});
+
+// ---------------------------------------------------------------------------
+// Ride requests: a driver asks for a published ride, the publisher approves
+// ---------------------------------------------------------------------------
+
+export const requestFeedRideController = asyncHandler(async (req, res) => {
+  res.json({
+    success: true,
+    data: await requestPublishedRide({ driverId: req.auth.sub, rideId: req.params.rideId, note: req.body?.note }),
+  });
+});
+
+export const withdrawFeedRideRequestController = asyncHandler(async (req, res) => {
+  res.json({
+    success: true,
+    data: await withdrawRideRequest({ driverId: req.auth.sub, rideId: req.params.rideId }),
+  });
+});
+
+export const listRideApplicantsController = asyncHandler(async (req, res) => {
+  res.json({
+    success: true,
+    data: await listRideApplicants({ driverId: req.auth.sub, rideId: req.params.rideId, status: req.query.status }),
+  });
+});
+
+export const approveRideApplicantController = asyncHandler(async (req, res) => {
+  res.json({
+    success: true,
+    data: await approveRideApplicant({
+      driverId: req.auth.sub,
+      rideId: req.params.rideId,
+      applicantId: req.params.driverId,
+    }),
+  });
+});
+
+export const rejectRideApplicantController = asyncHandler(async (req, res) => {
+  res.json({
+    success: true,
+    data: await rejectRideApplicant({
+      driverId: req.auth.sub,
+      rideId: req.params.rideId,
+      applicantId: req.params.driverId,
+      reason: req.body?.reason,
+    }),
+  });
 });

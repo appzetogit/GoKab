@@ -71,12 +71,6 @@ const safetyAlertSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
-    deliveryId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Delivery',
-      default: null,
-      index: true,
-    },
     riderName: {
       type: String,
       default: '',

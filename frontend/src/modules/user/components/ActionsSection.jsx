@@ -58,7 +58,7 @@ const ActionsSection = () => {
         <h2 className="text-[19.5px] font-extrabold text-primary tracking-tight">What do you need today?</h2>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4">
         <ActionCard
           title="Ride"
           description="Bike, auto, and cab rides."
@@ -68,17 +68,6 @@ const ActionsSection = () => {
           buttonClass="bg-orange-500"
           buttonText="Book Now"
           path="/ride/select-location"
-        />
-
-        <ActionCard
-          title="Delivery"
-          description="Send parcels across the city."
-          image="/5_Parcel.png"
-          surfaceClass="bg-gradient-to-br from-indigo-50/80 via-white/80 to-indigo-100/60"
-          titleClass="text-slate-900"
-          buttonClass="bg-indigo-500"
-          buttonText="Send Now"
-          path="/parcel/type"
         />
       </div>
     </div>

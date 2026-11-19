@@ -8,7 +8,6 @@ export default function AccountTypeSettings() {
     vendor_max_vehicles: 4,
     super_fleet_min_vehicles: 5,
     grace_period_days: 30,
-    delivery_module_globally_enabled: true,
     pooling_module_globally_enabled: true,
     copy_individual: '',
     copy_vendor: '',
@@ -29,7 +28,6 @@ export default function AccountTypeSettings() {
         vendor_max_vehicles: data.vendor_max_vehicles ?? 4,
         super_fleet_min_vehicles: data.super_fleet_min_vehicles ?? 5,
         grace_period_days: data.grace_period_days ?? 30,
-        delivery_module_globally_enabled: Boolean(data.delivery_module_globally_enabled),
         pooling_module_globally_enabled: Boolean(data.pooling_module_globally_enabled),
         copy_individual: data.copy_individual || '',
         copy_vendor: data.copy_vendor || '',
@@ -104,19 +102,6 @@ export default function AccountTypeSettings() {
           </h3>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="p-4 bg-gray-50 border border-gray-200 rounded-2xl flex items-center justify-between">
-              <div>
-                <p className="text-sm font-black text-gray-900">Delivery / Parcel Global Master Switch</p>
-                <p className="text-xs text-gray-500">If OFF, no driver can enable delivery regardless of subscription tier.</p>
-              </div>
-              <input
-                type="checkbox"
-                checked={settings.delivery_module_globally_enabled}
-                onChange={(e) => setSettings({ ...settings, delivery_module_globally_enabled: e.target.checked })}
-                className="w-6 h-6 accent-indigo-600 rounded cursor-pointer"
-              />
-            </div>
-
             <div className="p-4 bg-gray-50 border border-gray-200 rounded-2xl flex items-center justify-between">
               <div>
                 <p className="text-sm font-black text-gray-900">Pooling / Carpool Global Master Switch</p>

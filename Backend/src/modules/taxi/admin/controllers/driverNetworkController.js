@@ -16,10 +16,12 @@ import {
   getDriverNetworkSettings,
 } from '../../services/appSettingsService.js';
 import { DriverSubscription } from '../../driver/models/DriverSubscription.js';
+import { createDriver as createAdminDriver } from '../services/adminService.js';
 import {
   applyCategoryFromSubscription,
   downgradeToLower,
   getPrimeSlotUsage,
+  vehicleUsageSummary,
 } from '../../services/driverCategoryService.js';
 import {
   releasePublishedRide,
@@ -62,7 +64,17 @@ export const updateNetworkSettingsController = asyncHandler(async (req, res) => 
   // create a setting nothing reads.
   for (const [key, value] of Object.entries(req.body || {})) {
     if (!(key in DEFAULT_DRIVER_NETWORK_SETTINGS)) continue;
-    next[key] = typeof DEFAULT_DRIVER_NETWORK_SETTINGS[key] === 'number' ? Number(value) : value;
+    const defaultValue = DEFAULT_DRIVER_NETWORK_SETTINGS[key];
+    if (typeof defaultValue === 'number') {
+      next[key] = Number(value);
+    } else if (typeof defaultValue === 'boolean') {
+      // A form posts "false"; stored as a string it would read as true.
+      next[key] = typeof value === 'boolean'
+        ? value
+        : !['false', '0', 'no', 'off', ''].includes(String(value).trim().toLowerCase());
+    } else {
+      next[key] = value;
+    }
   }
 
   await AdminBusinessSetting.updateOne(
@@ -112,6 +124,252 @@ export const listPrimeSlotsController = asyncHandler(async (req, res) => {
       })),
     },
   });
+});
+
+// Every city with its Elite (Prime) limit: the city's own number, the default it falls back to,
+// and how many seats are taken.
+export const listCityPrimeLimitsController = asyncHandler(async (req, res) => {
+  assertNetworkAdmin(req);
+
+  const [cities, settings, usage] = await Promise.all([
+    ServiceLocation.find({}).select('name prime_limit').sort({ name: 1 }).lean(),
+    getDriverNetworkSettings(),
+    PrimeCitySlot.aggregate([{ $group: { _id: '$service_location_id', n: { $sum: 1 } } }]),
+  ]);
+  const usedBy = new Map(usage.map((row) => [String(row._id), row.n]));
+  const defaultLimit = Math.max(0, Number(settings.prime_per_city ?? 5));
+
+  res.json({
+    success: true,
+    data: {
+      default_limit: defaultLimit,
+      results: cities.map((city) => {
+        const own = city.prime_limit === null || city.prime_limit === undefined ? null : Number(city.prime_limit);
+        const limit = own === null ? defaultLimit : own;
+        const used = usedBy.get(String(city._id)) || 0;
+        return {
+          id: String(city._id),
+          name: city.name,
+          own_limit: own,
+          limit,
+          used,
+          left: Math.max(0, limit - used),
+        };
+      }),
+    },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Elite Drivers module: create a driver with a plan in one go, and list Elite drivers.
+// Plans: prime = Elite, middle = Pro, lower = Basic. Elite needs a free slot in the city.
+// ---------------------------------------------------------------------------
+
+const PLAN_LABEL = { prime: 'Elite', middle: 'Pro', lower: 'Basic' };
+
+// Gives a driver a paid-tier plan without a payment (same steps as the category override).
+const grantPlanToDriver = async ({ driverId, category, days }) => {
+  const tier = await SubscriptionTier.findOne({ driver_category: category, is_active: true })
+    .sort({ display_order: 1 })
+    .lean();
+  if (!tier) {
+    throw new ApiError(422, `No active ${PLAN_LABEL[category]} plan exists to grant`, { category }, 'TIER_NOT_FOUND');
+  }
+
+  const validUntil = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  await DriverSubscription.updateMany({ driver_id: driverId, status: 'active' }, { $set: { status: 'cancelled' } });
+  const granted = await DriverSubscription.create({
+    driver_id: driverId,
+    tier_id: tier._id,
+    billing_cycle: 'monthly',
+    start_date: new Date(),
+    end_date: validUntil,
+    status: 'active',
+  });
+  await applyCategoryFromSubscription({ subscription: granted });
+
+  return { tier, validUntil, subscriptionId: String(granted._id) };
+};
+
+export const createDriverWithPlanController = asyncHandler(async (req, res) => {
+  assertNetworkAdmin(req);
+
+  const body = req.body || {};
+  const plan = String(body.plan || 'lower').trim().toLowerCase();
+  if (!PLAN_LABEL[plan]) {
+    throw new ApiError(422, 'plan must be prime (Elite), middle (Pro) or lower (Basic)', null, 'INVALID_PLAN');
+  }
+
+  const days = body.plan_days === undefined || body.plan_days === '' ? 30 : Number(body.plan_days);
+  if (plan !== 'lower' && (!Number.isInteger(days) || days < 1 || days > 3650)) {
+    throw new ApiError(422, 'plan_days must be a whole number between 1 and 3650', null, 'INVALID_DAYS');
+  }
+
+  const usage = String(body.vehicle_usage_type || '').trim().toLowerCase();
+  if (usage && !['commercial', 'private'].includes(usage)) {
+    throw new ApiError(422, 'vehicle_usage_type must be commercial or private', null, 'INVALID_USAGE_TYPE');
+  }
+  // A commercial vehicle needs its permit; the admin creating the driver is the one who saw it.
+  if (usage === 'commercial') {
+    const permit = body.documents?.commercial_permit;
+    if (!permit || !(permit.secureUrl || permit.previewUrl || permit.url || typeof permit === 'string')) {
+      throw new ApiError(422, 'Upload the commercial permit for a commercial vehicle', null, 'COMMERCIAL_PERMIT_REQUIRED');
+    }
+    body.vehicle_usage_verified = true;
+  }
+
+  // Elite and Pro are for commercial vehicles only. A private vehicle never gets them.
+  if (plan !== 'lower' && usage !== 'commercial') {
+    throw new ApiError(
+      422,
+      `${PLAN_LABEL[plan]} needs a commercial vehicle. Choose Commercial and add the commercial permit.`,
+      null,
+      'COMMERCIAL_REQUIRED',
+    );
+  }
+
+  const cityId = body.service_location_id || body.area || body.service_location || null;
+
+  // Elite takes one of the city's seats, so check before creating anything.
+  if (plan === 'prime') {
+    if (!cityId || !mongoose.isValidObjectId(cityId)) {
+      throw new ApiError(422, 'Pick the city first: Elite slots are per city', null, 'CITY_REQUIRED');
+    }
+    const usage = await getPrimeSlotUsage(cityId);
+    if (usage.left <= 0) {
+      throw new ApiError(409, 'No Elite slot is left in this city', usage, 'ELITE_SLOTS_FULL');
+    }
+  }
+
+  const driver = await createAdminDriver(body, req.auth?.admin);
+  const driverId = driver?._id;
+
+  let granted = null;
+  if (plan !== 'lower') {
+    try {
+      granted = await grantPlanToDriver({ driverId, category: plan, days });
+    } catch (error) {
+      // The driver exists (as Basic); say so, so the admin can retry from the Elite list.
+      throw new ApiError(
+        409,
+        `Driver created, but the ${PLAN_LABEL[plan]} plan could not be given: ${error.message}`,
+        { driver_id: String(driverId), plan },
+        error.code || 'PLAN_NOT_GRANTED',
+      );
+    }
+  }
+
+  res.status(201).json({
+    success: true,
+    data: {
+      driver: { id: String(driverId), name: driver.name, phone: driver.phone },
+      plan,
+      plan_label: PLAN_LABEL[plan],
+      valid_until: granted?.validUntil || null,
+    },
+  });
+});
+
+export const listEliteDriversController = asyncHandler(async (req, res) => {
+  assertNetworkAdmin(req);
+
+  const category = ['prime', 'middle'].includes(req.query.category) ? req.query.category : 'prime';
+  const drivers = await Driver.find({ driver_category: category, deletedAt: null })
+    .select('name phone city service_location_id')
+    .sort({ name: 1 })
+    .limit(500)
+    .lean();
+  const ids = drivers.map((driver) => driver._id);
+
+  const [subscriptions, slots, cities] = await Promise.all([
+    DriverSubscription.find({ driver_id: { $in: ids }, status: 'active' })
+      .sort({ end_date: -1 })
+      .select('driver_id end_date')
+      .lean(),
+    PrimeCitySlot.find({ driver_id: { $in: ids } }).select('driver_id slot_no status').lean(),
+    ServiceLocation.find({ _id: { $in: drivers.map((driver) => driver.service_location_id).filter(Boolean) } })
+      .select('name')
+      .lean(),
+  ]);
+  const endBy = new Map();
+  for (const sub of subscriptions) if (!endBy.has(String(sub.driver_id))) endBy.set(String(sub.driver_id), sub.end_date);
+  const slotBy = new Map(slots.map((slot) => [String(slot.driver_id), slot]));
+  const cityBy = new Map(cities.map((city) => [String(city._id), city.name]));
+  const now = Date.now();
+
+  res.json({
+    success: true,
+    data: {
+      category,
+      results: drivers.map((driver) => {
+        const end = endBy.get(String(driver._id)) || null;
+        return {
+          id: String(driver._id),
+          name: driver.name,
+          phone: driver.phone,
+          city: cityBy.get(String(driver.service_location_id)) || driver.city || '',
+          slot_no: slotBy.get(String(driver._id))?.slot_no ?? null,
+          valid_until: end,
+          days_left: end ? Math.max(0, Math.ceil((new Date(end).getTime() - now) / 86400000)) : null,
+        };
+      }),
+    },
+  });
+});
+
+// Drivers who registered with a commercial vehicle and are waiting for admin to see the permit.
+export const listCommercialVerificationController = asyncHandler(async (req, res) => {
+  assertNetworkAdmin(req);
+
+  const status = req.query.status === 'verified' ? 'verified' : 'pending';
+  const drivers = await Driver.find({
+    vehicle_usage_type: 'commercial',
+    vehicle_usage_verified: status === 'verified' ? true : { $ne: true },
+    deletedAt: null,
+  })
+    .select('name phone city vehicleNumber vehicleMake vehicleModel driver_category documents service_location_id')
+    .sort({ createdAt: -1 })
+    .limit(300)
+    .lean();
+
+  res.json({
+    success: true,
+    data: {
+      status,
+      results: drivers.map((driver) => {
+        const permit = driver.documents?.commercial_permit;
+        const url = typeof permit === 'string' ? permit : permit?.secureUrl || permit?.previewUrl || permit?.url || '';
+        return {
+          id: String(driver._id),
+          name: driver.name,
+          phone: driver.phone,
+          city: driver.city || '',
+          vehicle: [driver.vehicleMake, driver.vehicleModel].filter(Boolean).join(' '),
+          vehicle_number: driver.vehicleNumber || '',
+          plan: PLAN_LABEL[driver.driver_category] || 'Basic',
+          permit_url: url,
+          permit_number: (typeof permit === 'object' && (permit?.identifyNumber || permit?.identify_number)) || '',
+          permit_expiry: (typeof permit === 'object' && (permit?.expiryDate || permit?.expiry_date)) || '',
+        };
+      }),
+    },
+  });
+});
+
+export const setVehicleUsageVerifiedController = asyncHandler(async (req, res) => {
+  assertNetworkAdmin(req);
+
+  const driverId = objectId(req.params.driverId, 'driverId');
+  const verified = req.body?.verified !== false;
+  const updated = await Driver.updateOne(
+    { _id: driverId, vehicle_usage_type: 'commercial' },
+    { $set: { vehicle_usage_verified: verified } },
+  );
+  if (!updated.matchedCount) {
+    throw new ApiError(404, 'Driver not found or the vehicle is not marked commercial', null, 'DRIVER_NOT_FOUND');
+  }
+
+  res.json({ success: true, data: { driverId: String(driverId), verified } });
 });
 
 export const revokePrimeSlotController = asyncHandler(async (req, res) => {
@@ -183,6 +441,17 @@ export const overrideDriverCategoryController = asyncHandler(async (req, res) =>
 
   const driver = await Driver.findById(driverId).select('service_location_id').lean();
   if (!driver) throw new ApiError(404, 'Driver not found', null, 'DRIVER_NOT_FOUND');
+
+  // Elite and Pro are for commercial vehicles only: a driver with a private vehicle never gets them.
+  const usageSummary = await vehicleUsageSummary(driverId);
+  if (usageSummary.commercial < 1) {
+    throw new ApiError(
+      422,
+      'Elite and Pro need a commercial vehicle. This driver has none (a private vehicle cannot take them).',
+      null,
+      'COMMERCIAL_REQUIRED',
+    );
+  }
 
   const tier = await SubscriptionTier.findOne({ driver_category: category, is_active: true })
     .sort({ display_order: 1 })

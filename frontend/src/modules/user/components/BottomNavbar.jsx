@@ -2,35 +2,17 @@ import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Home, Clock, Map, User } from 'lucide-react';
-import { useSettings, normalizeAssetUrl } from '../../../shared/context/SettingsContext';
-import busIcon from '../../../assets/3d images/AutoCab/bus.png';
-
-const isEnabledFlag = (value) => {
-  if (typeof value === 'boolean') {
-    return value;
-  }
-
-  if (typeof value === 'number') {
-    return value === 1;
-  }
-
-  const normalized = String(value || '').trim().toLowerCase();
-  return ['1', 'true', 'yes', 'on', 'enabled'].includes(normalized);
-};
+import { useSettings } from '../../../shared/context/SettingsContext';
 
 const BottomNavbar = () => {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const { settings, modules, loading, hasBootstrapSettings } = useSettings();
-  const showBusService = isEnabledFlag(settings.transportRide?.enable_bus_service);
-  const busModule = (modules || []).find(m => m.service_type === 'bus' || m.name.toLowerCase() === 'bus');
-  const dynamicBusIcon = busModule?.mobile_menu_icon ? normalizeAssetUrl(busModule.mobile_menu_icon) : busIcon;
+  const { loading, hasBootstrapSettings } = useSettings();
   const showNavSkeleton = loading && !hasBootstrapSettings;
 
   const navItems = [
     { icon: Home, label: 'Ride', path: '/taxi/user' },
     { icon: Clock, label: 'Rides', path: '/taxi/user/activity' },
-    ...(showBusService ? [{ imageIcon: dynamicBusIcon, label: 'Bus', path: '/taxi/user/bus' }] : []),
     { icon: Map, label: 'Support', path: '/taxi/user/support' },
     { icon: User, label: 'Profile', path: '/taxi/user/profile' },
   ];

@@ -1,11 +1,28 @@
 import { Driver } from '../driver/models/Driver.js';
 import { DriverRoute } from '../driver/models/DriverRoute.js';
 import { nearestPointOnPolyline } from '../../../utils/geo.js';
+import { getDriverNetworkSettings } from './appSettingsService.js';
 
 // A corridor wider than this is not a route any more, and it also caps the
 // Mongo pre-filter radius so the candidate query stays cheap.
-const MAX_CORRIDOR_METERS = 50_000;
+// The real cap is the admin setting `max_corridor_km`; this is the fallback until it loads.
+let MAX_CORRIDOR_METERS = 25_000;
 const MAX_CANDIDATE_ROUTES = 500;
+let limitsLoadedAt = 0;
+
+/** Reads the admin corridor cap (cached 60 s). Call before matching in any async entry point. */
+export const refreshRouteLimits = async () => {
+  if (Date.now() - limitsLoadedAt < 60_000) return MAX_CORRIDOR_METERS;
+  limitsLoadedAt = Date.now();
+  try {
+    const settings = await getDriverNetworkSettings();
+    const km = Number(settings.max_corridor_km);
+    if (km >= 1) MAX_CORRIDOR_METERS = km * 1000;
+  } catch {
+    // keep the last known cap
+  }
+  return MAX_CORRIDOR_METERS;
+};
 
 /**
  * Does this trip fit the driver's route?
@@ -16,7 +33,7 @@ const MAX_CANDIDATE_ROUTES = 500;
  */
 export const matchRideToRoute = ({ route, pickup, drop }) => {
   const line = route?.path?.coordinates;
-  if (!Array.isArray(line) || line.length < 2 || !pickup || !drop) {
+  if (!Array.isArray(line) || line.length < 2 || !pickup) {
     return { match: false, reason: 'INVALID_ROUTE' };
   }
 
@@ -28,6 +45,17 @@ export const matchRideToRoute = ({ route, pickup, drop }) => {
   const pickupHit = nearestPointOnPolyline(line, pickup);
   if (pickupHit.distanceMeters > corridorMeters) {
     return { match: false, reason: 'PICKUP_OFF_ROUTE', pickupDistanceKm: pickupHit.distanceMeters / 1000 };
+  }
+
+  // A ride with no drop (hourly / open trip) is shown when its pickup is on the route.
+  if (!drop) {
+    return {
+      match: true,
+      pickupIndex: pickupHit.segIndex + pickupHit.t,
+      dropIndex: null,
+      pickupDistanceKm: Math.round((pickupHit.distanceMeters / 1000) * 100) / 100,
+      dropDistanceKm: null,
+    };
   }
 
   const dropHit = nearestPointOnPolyline(line, drop);
@@ -95,7 +123,8 @@ export const findDriversWhoseActiveRouteMatches = async ({
   // ride on that corridor, which a same-city filter would otherwise hide.
   ignoreServiceLocation = false,
 }) => {
-  if (!pickup || !drop) return [];
+  if (!pickup) return [];
+  await refreshRouteLimits();
 
   const routes = await DriverRoute.find({
     is_active: true,

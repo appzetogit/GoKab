@@ -142,8 +142,16 @@ const TransportRideSettings = () => {
                     type="number" 
                  />
 
-                 <InputField 
-                    label="Trip Accept/Reject Duration For Driver in Seconds" 
+                 <InputField
+                    label="Ride Search Expiry in Minutes (the ride keeps searching and stays on the driver feed until a driver accepts or this time passes)"
+                    name="ride_search_expiry_minutes"
+                    value={settings.ride_search_expiry_minutes}
+                    onChange={handleChange}
+                    type="number"
+                 />
+
+                 <InputField
+                    label="Trip Accept/Reject Duration For Driver in Seconds"
                     name="trip_accept_reject_duration_for_driver" 
                     value={settings.trip_accept_reject_duration_for_driver} 
                     onChange={handleChange} 

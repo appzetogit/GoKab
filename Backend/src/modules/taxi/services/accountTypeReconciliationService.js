@@ -12,7 +12,6 @@ export const getAccountTypeSettings = async () => {
     vendor_max_vehicles: Number(settings.vendor_max_vehicles ?? 4),
     super_fleet_min_vehicles: Number(settings.super_fleet_min_vehicles ?? 5),
     grace_period_days: Number(settings.grace_period_days ?? 10),
-    delivery_module_globally_enabled: String(settings.delivery_module_globally_enabled ?? '1') === '1',
     pooling_module_globally_enabled: String(settings.pooling_module_globally_enabled ?? '1') === '1',
     copy_individual: settings.copy_individual || 'Individual Driver: Single vehicle owned & driven by you.',
     copy_vendor: settings.copy_vendor || 'Vendor: Small fleet owner with 2 to 4 vehicles.',
@@ -29,7 +28,6 @@ export const updateAccountTypeSettings = async (payload = {}) => {
     vendor_max_vehicles: Math.max(1, Number(payload.vendor_max_vehicles ?? currentSettings.vendor_max_vehicles)),
     super_fleet_min_vehicles: Math.max(1, Number(payload.super_fleet_min_vehicles ?? currentSettings.super_fleet_min_vehicles)),
     grace_period_days: Math.max(1, Number(payload.grace_period_days ?? currentSettings.grace_period_days)),
-    delivery_module_globally_enabled: payload.delivery_module_globally_enabled !== undefined ? (payload.delivery_module_globally_enabled ? '1' : '0') : (currentSettings.delivery_module_globally_enabled ? '1' : '0'),
     pooling_module_globally_enabled: payload.pooling_module_globally_enabled !== undefined ? (payload.pooling_module_globally_enabled ? '1' : '0') : (currentSettings.pooling_module_globally_enabled ? '1' : '0'),
   };
 

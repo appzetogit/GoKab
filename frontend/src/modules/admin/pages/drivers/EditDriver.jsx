@@ -20,7 +20,6 @@ import { useTaxiTransportTypes } from '../../../../shared/hooks/useTaxiTransport
 const serviceCategoryOptions = [
   { value: 'taxi', label: 'Taxi' },
   { value: 'outstation', label: 'Outstation' },
-  { value: 'delivery', label: 'Delivery' },
   { value: 'pooling', label: 'Pooling' },
 ];
 
@@ -210,7 +209,7 @@ const EditDriver = () => {
     const fetchVehiclesForArea = async () => {
       if (!formData.area || !formData.transportType) return;
       try {
-        const typeFilter = formData.transportType.toLowerCase() === 'delivery' ? 'delivery' : 'taxi';
+        const typeFilter = 'taxi';
         const res = await fetch(`${globalThis.__LEGACY_BACKEND_ORIGIN__}/api/v1/types/${formData.area}?transport_type=${typeFilter}`);
         const data = await res.json();
         if (data.success) {

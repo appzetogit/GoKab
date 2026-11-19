@@ -193,8 +193,8 @@ const run = async () => {
     check('acceptor sees R1 as driven', vikasR1?.ride_role === 'driven');
 
     console.log('\n3  Validation');
-    const badStatus = await history(rameshToken, '&status=ongoing');
-    check('status=ongoing → 422 INVALID_STATUS', badStatus.status === 422 && badStatus.json?.code === 'INVALID_STATUS', JSON.stringify(badStatus.json));
+    const badStatus = await history(rameshToken, '&status=finished');
+    check('status=finished → 422 INVALID_STATUS', badStatus.status === 422 && badStatus.json?.code === 'INVALID_STATUS', JSON.stringify(badStatus.json));
     const badRole = await history(rameshToken, '&role=boss');
     check('role=boss → 422 INVALID_ROLE', badRole.status === 422 && badRole.json?.code === 'INVALID_ROLE', JSON.stringify(badRole.json));
 

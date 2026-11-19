@@ -22,6 +22,12 @@ export default function SubscriptionTierForm({ tier, onClose, onSuccess }) {
     map_icon_asset_url: tier?.map_icon_asset_url || '',
     badge_color_hex: tier?.badge_color_hex || '#10B981',
     is_active: tier?.is_active !== false,
+    // Driver network: which plan this is and what it may hold.
+    driver_category: tier?.driver_category || 'lower',
+    can_manage_fleet: Boolean(tier?.can_manage_fleet),
+    max_vehicles: tier?.max_vehicles ?? 0,
+    max_fleet_drivers: tier?.max_fleet_drivers ?? 0,
+    max_routes: tier?.max_routes ?? 2,
   });
 
   const [modulesList, setModulesList] = useState([]);
@@ -241,6 +247,84 @@ export default function SubscriptionTierForm({ tier, onClose, onSuccess }) {
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl text-sm font-bold"
                 />
                 <span className="text-[11px] text-gray-400 block mt-1">e.g. 1000 = driver wallet balance can drop down to -1000</span>
+              </div>
+            </div>
+          </div>
+
+          <hr className="border-gray-100" />
+
+          {/* SECTION: DRIVER NETWORK LIMITS */}
+          <div className="space-y-4">
+            <h3 className="text-xs font-black uppercase tracking-wider text-indigo-600 flex items-center gap-2">
+              <Layers size={14} /> Driver Network: Plan Level &amp; Limits
+            </h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">Plan Level</label>
+                <select
+                  value={formData.driver_category}
+                  onChange={(e) => setFormData({ ...formData, driver_category: e.target.value })}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl text-sm font-bold"
+                >
+                  <option value="lower">Basic</option>
+                  <option value="middle">Pro</option>
+                  <option value="prime">Elite</option>
+                </select>
+                <span className="text-[11px] text-gray-400 block mt-1">
+                  Decides who sees a customer ride first: Elite, then Pro, then Basic.
+                </span>
+              </div>
+
+              <div className="flex items-center gap-3 pt-6">
+                <input
+                  id="can_manage_fleet"
+                  type="checkbox"
+                  checked={formData.can_manage_fleet}
+                  onChange={(e) => setFormData({ ...formData, can_manage_fleet: e.target.checked })}
+                  className="h-5 w-5"
+                />
+                <label htmlFor="can_manage_fleet" className="text-xs font-bold text-gray-700">
+                  Can add team drivers and vehicles
+                </label>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">Max Vehicles</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={formData.max_vehicles}
+                  onChange={(e) => setFormData({ ...formData, max_vehicles: Number(e.target.value) })}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl text-sm font-bold"
+                />
+                <span className="text-[11px] text-gray-400 block mt-1">
+                  Total, including the registration vehicle. 0 = no limit (Basic plans: 1).
+                </span>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">Max Team Drivers</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={formData.max_fleet_drivers}
+                  onChange={(e) => setFormData({ ...formData, max_fleet_drivers: Number(e.target.value) })}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl text-sm font-bold"
+                />
+                <span className="text-[11px] text-gray-400 block mt-1">0 = no limit (needs the team option above).</span>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">Max Routes</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={formData.max_routes}
+                  onChange={(e) => setFormData({ ...formData, max_routes: Number(e.target.value) })}
+                  className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl text-sm font-bold"
+                />
+                <span className="text-[11px] text-gray-400 block mt-1">0 = routes not included in this plan.</span>
               </div>
             </div>
           </div>

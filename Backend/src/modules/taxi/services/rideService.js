@@ -6,11 +6,12 @@ import { RIDE_LIVE_STATUS, RIDE_STATUS } from '../constants/index.js';
 import { AdminBusinessSetting } from '../admin/models/AdminBusinessSetting.js';
 import { SetPrice } from '../admin/models/SetPrice.js';
 import { Vehicle } from '../admin/models/Vehicle.js';
+import { FleetVehicle } from '../admin/models/FleetVehicle.js';
 import { Driver } from '../driver/models/Driver.js';
+import { Owner } from '../admin/models/Owner.js';
 import { WalletTransaction } from '../driver/models/WalletTransaction.js';
 import { incrementDriverTodaySummaryForCompletedRide } from '../driver/services/driverTodaySummaryService.js';
 import { applyDriverWalletAdjustment, ensureDriverWalletCanAcceptRide, previewRideCommission, settleCompletedRideWallet } from '../driver/services/walletService.js';
-import { Delivery } from '../user/models/Delivery.js';
 import { RideBid } from '../user/models/RideBid.js';
 import { Ride } from '../user/models/Ride.js';
 import { User } from '../user/models/User.js';
@@ -20,6 +21,10 @@ import { applyPromoToRideInTransaction, releasePromoForCancelledRide } from './p
 import { findZoneByPickup } from './matchingService.js';
 import { getTipSettings } from './appSettingsService.js';
 import { getBidRideSettings } from './transportSettingsService.js';
+import { assertDriverMayTakeCustomerRide } from './tierPhaseService.js';
+import { applyReturnWaitingCharge, createReturnLegIfNeeded, loadRoundTripSummaries, normalizeReturnAt } from './roundTripService.js';
+import { resolveRideVehicle, withRideVehicle } from '../driver/services/rideVehicleService.js';
+import { carpoolSummary } from './carpoolService.js';
 
 // Booking a ride releases whatever the rider had queued in `currentRideId`, but
 // two bookings only actually conflict when both would be live at the same time.
@@ -64,7 +69,6 @@ const clearUserActiveRideIfPresent = async (user, { incomingRideIsScheduled = fa
   activeRide.status = RIDE_STATUS.CANCELLED;
   activeRide.liveStatus = RIDE_LIVE_STATUS.CANCELLED;
   await activeRide.save();
-  await syncDeliveryWithRide(activeRide);
 
   await Promise.all([
     activeRide.driverId ? Driver.findByIdAndUpdate(activeRide.driverId, { isOnRide: false }) : Promise.resolve(),
@@ -106,7 +110,7 @@ const normalizeRidePaymentMethod = (paymentMethod) => (
 
 const normalizeServiceType = (serviceType) => {
   const normalized = String(serviceType || 'ride').trim().toLowerCase();
-  return ['parcel', 'intercity'].includes(normalized) ? normalized : 'ride';
+  return normalized === 'intercity' ? normalized : 'ride';
 };
 
 const ensureUserWallet = async (userId) => {
@@ -382,24 +386,17 @@ const waitBeforeTransactionRetry = (attempt) =>
 
 const normalizeAddress = (value = '') => String(value || '').trim();
 const generateRideOtp = () => String(crypto.randomInt(1000, 10000));
+
+// A ride a driver creates for a customer carries a fixed OTP (setting
+// `network_fixed_otp`, 1234) until SMS / WhatsApp delivery is live; blank = random.
+const resolveRideOtp = async (isDriverCreated) => {
+  if (!isDriverCreated) return generateRideOtp();
+  const { getDriverNetworkSettings } = await import('./appSettingsService.js');
+  const fixed = String((await getDriverNetworkSettings()).network_fixed_otp ?? '').trim();
+  return /^\d{4}$/.test(fixed) ? fixed : generateRideOtp();
+};
 const DEFAULT_BID_STEP_AMOUNT = 10;
 const DEFAULT_MAX_BID_STEPS = 5;
-
-const normalizeParcelPayload = (parcel = {}) => ({
-  category: String(parcel.category || '').trim(),
-  weight: String(parcel.weight || '').trim(),
-  description: String(parcel.description || '').trim(),
-  deliveryCategory: String(parcel.deliveryCategory || parcel.delivery_category || '').trim().toLowerCase(),
-  goodsTypeFor: String(parcel.goodsTypeFor || parcel.goods_type_for || '').trim(),
-  deliveryScope: String(parcel.deliveryScope || (parcel.isOutstation ? 'outstation' : 'city')).trim().toLowerCase() === 'outstation'
-    ? 'outstation'
-    : 'city',
-  isOutstation: Boolean(parcel.isOutstation || String(parcel.deliveryScope || '').trim().toLowerCase() === 'outstation'),
-  senderName: String(parcel.senderName || '').trim(),
-  senderMobile: String(parcel.senderMobile || '').trim(),
-  receiverName: String(parcel.receiverName || '').trim(),
-  receiverMobile: String(parcel.receiverMobile || '').trim(),
-});
 
 const normalizeIntercityPayload = (intercity = {}) => ({
   bookingId: String(intercity.bookingId || '').trim(),
@@ -446,6 +443,20 @@ export const getScheduledStartWindowMs = async () => {
   const configured = Number(setting?.transport_ride?.scheduled_start_window_minutes);
   const minutes =
     Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_SCHEDULED_START_WINDOW_MINUTES;
+
+  return minutes * 60 * 1000;
+};
+
+const DEFAULT_SCHEDULED_DISPATCH_LEAD_MINUTES = 60;
+
+// How long before `scheduledAt` the ride is offered to drivers, so a driver is
+// found and committed well before the pickup. Admin-tunable via
+// `transport_ride.scheduled_dispatch_lead_minutes`; 0 dispatches at pickup time.
+export const getScheduledDispatchLeadMs = async () => {
+  const setting = await AdminBusinessSetting.findOne({ scope: 'default' }).select('transport_ride').lean();
+  const configured = Number(setting?.transport_ride?.scheduled_dispatch_lead_minutes);
+  const minutes =
+    Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_SCHEDULED_DISPATCH_LEAD_MINUTES;
 
   return minutes * 60 * 1000;
 };
@@ -909,8 +920,15 @@ const buildDriverVehicleAcceptFilter = async (ride) => {
 
   const vehicles = await Vehicle.find({ _id: { $in: vehicleTypeIds } }).select('name vehicle_type icon_types').lean();
   const vehicleTypeKeys = normalizeVehicleKeys(vehicles);
+  // A lead whose approved fleet has a vehicle of this type may take the ride too.
+  const fleetOwnerIds = await FleetVehicle.distinct('owner_id', {
+    vehicle_type_id: { $in: vehicleTypeIds },
+    status: 'approved',
+    active: true,
+  });
   const clauses = [
     { vehicleTypeId: { $in: vehicleTypeIds } },
+    ...(fleetOwnerIds.length ? [{ owner_id: { $in: fleetOwnerIds }, is_self_drive_owner: true }] : []),
     ...(vehicleTypeKeys.length
       ? [
           { vehicleType: { $in: vehicleTypeKeys } },
@@ -920,42 +938,6 @@ const buildDriverVehicleAcceptFilter = async (ride) => {
   ];
 
   return clauses.length > 1 ? { $or: clauses } : clauses[0];
-};
-
-const syncDeliveryWithRide = async (ride) => {
-  if (!ride || (ride.serviceType || 'ride') !== 'parcel') {
-    return null;
-  }
-
-  const payload = {
-    rideId: ride._id,
-    userId: ride.userId,
-    driverId: ride.driverId || null,
-    vehicleTypeId: ride.vehicleTypeId || null,
-    vehicleIconType: ride.vehicleIconType || '',
-    vehicleIconUrl: ride.vehicleIconUrl || '',
-    status: ride.status,
-    liveStatus: ride.liveStatus,
-    pickupLocation: ride.pickupLocation,
-    pickupAddress: normalizeAddress(ride.pickupAddress),
-    dropLocation: ride.dropLocation,
-    dropAddress: normalizeAddress(ride.dropAddress),
-    fare: ride.fare,
-    paymentMethod: ride.paymentMethod,
-    parcel: normalizeParcelPayload(ride.parcel),
-    acceptedAt: ride.acceptedAt || null,
-    startedAt: ride.startedAt || null,
-    completedAt: ride.completedAt || null,
-  };
-
-  if (ride.deliveryId) {
-    return Delivery.findByIdAndUpdate(ride.deliveryId, payload, { returnDocument: 'after' });
-  }
-
-  const delivery = await Delivery.create(payload);
-  ride.deliveryId = delivery._id;
-  await ride.save();
-  return delivery;
 };
 
 export const createRideRecord = async ({
@@ -975,6 +957,7 @@ export const createRideRecord = async ({
   serviceType,
   parcel,
   intercity,
+  stopCount,
   promo_code,
   service_location_id,
   transport_type,
@@ -983,12 +966,19 @@ export const createRideRecord = async ({
   userMaxBidFare,
   bidStepAmount,
   bookingPreferences,
+  carpool,
+  roundTrip,
   origin = 'customer_app',
   offlineCustomer = null,
   createdByDriverId = null,
   organizationOwnerId = null,
   networkNotes = '',
 }) => {
+  const hasParcelPayload = parcel && typeof parcel === 'object' && Object.values(parcel).some((v) => v !== undefined && v !== null && v !== '' && v !== false);
+  if (String(serviceType || '').trim().toLowerCase() === 'parcel' || hasParcelPayload) {
+    throw new ApiError(400, 'Parcel delivery is not available');
+  }
+
   // A Prime/Middle driver can book for a walk-in customer who has no app
   // account. Such a ride has no `User` behind it, so everything rider-scoped
   // below (dues, active-ride displacement, subscriptions, promos) is skipped
@@ -1011,6 +1001,55 @@ export const createRideRecord = async ({
   // Resolved up front because it decides whether this booking may displace the
   // ride the rider already has queued.
   const normalizedScheduledAt = normalizeScheduledAt(scheduledAt);
+
+  // A round trip books the way back for a later time; the outbound leg keeps it.
+  let roundTripFields;
+  if (roundTrip?.returnAt) {
+    if (isDriverCreated) throw new ApiError(400, 'Round trips are only for rider bookings');
+    const checked = normalizeReturnAt({
+      returnAt: roundTrip.returnAt,
+      outboundAt: normalizedScheduledAt,
+      estimatedDurationMinutes: Number(estimatedDurationMinutes || 0),
+    });
+    if (checked.error) throw new ApiError(400, checked.error, null, 'INVALID_RETURN_TIME');
+    roundTripFields = { isRoundTrip: true, legType: 'outbound', returnAt: checked.value };
+
+    // The rider may choose a return pickup and drop of their own; both or neither.
+    const place = (value) => {
+      const lat = Number(value?.lat);
+      const lng = Number(value?.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+      return { coordinates: [lng, lat], address: String(value?.address || '').trim().slice(0, 300) };
+    };
+    const returnPickup = place(roundTrip.returnPickup);
+    const returnDrop = place(roundTrip.returnDrop);
+    if (returnPickup && returnDrop) {
+      roundTripFields.returnPickupAddress = returnPickup.address;
+      roundTripFields.returnPickupCoordinates = returnPickup.coordinates;
+      roundTripFields.returnDropAddress = returnDrop.address;
+      roundTripFields.returnDropCoordinates = returnDrop.coordinates;
+    }
+  }
+  // Airport / railway carpool: this rider's seat. `fare` is the seat fare.
+  const rideOtp = await resolveRideOtp(isDriverCreated);
+  let carpoolFields;
+  if (carpool?.enabled) {
+    const stationLat = Number(carpool.station?.lat);
+    const stationLng = Number(carpool.station?.lng);
+    if (!Number.isFinite(stationLat) || !Number.isFinite(stationLng)) {
+      throw new ApiError(400, 'Carpool needs the airport or station', null, 'CARPOOL_STATION_REQUIRED');
+    }
+    if (isDriverCreated) throw new ApiError(400, 'Carpool is only for rider bookings');
+    carpoolFields = {
+      enabled: true,
+      kind: carpool.kind === 'railway' ? 'railway' : 'airport',
+      seats: clampCount(bookingPreferences?.passengers, 1, 1, 12),
+      fullFare: Math.max(0, Number(carpool.fullFare) || 0),
+      stationName: String(carpool.station?.name || '').trim().slice(0, 200),
+      stationCoordinates: [stationLng, stationLat],
+      role: '',
+    };
+  }
   const { retainedRideId } = user
     ? await clearUserActiveRideIfPresent(user, {
         incomingRideIsScheduled: isRideScheduledForFuture({ scheduledAt: normalizedScheduledAt }),
@@ -1222,12 +1261,14 @@ export const createRideRecord = async ({
       paymentMethod: effectivePaymentMethod,
       driverPaymentCollection: effectiveDriverPaymentCollection,
       subscriptionUsage: effectiveSubscriptionUsage,
-      otp: generateRideOtp(),
+      otp: rideOtp,
       service_location_id: resolvedServiceLocationId,
       transport_type: normalizedTransportType,
       pricingSnapshot,
-      parcel: normalizeParcelPayload(parcel),
       intercity: normalizeIntercityPayload(intercity),
+      stopCount: Math.min(Math.max(Math.trunc(Number(stopCount) || 0), 0), 3),
+      ...(roundTripFields ? { roundTrip: roundTripFields } : {}),
+      ...(carpoolFields ? { carpool: carpoolFields } : {}),
       scheduledAt: normalizedScheduledAt,
       status: RIDE_STATUS.SEARCHING,
       liveStatus: RIDE_LIVE_STATUS.SEARCHING,
@@ -1235,8 +1276,9 @@ export const createRideRecord = async ({
         tripType: bookingPreferences?.tripType || 'ONE_WAY',
         pickupDate: bookingPreferences?.pickupDate || '',
         pickupTime: bookingPreferences?.pickupTime || '',
-        passengers: Number(bookingPreferences?.passengers || 1),
-        luggage: Boolean(bookingPreferences?.luggage),
+        passengers: clampCount(bookingPreferences?.passengers, 1, 1, 12),
+        luggage: Boolean(bookingPreferences?.luggage) || clampCount(bookingPreferences?.luggageCount, 0, 0, 20) > 0,
+        luggageCount: clampCount(bookingPreferences?.luggageCount, 0, 0, 20),
         pooling: Boolean(bookingPreferences?.pooling),
         preferredLanguages: Array.isArray(bookingPreferences?.preferredLanguages) ? bookingPreferences.preferredLanguages : [],
         driverPreferences: Array.isArray(bookingPreferences?.driverPreferences) ? bookingPreferences.driverPreferences : [],
@@ -1247,7 +1289,6 @@ export const createRideRecord = async ({
       user.currentRideId = retainedRideId || ride._id;
       await user.save();
     }
-    await syncDeliveryWithRide(ride);
 
     return ride;
   }
@@ -1290,12 +1331,14 @@ export const createRideRecord = async ({
             paymentMethod: effectivePaymentMethod,
             driverPaymentCollection: effectiveDriverPaymentCollection,
             subscriptionUsage: effectiveSubscriptionUsage,
-            otp: generateRideOtp(),
+            otp: rideOtp,
             service_location_id: resolvedServiceLocationId,
             transport_type: normalizedTransportType,
             pricingSnapshot,
-            parcel: normalizeParcelPayload(parcel),
             intercity: normalizeIntercityPayload(intercity),
+      stopCount: Math.min(Math.max(Math.trunc(Number(stopCount) || 0), 0), 3),
+      ...(roundTripFields ? { roundTrip: roundTripFields } : {}),
+      ...(carpoolFields ? { carpool: carpoolFields } : {}),
             scheduledAt: normalizedScheduledAt,
             status: RIDE_STATUS.SEARCHING,
             liveStatus: RIDE_LIVE_STATUS.SEARCHING,
@@ -1303,8 +1346,9 @@ export const createRideRecord = async ({
               tripType: bookingPreferences?.tripType || 'ONE_WAY',
               pickupDate: bookingPreferences?.pickupDate || '',
               pickupTime: bookingPreferences?.pickupTime || '',
-              passengers: Number(bookingPreferences?.passengers || 1),
-              luggage: Boolean(bookingPreferences?.luggage),
+              passengers: clampCount(bookingPreferences?.passengers, 1, 1, 12),
+              luggage: Boolean(bookingPreferences?.luggage) || clampCount(bookingPreferences?.luggageCount, 0, 0, 20) > 0,
+              luggageCount: clampCount(bookingPreferences?.luggageCount, 0, 0, 20),
               pooling: Boolean(bookingPreferences?.pooling),
               preferredLanguages: Array.isArray(bookingPreferences?.preferredLanguages) ? bookingPreferences.preferredLanguages : [],
               driverPreferences: Array.isArray(bookingPreferences?.driverPreferences) ? bookingPreferences.driverPreferences : [],
@@ -1332,7 +1376,6 @@ export const createRideRecord = async ({
       });
 
       await session.commitTransaction();
-      await syncDeliveryWithRide(rideDoc);
       return rideDoc;
     } catch (error) {
       lastError = error;
@@ -1360,7 +1403,6 @@ export const createRideRecord = async ({
 
 export const getRideDetails = async (rideId) => {
   const ride = await Ride.findById(rideId)
-    .populate('deliveryId')
     .populate('userId', 'name phone')
     .populate('driverId', 'name phone profileImage vehicleType vehicleIconType vehicleNumber vehicleColor vehicleMake vehicleModel vehicleImage rating');
 
@@ -1379,7 +1421,6 @@ const activeRideStatuses = [RIDE_STATUS.SEARCHING, RIDE_STATUS.ACCEPTED, RIDE_ST
 
 const populateRideRealtime = async (rideId) => {
   const ride = await Ride.findById(rideId)
-    .populate('deliveryId')
     .populate('userId', 'name phone')
     .populate('driverId', 'name phone profileImage vehicleType vehicleIconType vehicleNumber vehicleColor vehicleMake vehicleModel vehicleImage rating');
 
@@ -1390,10 +1431,27 @@ const populateRideRealtime = async (rideId) => {
   return ride;
 };
 
+const clampCount = (value, fallback, min, max) => {
+  const n = Math.trunc(Number(value));
+  return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : fallback;
+};
+
 export const serializeRideRealtime = (ride) => ({
+  carpool: carpoolSummary(ride),
+  enRouteAt: ride.enRouteAt || null,
+  passengers: ride.bookingPreferences?.passengers || 1,
+  luggageCount: ride.bookingPreferences?.luggageCount || 0,
   rideId: String(ride._id),
+  roundTrip: ride.roundTrip?.isRoundTrip
+    ? {
+        isRoundTrip: true,
+        legType: ride.roundTrip.legType,
+        returnAt: ride.roundTrip.returnAt,
+        waitingMinutes: ride.roundTrip.waitingMinutes || 0,
+        waitingCharge: ride.roundTrip.waitingCharge || 0,
+      }
+    : null,
   room: getRideRoom(ride._id),
-  deliveryId: ride.deliveryId?._id ? String(ride.deliveryId._id) : ride.deliveryId ? String(ride.deliveryId) : null,
   type: ride.serviceType || 'ride',
   serviceType: ride.serviceType || 'ride',
   status: ride.status,
@@ -1451,8 +1509,8 @@ export const serializeRideRealtime = (ride) => ({
       }
     : null,
   otp: ride.otp || '',
-  parcel: ride.deliveryId?.parcel || ride.parcel || null,
   intercity: ride.intercity || null,
+  stopCount: ride.stopCount || 0,
   commissionAmount: ride.$locals?.commissionPreview
     ? ride.$locals.commissionPreview.commissionAmount
     : ride.commissionAmount,
@@ -1498,7 +1556,8 @@ export const serializeRideRealtime = (ride) => ({
       }
     : null,
   user: ride.userId,
-  driver: ride.driverId,
+  // The driver card shows the vehicle chosen for this ride, if one was.
+  driver: withRideVehicle(ride, ride.driverId),
   messages: (ride.messages || []).slice(-30).map((message) => ({
     id: String(message._id),
     senderRole: message.senderRole,
@@ -1643,7 +1702,7 @@ const serializeDriverHistoryExtras = (ride, entityId) => {
             id: String(ride.driverId._id),
             name: ride.driverId.name || '',
             phone: ride.driverId.phone || '',
-            vehicleNumber: ride.driverId.vehicleNumber || '',
+            vehicleNumber: resolveRideVehicle(ride, ride.driverId)?.number || ride.driverId.vehicleNumber || '',
           }
         : null,
     split:
@@ -1656,18 +1715,500 @@ const serializeDriverHistoryExtras = (ride, entityId) => {
   };
 };
 
+/** One ride in a history list; the fields every caller of GET /rides has always had. */
+const serializeHistoryItem = (ride, { role, entityId }) => ({
+  carpool: carpoolSummary(ride),
+  passengers: ride.bookingPreferences?.passengers || 1,
+  luggageCount: ride.bookingPreferences?.luggageCount || 0,
+  rideId: String(ride._id),
+  type: ride.serviceType || 'ride',
+  serviceType: ride.serviceType || 'ride',
+  status: ride.status,
+  liveStatus: ride.liveStatus,
+  fare: ride.fare,
+  baseFare: Number(ride.baseFare || ride.fare || 0),
+  bookingMode: ride.bookingMode || 'normal',
+  biddingStatus: ride.biddingStatus || 'none',
+  bidStepAmount: Number(ride.bidStepAmount || DEFAULT_BID_STEP_AMOUNT),
+  bidFloorFare: Number(ride.bidFloorFare ?? ride.baseFare ?? ride.fare ?? 0),
+  userMaxBidFare: Number(ride.userMaxBidFare || ride.fare || 0),
+  bidCeilingMaxFare: Number(ride.bidCeilingMaxFare || ride.userMaxBidFare || ride.fare || 0),
+  acceptedBidId: ride.acceptedBidId ? String(ride.acceptedBidId) : null,
+  estimatedDistanceMeters: ride.estimatedDistanceMeters || 0,
+  estimatedDurationMinutes: ride.estimatedDurationMinutes || 0,
+  paymentMethod: ride.paymentMethod,
+  otp: historyOtpFor(ride, { role, entityId }),
+  intercity: ride.intercity || null,
+  stopCount: ride.stopCount || 0,
+  pricingSnapshot: ride.pricingSnapshot || null,
+  commissionAmount: ride.commissionAmount,
+  driverEarnings: ride.driverEarnings,
+  vehicleIconType: ride.vehicleIconType,
+  // Keep history responses light; giant data URLs can stall the activity screen.
+  vehicleIconUrl: String(ride.vehicleIconUrl || '').startsWith('data:') ? '' : (ride.vehicleIconUrl || ''),
+  pickupLocation: ride.pickupLocation,
+  pickupAddress: ride.pickupAddress || '',
+  dropLocation: ride.dropLocation,
+  dropAddress: ride.dropAddress || '',
+  scheduledAt: ride.scheduledAt || null,
+  roundTrip: ride.roundTrip?.isRoundTrip
+    ? {
+        isRoundTrip: true,
+        legType: ride.roundTrip.legType,
+        returnAt: ride.roundTrip.returnAt,
+        returnRideId: ride.roundTrip.returnRideId ? String(ride.roundTrip.returnRideId) : null,
+        parentRideId: ride.roundTrip.parentRideId ? String(ride.roundTrip.parentRideId) : null,
+      }
+    : null,
+  acceptedAt: ride.acceptedAt,
+  arrivedAt: ride.arrivedAt,
+  startedAt: ride.startedAt,
+  completedAt: ride.completedAt,
+  feedback: ride.feedback || null,
+  createdAt: ride.createdAt,
+  updatedAt: ride.updatedAt,
+  user: role === 'driver' || role === 'owner' ? (ride.userId || null) : null,
+  driver: role === 'user' || role === 'owner' ? (ride.driverId || null) : null,
+  ...(role === 'driver' ? serializeDriverHistoryExtras(ride, entityId) : {}),
+});
+
+/**
+ * The pickup OTP is the rider's proof that the right driver turned up: only
+ * the rider and the driver actually driving may see it. Owners and
+ * publishers of a ride someone else drives get ''.
+ */
+const historyOtpFor = (ride, { role, entityId }) => {
+  if (role === 'user') return ride.otp || '';
+  if (role !== 'driver') return '';
+  const drivenBy = ride.driverId?._id || ride.driverId || null;
+  // The driver gets a driver-created ride's code from the customer, not from us.
+  if (drivenBy && String(drivenBy) === String(entityId)) return ride.origin === 'driver_created' ? '' : ride.otp || '';
+  // The publisher tells the customer the code until SMS / WhatsApp covers it.
+  const publisher = ride.created_by_driver_id?._id || ride.created_by_driver_id || null;
+  return ride.origin === 'driver_created' && publisher && String(publisher) === String(entityId) ? ride.otp || '' : '';
+};
+
 const HISTORY_STATUSES = new Set(['all', RIDE_STATUS.COMPLETED, RIDE_STATUS.CANCELLED]);
 const HISTORY_DRIVER_ROLES = new Set(['driven', 'published', 'all']);
 
-export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, page = 1, category = 'all', from, to, status = 'all', rideRole = 'driven' }) => {
+const HISTORY_ORIGINS = new Set(['all', 'customer_app', 'driver_created', 'round_trip']);
+
+const parseHistoryOrigin = (origin) => {
+  const normalized = String(origin || 'all').trim().toLowerCase();
+  if (!HISTORY_ORIGINS.has(normalized)) {
+    throw new ApiError(422, "origin must be 'all', 'customer_app', 'driver_created' or 'round_trip'", { origin }, 'INVALID_ORIGIN');
+  }
+  return normalized;
+};
+
+// Rides booked before `origin` existed are customer bookings.
+const historyOriginClause = (origin) =>
+  origin === 'driver_created'
+    ? { origin: 'driver_created' }
+    : origin === 'customer_app'
+      ? { origin: { $ne: 'driver_created' } }
+      : origin === 'round_trip'
+        ? { 'roundTrip.isRoundTrip': true }
+        : null;
+
+// ---------------------------------------------------------------------------
+// Driver "All Rides": live + finished, customer + network, one paged list
+// ---------------------------------------------------------------------------
+
+const DRIVER_LIST_STATUSES = new Set(['all', 'upcoming', 'ongoing', 'completed', 'cancelled']);
+const DRIVER_LIST_ROLES = new Set(['driven', 'published', 'created', 'assigned', 'all']);
+const UPCOMING_STATUSES = [RIDE_STATUS.SEARCHING, RIDE_STATUS.ACCEPTED];
+const LIVE_STATUSES = [RIDE_STATUS.SEARCHING, RIDE_STATUS.ACCEPTED, RIDE_STATUS.ONGOING];
+const MAX_QUERY_LENGTH = 60;
+
+const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The same buckets as `category` on the old history list, as one clause. */
+const historyCategoryClause = (category) => {
+  const normalized = String(category || 'all').trim().toLowerCase();
+  if (normalized === 'rides') return { serviceType: 'ride', scheduledAt: null };
+  if (normalized === 'outstation') {
+    return { scheduledAt: null, serviceType: 'intercity' };
+  }
+  if (normalized === 'scheduled') return { scheduledAt: { $ne: null } };
+  return null;
+};
+
+const driverRoleClause = (role, me) => {
+  switch (role) {
+    case 'driven':
+      return { driverId: me };
+    case 'published':
+      return { created_by_driver_id: me, driverId: { $ne: me } };
+    case 'created':
+      return { created_by_driver_id: me };
+    case 'assigned':
+      return { driverId: me, origin: 'driver_created', created_by_driver_id: { $ne: me } };
+    default:
+      return { $or: [{ driverId: me }, { created_by_driver_id: me }] };
+  }
+};
+
+const driverStatusClause = (status) => {
+  if (status === 'upcoming') return { status: { $in: UPCOMING_STATUSES } };
+  if (status === 'ongoing') return { status: RIDE_STATUS.ONGOING };
+  if (status === 'completed') return { status: RIDE_STATUS.COMPLETED };
+  if (status === 'cancelled') return { status: RIDE_STATUS.CANCELLED };
+  return null;
+};
+
+/** Search: pickup, drop, customer name/phone (app or walk-in), ride id suffix. */
+const driverSearchClause = async (q) => {
+  const term = String(q ?? '').trim();
+  if (!term) return null;
+  if (term.length > MAX_QUERY_LENGTH) {
+    throw new ApiError(422, `q must be at most ${MAX_QUERY_LENGTH} characters`, null, 'INVALID_QUERY');
+  }
+  const pattern = new RegExp(escapeRegex(term), 'i');
+  const users = await User.find({ $or: [{ name: pattern }, { phone: pattern }] }).select('_id').limit(200).lean();
+  const clauses = [
+    { pickupAddress: pattern },
+    { dropAddress: pattern },
+    { 'offline_customer.name': pattern },
+    { 'offline_customer.phone': pattern },
+    ...(users.length ? [{ userId: { $in: users.map((user) => user._id) } }] : []),
+  ];
+  if (/^[a-f0-9]{4,24}$/i.test(term)) {
+    clauses.push({ $expr: { $regexMatch: { input: { $toString: '$_id' }, regex: `${term.toLowerCase()}$` } } });
+  }
+  return { $or: clauses };
+};
+
+/** ongoing → 0, upcoming → 1, finished → 2: the "live first" order of status=all. */
+const BUCKET_RANK = {
+  $switch: {
+    branches: [
+      { case: { $eq: ['$status', RIDE_STATUS.ONGOING] }, then: 0 },
+      { case: { $in: ['$status', UPCOMING_STATUSES] }, then: 1 },
+    ],
+    default: 2,
+  },
+};
+
+const BUCKET_NAME = {
+  $switch: {
+    branches: [
+      { case: { $eq: ['$status', RIDE_STATUS.ONGOING] }, then: 'ongoing' },
+      { case: { $in: ['$status', UPCOMING_STATUSES] }, then: 'upcoming' },
+      { case: { $eq: ['$status', RIDE_STATUS.COMPLETED] }, then: 'completed' },
+      { case: { $eq: ['$status', RIDE_STATUS.CANCELLED] }, then: 'cancelled' },
+    ],
+    default: 'other',
+  },
+};
+
+// Within a bucket: upcoming soonest first (immediate rides, no scheduledAt,
+// first of all); ongoing and finished newest first. One ascending key.
+const toMillis = (field, fallback) => ({ $toLong: { $ifNull: [field, fallback] } });
+const SORT_KEY = {
+  $switch: {
+    branches: [
+      { case: { $in: ['$status', UPCOMING_STATUSES] }, then: toMillis('$scheduledAt', new Date(0)) },
+      { case: { $eq: ['$status', RIDE_STATUS.ONGOING] }, then: { $multiply: [-1, toMillis('$startedAt', '$updatedAt')] } },
+    ],
+    default: { $multiply: [-1, toMillis('$createdAt', new Date(0))] },
+  },
+};
+
+const DRIVER_HISTORY_PROJECTION = {
+  messages: 0,
+  routePoints: 0,
+  'assignment.history': 0,
+  'publish.reports': 0,
+};
+
+const permissionsFor = (ride, me, plan) => {
+  const mine = String(me);
+  const isCreator = String(ride.created_by_driver_id || '') === mine;
+  const isDriver = String(ride.driverId?._id || ride.driverId || '') === mine;
+  const isNetwork = ride.origin === 'driver_created';
+  const unassigned = ride.status === RIDE_STATUS.SEARCHING && !ride.driverId;
+  const publishStatus = ride.publish?.status || 'none';
+  const notStarted =
+    ride.status === RIDE_STATUS.ACCEPTED &&
+    ![RIDE_LIVE_STATUS.STARTED, RIDE_LIVE_STATUS.COMPLETED].includes(ride.liveStatus);
+  const escrowBlocksRemoval = ride.escrow?.state === 'held' && ride.assignment?.target_type !== 'contact';
+  const canCreate = Boolean(plan?.can_create_rides);
+  const canPublish = Boolean(plan?.can_publish_rides);
+
+  return {
+    can_assign: isNetwork && isCreator && canCreate && unassigned && ['none', 'cancelled', 'expired'].includes(publishStatus),
+    can_unassign: isNetwork && isCreator && canCreate && Boolean(ride.driverId) && notStarted && !escrowBlocksRemoval,
+    can_reassign: isNetwork && isCreator && canCreate && Boolean(ride.driverId) && notStarted && !escrowBlocksRemoval,
+    can_publish: isNetwork && isCreator && canPublish && unassigned && publishStatus !== 'open',
+    can_unpublish: isNetwork && isCreator && canPublish && unassigned && publishStatus === 'open',
+    can_review_requests: isNetwork && isCreator && unassigned && publishStatus === 'open',
+    can_cancel: isNetwork && isCreator && canCreate && ![RIDE_STATUS.COMPLETED, RIDE_STATUS.CANCELLED].includes(ride.status),
+    can_acknowledge: isNetwork && isDriver && !isCreator && ride.status === RIDE_STATUS.ACCEPTED && !ride.assignment?.acknowledged_at,
+    can_decline: isNetwork && isDriver && !isCreator && notStarted,
+  };
+};
+
+const listDriverRideHistory = async ({ entityId, limit, page, category, from, to, status, rideRole, origin, q, includeCounts, explicitRole }) => {
+  const dateRangeClause = buildHistoryDateRangeClause({ from, to });
+
+  const normalizedStatus = String(status || 'all').trim().toLowerCase();
+  if (!DRIVER_LIST_STATUSES.has(normalizedStatus)) {
+    throw new ApiError(
+      422,
+      "status must be 'all', 'upcoming', 'ongoing', 'completed' or 'cancelled'",
+      { status },
+      'INVALID_STATUS',
+    );
+  }
+  const normalizedRole = String(rideRole || 'driven').trim().toLowerCase();
+  if (!DRIVER_LIST_ROLES.has(normalizedRole)) {
+    throw new ApiError(
+      422,
+      "role must be 'driven', 'published', 'created', 'assigned' or 'all'",
+      { role: rideRole },
+      'INVALID_ROLE',
+    );
+  }
+  const normalizedOrigin = parseHistoryOrigin(origin);
+  const searchClause = await driverSearchClause(q);
+
+  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  const safePage = Math.max(Number(page) || 1, 1);
+  const me = new mongoose.Types.ObjectId(String(entityId));
+
+  // from/to only narrow finished rides: an upcoming ride booked for next month
+  // must still show under a "this month" period.
+  const dateClause = dateRangeClause
+    ? normalizedStatus === 'upcoming' || normalizedStatus === 'ongoing'
+      ? null
+      : normalizedStatus === 'all'
+        ? { $or: [{ status: { $in: LIVE_STATUSES } }, dateRangeClause] }
+        : dateRangeClause
+    : null;
+
+  // A round trip is two rides; the list shows one card (the onward ride) with both legs inside.
+  const baseClauses = [
+    driverRoleClause(normalizedRole, me),
+    historyCategoryClause(category),
+    searchClause,
+    dateClause,
+    { 'roundTrip.legType': { $ne: 'return' } },
+  ].filter(Boolean);
+  const originClause = historyOriginClause(normalizedOrigin);
+  const statusClause = driverStatusClause(normalizedStatus);
+  const itemMatch = { $and: [...baseClauses, originClause, statusClause].filter(Boolean) };
+
+  // Old builds (no role/origin/q/live status sent) keep the newest-first order
+  // they always had; the new list is "live first" for status=all.
+  const usesNewList =
+    explicitRole || normalizedOrigin !== 'all' || Boolean(searchClause) || ['upcoming', 'ongoing'].includes(normalizedStatus);
+  const sort =
+    normalizedStatus === 'upcoming' || normalizedStatus === 'ongoing' || (normalizedStatus === 'all' && usesNewList)
+      ? { bucket_rank: 1, sort_key: 1, createdAt: -1, _id: -1 }
+      : { createdAt: -1, _id: -1 };
+
+  const [facet] = await Ride.aggregate([
+    { $match: itemMatch },
+    { $addFields: { bucket_rank: BUCKET_RANK, sort_key: SORT_KEY } },
+    { $sort: sort },
+    {
+      $facet: {
+        items: [{ $skip: (safePage - 1) * safeLimit }, { $limit: safeLimit }, { $project: DRIVER_HISTORY_PROJECTION }],
+        total: [{ $count: 'n' }],
+      },
+    },
+  ]).allowDiskUse(true);
+
+  const rides = facet?.items || [];
+  const total = facet?.total?.[0]?.n || 0;
+
+  // Chip badges: status counts ignore the status filter, origin counts the
+  // origin filter, so each chip shows what tapping it would return.
+  let counts = null;
+  if (includeCounts) {
+    const [countFacet] = await Ride.aggregate([
+      { $match: baseClauses.length ? { $and: baseClauses } : {} },
+      {
+        $facet: {
+          byStatus: [
+            ...(originClause ? [{ $match: originClause }] : []),
+            { $group: { _id: BUCKET_NAME, n: { $sum: 1 } } },
+          ],
+          byOrigin: [
+            ...(statusClause ? [{ $match: statusClause }] : []),
+            { $group: { _id: { $cond: [{ $eq: ['$origin', 'driver_created'] }, 'driver_created', 'customer_app'] }, n: { $sum: 1 } } },
+          ],
+          roundTrips: [
+            ...(statusClause ? [{ $match: statusClause }] : []),
+            { $match: { 'roundTrip.isRoundTrip': true } },
+            { $count: 'n' },
+          ],
+        },
+      },
+    ]);
+    const statusCounts = Object.fromEntries((countFacet?.byStatus || []).map((row) => [row._id, row.n]));
+    const originCounts = Object.fromEntries((countFacet?.byOrigin || []).map((row) => [row._id, row.n]));
+    counts = {
+      all: Object.values(statusCounts).reduce((sum, n) => sum + n, 0),
+      upcoming: statusCounts.upcoming || 0,
+      ongoing: statusCounts.ongoing || 0,
+      completed: statusCounts.completed || 0,
+      cancelled: statusCounts.cancelled || 0,
+      customer_app: originCounts.customer_app || 0,
+      driver_created: originCounts.driver_created || 0,
+      round_trip: countFacet?.roundTrips?.[0]?.n || 0,
+    };
+  }
+
+  await Ride.populate(rides, [
+    { path: 'userId', select: 'name phone profileImage' },
+    {
+      path: 'driverId',
+      select: 'name phone profileImage rating vehicleNumber vehicleMake vehicleModel vehicleType vehicleColor assignedFleetVehicleId',
+    },
+  ]);
+
+  const extras = await buildDriverListExtras(rides, me);
+  const roundTrips = await loadRoundTripSummaries(rides);
+
+  return {
+    results: rides.map((ride) => ({
+      ...serializeHistoryItem(ride, { role: 'driver', entityId }),
+      ...extras(ride),
+      round_trip: roundTrips.get(String(ride._id)) || null,
+    })),
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+      hasNextPage: safePage * safeLimit < total,
+      hasPrevPage: safePage > 1,
+    },
+    ...(counts ? { counts } : {}),
+  };
+};
+
+/**
+ * Everything a fleet card needs, batched for the whole page: who assigned
+ * it, the publisher card, the vehicle, applicants and the action buttons.
+ */
+const buildDriverListExtras = async (rides, me) => {
+  const { buildAssignedByPayload } = await import('./networkNotificationService.js');
+  const { buildPublisherCard, PUBLISHER_DRIVER_FIELDS } = await import('../driver/services/publisherCardService.js');
+  const { getDriverPermissions } = await import('./driverCategoryService.js');
+  const { loadApplicantsForRides } = await import('../driver/services/rideRequestService.js');
+
+  const network = rides.filter((ride) => ride.origin === 'driver_created');
+  const identityIds = [
+    ...new Set(
+      network.flatMap((ride) => [ride.assignment?.assigned_by_driver_id, ride.created_by_driver_id]).filter(Boolean).map(String),
+    ),
+  ];
+  const ownerIds = [...new Set(network.map((ride) => ride.organization_owner_id).filter(Boolean).map(String))];
+  const myOpenRides = network.filter(
+    (ride) => String(ride.created_by_driver_id) === String(me) && ride.publish?.status === 'open',
+  );
+
+  const [identityDrivers, owners, plan, applicantsByRide] = await Promise.all([
+    identityIds.length ? Driver.find({ _id: { $in: identityIds } }).select(`phone ${PUBLISHER_DRIVER_FIELDS}`).lean() : [],
+    ownerIds.length ? Owner.find({ _id: { $in: ownerIds } }).select('company_name owner_name name').lean() : [],
+    network.some((ride) => String(ride.created_by_driver_id) === String(me)) ? getDriverPermissions(me) : null,
+    loadApplicantsForRides(myOpenRides, { withRequests: 5 }),
+  ]);
+  const identityMap = new Map(identityDrivers.map((driver) => [String(driver._id), driver]));
+  const ownerMap = new Map(owners.map((owner) => [String(owner._id), owner]));
+  const now = Date.now();
+
+  return (ride) => {
+    const isNetwork = ride.origin === 'driver_created';
+    const driverDoc = ride.driverId && typeof ride.driverId === 'object' && ride.driverId._id ? ride.driverId : null;
+    const drivenByMe = String(driverDoc?._id || ride.driverId || '') === String(me);
+    const createdByMe = String(ride.created_by_driver_id || '') === String(me);
+    const assignerId = isNetwork ? ride.assignment?.assigned_by_driver_id || ride.created_by_driver_id || null : null;
+    const organization = ride.organization_owner_id ? ownerMap.get(String(ride.organization_owner_id)) : null;
+    const applicants = applicantsByRide.get(String(ride._id));
+
+    return {
+      id: String(ride._id),
+      my_side: createdByMe ? 'created' : drivenByMe && isNetwork ? 'assigned' : 'driven',
+      is_overdue: Boolean(
+        ride.scheduledAt && UPCOMING_STATUSES.includes(ride.status) && new Date(ride.scheduledAt).getTime() < now,
+      ),
+      notes: ride.network_notes || '',
+      customer: {
+        name: ride.userId?.name || ride.offline_customer?.name || '',
+        phone: ride.userId?.phone || ride.offline_customer?.phone || '',
+      },
+      assignment: {
+        mode: ride.assignment?.mode || 'dispatch',
+        target_type: ride.assignment?.target_type || null,
+        assigned_at: ride.assignment?.assigned_at || null,
+        acknowledged_at: ride.assignment?.acknowledged_at || null,
+        assigned_by: assignerId
+          ? buildAssignedByPayload({
+              assignerId,
+              assignerDriver: identityMap.get(String(assignerId)),
+              organization,
+              creatorDriver: ride.created_by_driver_id ? identityMap.get(String(ride.created_by_driver_id)) : null,
+            })
+          : null,
+      },
+      publish: isNetwork
+        ? {
+            status: ride.publish?.status || 'none',
+            is_secure: ride.publish?.is_secure !== false,
+            total_fare: Number(ride.publish?.total_fare || 0),
+            driver_payout: Number(ride.publish?.driver_payout || 0),
+            owner_commission: Number(ride.publish?.owner_commission || 0),
+            expires_at: ride.publish?.expires_at || null,
+          }
+        : null,
+      escrow: isNetwork
+        ? {
+            state: ride.escrow?.state || 'none',
+            awaiting_payment: Boolean(ride.escrow?.awaiting_platform_payment_since),
+          }
+        : null,
+      assigned_driver:
+        driverDoc && !drivenByMe
+          ? {
+              id: String(driverDoc._id),
+              name: driverDoc.name || '',
+              phone: driverDoc.phone || '',
+              vehicleNumber: resolveRideVehicle(ride, driverDoc)?.number || '',
+            }
+          : null,
+      publisher: isNetwork
+        ? buildPublisherCard(ride.created_by_driver_id ? identityMap.get(String(ride.created_by_driver_id)) : null, organization)
+        : null,
+      amount_for_you: String(ride.publish?.taken_by_driver_id || '') === String(me) ? Number(ride.publish?.driver_payout || 0) : null,
+      vehicle: resolveRideVehicle(ride, driverDoc),
+      ...(applicants ? { applicants_count: applicants.count, requests: applicants.requests } : {}),
+      permissions: permissionsFor(ride, me, plan),
+    };
+  };
+};
+
+export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, page = 1, category = 'all', from, to, status = 'all', rideRole = 'driven', origin = 'all', q, includeCounts = true, explicitRole = false }) => {
   if (!['user', 'driver', 'owner'].includes(role)) {
     throw new ApiError(403, 'Only riders, drivers, and fleet owners can access ride history');
   }
 
+  // Drivers get the unified "All Rides" list (live + history, created/assigned).
+  if (role === 'driver') {
+    return listDriverRideHistory({ entityId, limit, page, category, from, to, status, rideRole, origin, q, includeCounts, explicitRole });
+  }
+
   // Parsed before any query so a bad range fails fast with 422, never as a 500.
   const dateRangeClause = buildHistoryDateRangeClause({ from, to });
+  const originClause = historyOriginClause(parseHistoryOrigin(origin));
 
-  const normalizedStatus = String(status || 'all').trim().toLowerCase();
+  // Riders and owners keep the history statuses; the driver-only live
+  // statuses are ignored rather than rejected, so shared clients don't break.
+  let normalizedStatus = String(status || 'all').trim().toLowerCase();
+  if (normalizedStatus === 'upcoming' || normalizedStatus === 'ongoing') normalizedStatus = 'all';
   if (!HISTORY_STATUSES.has(normalizedStatus)) {
     throw new ApiError(422, "status must be 'completed', 'cancelled' or 'all'", { status }, 'INVALID_STATUS');
   }
@@ -1708,23 +2249,9 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
   if (normalizedCategory === 'rides') {
     query.serviceType = 'ride';
     query.scheduledAt = null;
-  } else if (normalizedCategory === 'parcels') {
-    query.serviceType = 'parcel';
-    query.scheduledAt = null;
-    query['parcel.isOutstation'] = { $ne: true };
-    query['parcel.deliveryScope'] = { $ne: 'outstation' };
   } else if (normalizedCategory === 'outstation') {
     query.scheduledAt = null;
-    query.$or = [
-      { serviceType: 'intercity' },
-      {
-        serviceType: 'parcel',
-        $or: [
-          { 'parcel.isOutstation': true },
-          { 'parcel.deliveryScope': 'outstation' },
-        ],
-      },
-    ];
+    query.serviceType = 'intercity';
   } else if (normalizedCategory === 'scheduled') {
     query.scheduledAt = { $ne: null };
   }
@@ -1736,6 +2263,9 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
   }
   if (roleClauses.length) {
     query.$and = [...(query.$and || []), ...roleClauses];
+  }
+  if (originClause) {
+    query.$and = [...(query.$and || []), originClause];
   }
   if (normalizedStatus !== 'all') {
     query.status = normalizedStatus;
@@ -1750,7 +2280,6 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
   const ridesQuery = Ride.find(query)
     .select([
       '_id',
-      'deliveryId',
       'serviceType',
       'status',
       'liveStatus',
@@ -1765,7 +2294,6 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
       'estimatedDurationMinutes',
       'paymentMethod',
       'otp',
-      'parcel',
       'intercity',
       'pricingSnapshot',
       'commissionAmount',
@@ -1777,6 +2305,10 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
       'dropLocation',
       'dropAddress',
       'scheduledAt',
+      'roundTrip',
+      'bookingPreferences.passengers',
+      'carpool',
+      'bookingPreferences.luggageCount',
       'acceptedAt',
       'arrivedAt',
       'startedAt',
@@ -1799,10 +2331,6 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
     .populate(counterpartPath, counterpartSelect)
     .lean();
 
-  if (role === 'user') {
-    ridesQuery.populate('deliveryId', 'parcel');
-  }
-
   if (role === 'owner') {
     ridesQuery.populate('driverId', 'name phone profileImage vehicleType vehicleIconType vehicleNumber vehicleColor vehicleMake vehicleModel vehicleImage rating');
   }
@@ -1818,50 +2346,7 @@ export const listRideHistoryForIdentity = async ({ role, entityId, limit = 50, p
   ]);
 
   return {
-    results: rides.map((ride) => ({
-    rideId: String(ride._id),
-    deliveryId: ride.deliveryId?._id ? String(ride.deliveryId._id) : ride.deliveryId ? String(ride.deliveryId) : null,
-    type: ride.serviceType || 'ride',
-    serviceType: ride.serviceType || 'ride',
-    status: ride.status,
-    liveStatus: ride.liveStatus,
-    fare: ride.fare,
-    baseFare: Number(ride.baseFare || ride.fare || 0),
-    bookingMode: ride.bookingMode || 'normal',
-    biddingStatus: ride.biddingStatus || 'none',
-    bidStepAmount: Number(ride.bidStepAmount || DEFAULT_BID_STEP_AMOUNT),
-    bidFloorFare: Number(ride.bidFloorFare ?? ride.baseFare ?? ride.fare ?? 0),
-    userMaxBidFare: Number(ride.userMaxBidFare || ride.fare || 0),
-    bidCeilingMaxFare: Number(ride.bidCeilingMaxFare || ride.userMaxBidFare || ride.fare || 0),
-    acceptedBidId: ride.acceptedBidId ? String(ride.acceptedBidId) : null,
-    estimatedDistanceMeters: ride.estimatedDistanceMeters || 0,
-    estimatedDurationMinutes: ride.estimatedDurationMinutes || 0,
-    paymentMethod: ride.paymentMethod,
-    otp: ride.otp || '',
-    parcel: ride.deliveryId?.parcel || ride.parcel || null,
-    intercity: ride.intercity || null,
-    pricingSnapshot: ride.pricingSnapshot || null,
-    commissionAmount: ride.commissionAmount,
-    driverEarnings: ride.driverEarnings,
-    vehicleIconType: ride.vehicleIconType,
-    // Keep history responses light; giant data URLs can stall the activity screen.
-    vehicleIconUrl: String(ride.vehicleIconUrl || '').startsWith('data:') ? '' : (ride.vehicleIconUrl || ''),
-    pickupLocation: ride.pickupLocation,
-    pickupAddress: ride.pickupAddress || '',
-    dropLocation: ride.dropLocation,
-    dropAddress: ride.dropAddress || '',
-    scheduledAt: ride.scheduledAt || null,
-    acceptedAt: ride.acceptedAt,
-    arrivedAt: ride.arrivedAt,
-    startedAt: ride.startedAt,
-    completedAt: ride.completedAt,
-    feedback: ride.feedback || null,
-    createdAt: ride.createdAt,
-    updatedAt: ride.updatedAt,
-    user: role === 'driver' || role === 'owner' ? (ride.userId || null) : null,
-    driver: role === 'user' || role === 'owner' ? (ride.driverId || null) : null,
-    ...(role === 'driver' ? serializeDriverHistoryExtras(ride, entityId) : {}),
-    })),
+    results: rides.map((ride) => serializeHistoryItem(ride, { role, entityId })),
     pagination: {
       page: safePage,
       limit: safeLimit,
@@ -1927,6 +2412,7 @@ export const acceptRideAssignment = async ({ rideId, driverId }) => {
       }
 
       await ensureDriverWalletCanAcceptRide(driver, { session });
+      await assertDriverMayTakeCustomerRide(ride, driver);
 
       ride.driverId = driver._id;
       ride.status = RIDE_STATUS.ACCEPTED;
@@ -1937,7 +2423,13 @@ export const acceptRideAssignment = async ({ rideId, driverId }) => {
       await ride.save({ session });
       await driver.save({ session });
       await session.commitTransaction();
-      await syncDeliveryWithRide(ride);
+
+      if (ride.carpool?.groupId) {
+        const { onLeadAccepted } = await import('./carpoolService.js');
+        await onLeadAccepted(ride).catch((error) =>
+          console.error('[rideService] carpool accept failed:', error.message),
+        );
+      }
 
       return ride;
     } catch (error) {
@@ -2105,7 +2597,32 @@ const markDriverCreatedRideSettledOffline = async ({ ride, driverId }) => {
   }
 };
 
-export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymentMethod, riderRating, collectedBy }) => {
+// Tells the rider about each step of their trip, also when the app is closed.
+const RIDER_STATUS_PUSH = {
+  [RIDE_LIVE_STATUS.ARRIVING]: ['Driver has arrived', (name) => `${name} is at your pickup point. Share your OTP to start the trip.`],
+  [RIDE_LIVE_STATUS.STARTED]: ['Trip started', () => 'Your trip has started. Have a safe ride.'],
+  [RIDE_LIVE_STATUS.ARRIVED]: ['You are near your destination', () => 'You are about to reach your drop location.'],
+  [RIDE_LIVE_STATUS.COMPLETED]: ['Trip completed', () => 'You have reached your destination. Rate your driver.'],
+};
+
+const notifyRiderOfStatus = (ride, nextStatus) => {
+  const entry = RIDER_STATUS_PUSH[nextStatus];
+  const userId = ride.userId?._id || ride.userId;
+  if (!entry || !userId) return;
+  const [title, body] = entry;
+  import('./pushNotificationService.js')
+    .then(({ sendPushNotificationToEntities }) =>
+      sendPushNotificationToEntities({
+        userIds: [String(userId)],
+        title,
+        body: body(ride.driverId?.name || 'Your driver'),
+        data: { type: `ride_${nextStatus}`, rideId: String(ride._id), serviceType: ride.serviceType || 'ride' },
+      }),
+    )
+    .catch((error) => console.error('[rideService] rider status push failed:', error.message));
+};
+
+export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymentMethod, riderRating, collectedBy, otp }) => {
   const config = rideStatusConfig[nextStatus];
 
   if (!config) {
@@ -2120,6 +2637,18 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
   if (!config.allowedCurrent.includes(ride.liveStatus)) {
     throw new ApiError(409, `Ride cannot move from ${ride.liveStatus} to ${nextStatus}`);
+  }
+
+  // The rider's OTP proves the right person is in the car, so a customer ride
+  // only starts with it. The driver app used to compare it on the phone only.
+  // Rides a driver created for an offline passenger carry no OTP.
+  if (
+    nextStatus === RIDE_LIVE_STATUS.STARTED &&
+    ride.liveStatus !== RIDE_LIVE_STATUS.STARTED &&
+    ride.otp &&
+    String(otp ?? '').trim() !== String(ride.otp)
+  ) {
+    throw new ApiError(403, 'Incorrect OTP. Ask the rider for the 4-digit code.', null, 'INVALID_RIDE_OTP');
   }
 
   // A scheduled ride cannot be started hours early. Re-sending the status the
@@ -2210,6 +2739,7 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
     }
   }
 
+  const previousLiveStatus = ride.liveStatus;
   ride.liveStatus = nextStatus;
   ride.status = config.persistedStatus;
 
@@ -2223,6 +2753,10 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
   if (nextStatus === RIDE_LIVE_STATUS.STARTED && !ride.startedAt) {
     ride.startedAt = new Date();
+  }
+
+  if (nextStatus === RIDE_LIVE_STATUS.STARTED && ride.roundTrip?.legType === 'return') {
+    applyReturnWaitingCharge(ride, ride.startedAt);
   }
 
   if (paymentMethod !== undefined && paymentMethod !== null && String(paymentMethod).trim()) {
@@ -2249,7 +2783,6 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
   }
 
   await ride.save();
-  await syncDeliveryWithRide(ride);
 
   if (nextStatus === RIDE_LIVE_STATUS.COMPLETED && ride.riderFeedback?.rating) {
     await applyRiderRatingToUserAggregate(ride);
@@ -2289,6 +2822,12 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
       walletUpdate = await settleCompletedRideWallet({ rideId: ride._id });
     }
     await consumeUserSubscriptionRide({ ride });
+    if (ride.carpool?.groupId) {
+      const { onRideCompleted } = await import('./carpoolService.js');
+      await onRideCompleted(ride).catch((error) =>
+        console.error('[rideService] carpool completion failed:', error.message),
+      );
+    }
     const settledRide = await Ride.findById(ride._id).select('completedAt driverEarnings estimatedDistanceMeters');
 
     await incrementDriverTodaySummaryForCompletedRide({
@@ -2300,6 +2839,9 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
     await processCompletedRideReferralReward(ride);
     await processCompletedDriverReferralReward(ride);
+    await createReturnLegIfNeeded(ride).catch((error) =>
+      console.error('[rideService] return leg booking failed:', error.message),
+    );
   }
 
   const { broadcastNetworkRideLifecycle } = await import('./liveMapService.js');
@@ -2309,6 +2851,13 @@ export const updateRideLifecycle = async ({ rideId, driverId, nextStatus, paymen
 
   const populatedRide = await populateRideRealtime(ride._id);
   populatedRide.$locals.walletUpdate = walletUpdate;
+
+  if (previousLiveStatus !== nextStatus) {
+    notifyRiderOfStatus(populatedRide, nextStatus);
+    import('./networkTripService.js')
+      .then((m) => m.onNetworkRideStatus(populatedRide, nextStatus))
+      .catch((error) => console.error('[rideService] network trip update failed:', error.message));
+  }
 
   return populatedRide;
 };
@@ -2668,7 +3217,6 @@ export const acceptRideBidAssignment = async ({ rideId, bidId, userId }) => {
       );
 
       await session.commitTransaction();
-      await syncDeliveryWithRide(ride);
 
       return ride;
     } catch (error) {

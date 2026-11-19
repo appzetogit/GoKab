@@ -166,14 +166,7 @@ export const getPublicActivePaymentGateway = async () => {
       slug: activeGateway.slug,
       label: activeGateway.label,
       supportsWalletTopUp: ['razor_pay', 'phone_pay'].includes(activeGateway.slug),
-      supportsRentalAdvance: ['razor_pay', 'phone_pay'].includes(activeGateway.slug),
       walletTopUpMode:
-        activeGateway.slug === 'razor_pay'
-          ? 'razorpay_checkout'
-          : activeGateway.slug === 'phone_pay'
-            ? 'phonepe_redirect'
-            : 'unsupported',
-      rentalAdvanceMode:
         activeGateway.slug === 'razor_pay'
           ? 'razorpay_checkout'
           : activeGateway.slug === 'phone_pay'

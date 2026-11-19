@@ -11,8 +11,8 @@ import {
   BarChart3,
   Bell,
   Briefcase,
+  Gem,
   Car,
-  Bus,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -230,7 +230,7 @@ const resolvePageTitle = (pathname, sections, appName) => {
   const label = findLabel(flattenItems(sections));
   if (label) return label;
   if (pathname.includes('/owners')) return 'Owner Management';
-  if (pathname.includes('/fleet')) return 'Fleet Management';
+  if (pathname.includes('/fleet')) return 'Vehicles';
   if (pathname.includes('/settings')) return 'Settings';
   if (pathname.includes('/reports')) return 'Reports';
   return `${appName || 'App'} Admin`;
@@ -402,14 +402,6 @@ const DEEP_SEARCH_INDEX = [
     icon: Globe,
   },
   {
-    label: 'Delivery & Parcel Requests',
-    category: 'Operations',
-    path: '/admin/deliveries',
-    description: 'Track parcel delivery orders, item package types, sender/receiver details, delivery status',
-    keywords: 'deliveries parcel delivery courier item package delivery requests sender receiver tracking',
-    icon: Package,
-  },
-  {
     label: 'Airport Cab Operations',
     category: 'Operations',
     path: '/admin/airport/requests',
@@ -453,8 +445,8 @@ const DEEP_SEARCH_INDEX = [
     label: 'Vehicle Types & Categories',
     category: 'Pricing',
     path: '/admin/pricing/vehicle-type',
-    description: 'Manage vehicle types (Auto, Sedan, SUV, Bike, Parcel), seating capacities, icons, base rates',
-    keywords: 'vehicle types sedan suv auto bike parcel vehicle category capacity base fare icon',
+    description: 'Manage vehicle types (Auto, Sedan, SUV, Bike), seating capacities, icons, base rates',
+    keywords: 'vehicle types sedan suv auto bike vehicle category capacity base fare icon',
     icon: IndianRupee,
   },
   {
@@ -495,6 +487,14 @@ const DEEP_SEARCH_INDEX = [
     path: '/admin/promotions/send-notification',
     description: 'Send instant push notifications to all users or drivers with custom title, body, and action link',
     keywords: 'push notifications broadcast message send notification customer announcement marketing message',
+    icon: TrendingUp,
+  },
+  {
+    label: 'Driver Offers',
+    category: 'Promotions',
+    path: '/admin/promotions/driver-offers',
+    description: 'Set publishing fee rates for driver rental offers, view offers and revenue, deactivate offers',
+    keywords: 'driver offers rental publishing fee rates revenue deactivate',
     icon: TrendingUp,
   },
   {
@@ -997,7 +997,7 @@ const AdminLayout = () => {
     return Number(window.localStorage.getItem('adminLastSeenBookingCount') || 0);
   });
   const [adminProfile, setAdminProfile] = useState(() => readAdminProfile());
-  const isOwnerRoute = location.pathname.startsWith('/admin/owners') || location.pathname.startsWith('/admin/fleet');
+  const isOwnerRoute = false; // the separate Owner console is gone; vehicles live in the main sidebar
   const isAdminChatRoute = pathMatches(location.pathname, '/admin/chat');
   const isTripsRoute = pathMatches(location.pathname, '/admin/trips');
   const isOwnerBookingsRoute = pathMatches(location.pathname, '/admin/owners/bookings');
@@ -1157,6 +1157,7 @@ const AdminLayout = () => {
               { label: 'Promo Code', path: '/admin/promotions/promo-codes', permission: 'promotions.view' },
               { label: 'Push Notifications', path: '/admin/promotions/send-notification', permission: 'promotions.view' },
               { label: 'Advertisements', path: '/admin/promotions/advertisements', permission: 'promotions.view' },
+              { label: 'Driver Offers', path: '/admin/promotions/driver-offers', permission: 'promotions.view' },
               //{ label: 'Banner Image', path: '/admin/promotions/banner-image', permission: 'promotions.view' },
             ],
           },
@@ -1166,10 +1167,11 @@ const AdminLayout = () => {
             subItems: [
               { label: 'Service Location', path: '/admin/pricing/service-location', permission: 'service_locations.view' },
               { label: 'Zone', path: '/admin/pricing/zone', permission: 'zones.view' },
+              { label: 'Airport', path: '/admin/pricing/airport', permission: 'airports.view' },
+              { label: 'Railway Station', path: '/admin/pricing/railway-station', permission: 'airports.view' },
               { label: 'App Modules', path: '/admin/pricing/app-modules', permission: 'settings.view' },
               { label: 'Vehicle Type', path: '/admin/pricing/vehicle-type', permission: 'vehicle_types.view' },
               { label: 'Set Price', path: '/admin/pricing/set-price', permission: 'set_prices.view' },
-              { label: 'Goods Types', path: '/admin/pricing/goods-types', permission: 'goods_types.view' },
             ],
           },
           // {
@@ -1178,28 +1180,6 @@ const AdminLayout = () => {
           //   subItems: [
           //     { label: 'Airport', path: '/admin/pricing/airport', permission: 'airports.view' },
           //     { label: 'Airport Requests', path: '/admin/airport/requests', permission: 'trips.view' },
-          //   ],
-          // },
-          // {
-          //   icon: Briefcase,
-          //   label: 'Rental',
-          //   subItems: [
-          //     { label: 'Service Stores', path: '/admin/pricing/service-stores', permission: 'service_stores.view' },
-          //     { label: 'Rental Vehicles', path: '/admin/pricing/rental-vehicles', permission: 'rental.view' },
-          //     { label: 'Track Vehicles', path: '/admin/pricing/rental-tracking', permission: 'rental.view' },
-          //     { label: 'Rental Requests', path: '/admin/pricing/rental-requests', permission: 'rental.view' },
-          //     { label: 'Rental Quote Requests', path: '/admin/pricing/rental-quotes', permission: 'rental.view' },
-          //     { label: 'Rental Package Types', path: '/admin/pricing/rental-packages', permission: 'rental.view' },
-          //     { label: 'Package Pricing', path: '/admin/pricing/package-pricing', permission: 'rental.view' },
-          //   ],
-          // },
-          // {
-          //   icon: Bus,
-          //   label: 'Bus Service',
-          //   subItems: [
-          //     { label: 'Fleet Manager', path: '/admin/bus-service', permission: 'bus_service.view' },
-          //     { label: 'Bus Commission', path: '/admin/bus-service/commission', permission: 'bus_service.view' },
-          //     { label: 'Bus Bookings', path: '/admin/bus-service/bookings', permission: 'bus_service.view' },
           //   ],
           // },
           // {
@@ -1225,7 +1205,6 @@ const AdminLayout = () => {
           { icon: ShieldAlert, label: 'SOS', path: '/admin/safety', permission: 'dashboard.view' },
           { icon: Car, label: 'Trip Requests', path: '/admin/trips', permission: 'trips.view' },
           { icon: Globe, label: 'Outstation Requests', path: '/admin/outstation', permission: 'trips.view' },
-          { icon: Package, label: 'Delivery Requests', path: '/admin/deliveries', permission: 'deliveries.view' },
           { icon: Clock, label: 'Ongoing Requests', path: '/admin/ongoing', permission: 'ongoing.view' },
         ],
       },
@@ -1276,7 +1255,14 @@ const AdminLayout = () => {
               { label: 'Referral Translation', path: '/admin/referrals/translation', permission: 'referrals.view' },
             ],
           },
-          { icon: Briefcase, label: 'Owner Management', path: '/admin/owners/dashboard', permission: 'owners.view' },
+          {
+            icon: Car,
+            label: 'Vehicles',
+            subItems: [
+              { label: 'Vehicle Approvals', path: '/admin/fleet/manage', permission: 'owners.view' },
+              { label: 'Vehicle Documents', path: '/admin/fleet/documents', permission: 'owners.view' },
+            ],
+          },
           {
             icon: FileText,
             label: 'Report',
@@ -1284,7 +1270,6 @@ const AdminLayout = () => {
               { label: 'User Report', path: '/admin/reports/user', permission: 'reports.view' },
               { label: 'Driver Report', path: '/admin/reports/driver', permission: 'reports.view' },
               { label: 'Driver Duty Report', path: '/admin/reports/driver-duty', permission: 'reports.view' },
-              { label: 'Owner Report', path: '/admin/reports/owner', permission: 'reports.view' },
               { label: 'Finance Report', path: '/admin/reports/finance', permission: 'reports.view' },
               { label: 'Fleet Finance Report', path: '/admin/reports/fleet-finance', permission: 'reports.view' },
             ],
@@ -1295,6 +1280,22 @@ const AdminLayout = () => {
             subItems: [
               { label: 'Ticket Title', path: '/admin/support/ticket-title', permission: 'support.view' },
               { label: 'Support Tickets', path: '/admin/support/tickets', permission: 'support.view' },
+            ],
+          },
+        ],
+      },
+      {
+        title: 'Elite',
+        items: [
+          {
+            icon: Gem,
+            label: 'Elite Drivers',
+            permission: 'driver_network.view',
+            subItems: [
+              { label: 'Elite Drivers', path: '/admin/elite/drivers', permission: 'driver_network.view' },
+              { label: 'Add Driver with Plan', path: '/admin/elite/create', permission: 'driver_network.view' },
+              { label: 'Elite Slots', path: '/admin/elite/slots', permission: 'driver_network.view' },
+              { label: 'Commercial Vehicle Check', path: '/admin/elite/commercial', permission: 'driver_network.view' },
             ],
           },
         ],
@@ -1318,6 +1319,8 @@ const AdminLayout = () => {
               { label: 'General Settings', path: '/admin/settings/business/general', permission: 'settings.view' },
               { label: 'Customization Settings', path: '/admin/settings/business/customization', permission: 'settings.view' },
               { label: 'Transport Ride Settings', path: '/admin/settings/business/transport-ride', permission: 'settings.view' },
+              { label: 'Carpool Settings', path: '/admin/settings/business/carpool', permission: 'settings.view' },
+              { label: 'Driver Routes', path: '/admin/settings/business/driver-routes', permission: 'settings.view' },
               { label: 'Bid Ride Settings', path: '/admin/settings/business/bid-ride', permission: 'settings.view' },
             ],
           },
@@ -2029,7 +2032,7 @@ const AdminLayout = () => {
           </div>
 
           <div className="flex items-center gap-4">
-            <ModeSwitcher mode={mode} setMode={setMode} />
+            
 
             <div className="flex items-center gap-2 border-l border-slate-100 pl-4 h-8">
               <button
