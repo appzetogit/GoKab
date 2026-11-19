@@ -21,6 +21,7 @@ import { findZoneByPickup } from './locationService.js';
 import { sendOtpSms } from '../../services/smsService.js';
 import { getVisibleOtp, resolveOtpForPhone } from '../../services/otpSecurity.js';
 import { resolveDriverBanner, resolveDriverProfileImage } from './driverBannerService.js';
+import { sendWelcomeEmail } from '../../services/welcomeEmailService.js';
 import { WalletTransaction } from '../models/WalletTransaction.js';
 import { applyDriverWalletAdjustment } from './walletService.js';
 
@@ -1238,6 +1239,11 @@ export const completeDriverOnboarding = async ({ registrationId, phone, document
   session.completedAt = submittedAt;
   await session.save();
   await DriverRegistrationSession.deleteOne({ _id: session._id });
+
+  // Fire-and-forget, after the registration is fully committed: mail must
+  // never slow down or fail onboarding. The service swallows its own errors
+  // and is a no-op unless EMAIL_WELCOME_ENABLED=true.
+  void sendWelcomeEmail({ role: 'driver', email: driver.email, name: driver.name, entityId: driver._id });
 
   return {
     message: 'Driver registration completed successfully',

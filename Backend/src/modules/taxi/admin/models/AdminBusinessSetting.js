@@ -17,6 +17,10 @@ const adminBusinessSettingSchema = new mongoose.Schema(
     // like the other setting groups here; read it through
     // `getDriverNetworkSettings()` so missing keys fall back to the defaults.
     driver_network: { type: mongoose.Schema.Types.Mixed, default: {} },
+    // Optional T&C overrides for the welcome email: `user_terms_text`,
+    // `user_terms_url`, `driver_terms_text`, `driver_terms_url`. Anything
+    // missing falls back to the static copy in emailTemplates.js.
+    legal: { type: mongoose.Schema.Types.Mixed, default: {} },
     referral: {
       type: mongoose.Schema.Types.Mixed,
       default: {

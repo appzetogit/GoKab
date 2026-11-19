@@ -35,6 +35,11 @@ const driverSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    // Set when the welcome + T&C email was actually sent (see welcomeEmailService).
+    welcomeEmailSentAt: {
+      type: Date,
+      default: null,
+    },
     salary: {
       type: Number,
       default: 0,

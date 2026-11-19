@@ -1508,8 +1508,18 @@ export const serializeRideRealtime = (ride) => ({
   })),
 });
 
-export const ensureRideParticipantAccess = async ({ rideId, role, entityId }) => {
-  const ride = await Ride.findById(rideId).select('userId driverId status liveStatus');
+/**
+ * Who may see a ride: its rider, its assigned driver, or that driver's fleet
+ * owner. Also gates the ride's socket room and ride chat.
+ *
+ * `allowCreator` additionally admits the driver who created / published a
+ * driver-created ride. Only read-only callers pass it (GET /rides/:rideId):
+ * the creator must not join the ride room or post in the rider–driver chat.
+ * `ride.$locals.viewerIsCreatorOnly` tells the caller that is the only reason
+ * access was granted.
+ */
+export const ensureRideParticipantAccess = async ({ rideId, role, entityId, allowCreator = false }) => {
+  const ride = await Ride.findById(rideId).select('userId driverId status liveStatus created_by_driver_id');
 
   if (!ride) {
     throw new ApiError(404, 'Ride not found');
@@ -1518,6 +1528,8 @@ export const ensureRideParticipantAccess = async ({ rideId, role, entityId }) =>
   const actorId = String(entityId);
   const isUser = role === 'user' && String(ride.userId) === actorId;
   const isDriver = role === 'driver' && ride.driverId && String(ride.driverId) === actorId;
+  const isCreator =
+    allowCreator && role === 'driver' && ride.created_by_driver_id && String(ride.created_by_driver_id) === actorId;
 
   let isOwner = false;
   if (role === 'owner' && ride.driverId) {
@@ -1525,10 +1537,11 @@ export const ensureRideParticipantAccess = async ({ rideId, role, entityId }) =>
     isOwner = Boolean(rideDriver && String(rideDriver.owner_id) === actorId);
   }
 
-  if (!isUser && !isDriver && !isOwner) {
+  if (!isUser && !isDriver && !isOwner && !isCreator) {
     throw new ApiError(403, 'You are not allowed to access this ride room');
   }
 
+  ride.$locals.viewerIsCreatorOnly = Boolean(isCreator && !isDriver);
   return ride;
 };
 

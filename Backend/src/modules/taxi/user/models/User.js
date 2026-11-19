@@ -89,6 +89,12 @@ const userSchema = new mongoose.Schema(
       trim: true,
       lowercase: true,
     },
+    // Set when the welcome + T&C email was actually sent, so re-registering
+    // (account restore) does not mail the same person twice.
+    welcomeEmailSentAt: {
+      type: Date,
+      default: null,
+    },
     password: {
       type: String,
       minlength: 5,

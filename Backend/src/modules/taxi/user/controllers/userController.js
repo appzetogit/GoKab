@@ -34,6 +34,7 @@ import { Airport } from '../../admin/models/Airport.js';
 import { applyDriverWalletAdjustment } from '../../driver/services/walletService.js';
 import { assertNoOutstandingUserDues, emitToDriver } from '../../services/dispatchService.js';
 import { sendPushNotificationToEntities } from '../../services/pushNotificationService.js';
+import { sendWelcomeEmail } from '../../services/welcomeEmailService.js';
 import { buildRentalTrackingSnapshot, updateUserRentalTracking } from '../../services/rentalTrackingService.js';
 import { hostProfileImageInput } from '../../services/profileImageService.js';
 import { listDriverServiceLocations } from '../../driver/services/serviceLocationService.js';
@@ -1881,6 +1882,10 @@ export const signupUser = async (req, res) => {
   }
 
   await consumeUserSignupSession(signupSession);
+
+  // Fire-and-forget: mail must never slow down or fail a signup. The service
+  // swallows its own errors and is a no-op unless EMAIL_WELCOME_ENABLED=true.
+  void sendWelcomeEmail({ role: 'user', email: user.email, name: user.name, entityId: user._id });
 
   res.status(201).json({
     success: true,
