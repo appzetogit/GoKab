@@ -97,6 +97,8 @@ export const env = {
       Number.isFinite(Number(process.env.OTP_EXPIRY_MINUTES)) && Number(process.env.OTP_EXPIRY_MINUTES) > 0
         ? Number(process.env.OTP_EXPIRY_MINUTES)
         : 10,
+    // "powered by ##var##" value in the DLT OTP template; falls back to the brand name.
+    poweredBy: readEnv('SMS_POWERED_BY'),
     indiaHub: {
       username: readEnv('SMS_INDIA_HUB_USERNAME'),
       password: readEnv('SMS_INDIA_HUB_PASSWORD'),
@@ -104,6 +106,7 @@ export const env = {
       apiKeyOverride: readEnv('SMS_INDIA_HUB_API_KEY_OVERRIDE'),
       senderId: readEnv('SMS_INDIA_HUB_SENDER_ID'),
       dltTemplateId: readEnv('SMS_INDIA_HUB_DLT_TEMPLATE_ID'),
+      entityId: readEnv('SMS_INDIA_HUB_ENTITY_ID'),
     },
   },
   driverWallet: {
