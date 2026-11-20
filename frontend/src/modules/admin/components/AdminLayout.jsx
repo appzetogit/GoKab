@@ -1890,7 +1890,7 @@ const AdminLayout = () => {
                   type="text"
                   value={sidebarSearchQuery}
                   onChange={(e) => setSidebarSearchQuery(e.target.value)}
-                  placeholder="Search menu or feature..."
+                  placeholder="Search menu..."
                   aria-label="Search the admin menu"
                   className="sidebar-search w-full rounded-2xl bg-[#0B1329]/60 border border-white/20 py-2.5 pl-9 pr-14 text-[12px] font-semibold text-white placeholder-white/40 shadow-inner outline-none transition-all duration-300 backdrop-blur-md focus:bg-[#0B1329]/90 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
                 />
