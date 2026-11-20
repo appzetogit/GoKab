@@ -1063,7 +1063,9 @@ export const signupUser = async (req, res) => {
   const countryCode = toCleanString(req.body.countryCode) || '+91';
   const gender = normalizeGender(req.body.gender);
   const profileImage = toCleanString(req.body.profileImage);
-  const governmentIdProof = normalizeGovernmentIdProof(req.body.governmentIdProof || {}, { required: true });
+  // A government ID is optional at signup (the rider app asks for the profile photo only).
+  // If one is sent it is still checked: both the type and the image.
+  const governmentIdProof = normalizeGovernmentIdProof(req.body.governmentIdProof || {}, { required: false });
   const referralCode = normalizeReferralCode(req.body.referralCode);
 
   validateName(name);
