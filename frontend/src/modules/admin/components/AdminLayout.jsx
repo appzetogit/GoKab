@@ -879,7 +879,7 @@ const ModeSwitcher = ({ mode, setMode }) => {
 
   const options = [
     { id: ADMIN_MODE, label: 'Admin Terminal', subtitle: 'Platform Core', icon: Monitor },
-    { id: OWNER_MODE, label: 'Fleet Console', subtitle: 'Owner Ops', icon: Briefcase },
+    { id: OWNER_MODE, label: 'Fleet & Organisations', subtitle: 'Drivers and Vehicles', icon: Briefcase },
   ];
 
   const active = options.find((o) => o.id === mode) || options[0];
@@ -1375,31 +1375,15 @@ const AdminLayout = () => {
   const ownerSections = useMemo(
     () => [
       {
-        title: 'Owner Mode',
+        title: 'Fleet & Organisations',
         items: [
           {
             icon: Briefcase,
-            label: 'Owner Management',
+            label: 'Organisations',
             subItems: [
-              { label: 'Owner Dashboard', path: '/admin/owners/dashboard', permission: 'owners.view' },
-              { label: 'Pending Owners', path: '/admin/owners/pending', permission: 'owners.view' },
-              { label: 'Manage Owners', path: '/admin/owners', permission: 'owners.view' },
-              {
-                label: 'Owner Wallet',
-                subItems: [{ label: 'Withdrawal Requests', path: '/admin/owners/wallet/withdrawals', permission: 'wallet.view' }],
-              },
-              {
-                label: 'Fleet Management',
-                subItems: [
-                  { label: 'Fleet Drivers', path: '/admin/fleet/drivers', permission: 'owners.view' },
-                  { label: 'Pending Fleet Drivers', path: '/admin/fleet/blocked', permission: 'owners.view' },
-                  { label: 'Fleet Needed Document', path: '/admin/fleet/documents', permission: 'owners.view' },
-                  { label: 'Manage Fleet', path: '/admin/fleet/manage', permission: 'owners.view' },
-                ],
-              },
-              { label: 'Owner Needed Document', path: '/admin/owners/documents', permission: 'owners.view' },
-              { label: 'Deleted Owners', path: '/admin/owners/deleted', permission: 'owners.view' },
-              { label: 'Bookings', path: '/admin/owners/bookings', permission: 'owners.view' },
+              { label: 'All Organisations', path: '/admin/owners', permission: 'owners.view' },
+              { label: 'Fleet Drivers', path: '/admin/fleet/drivers', permission: 'owners.view' },
+              { label: 'Pending Fleet Drivers', path: '/admin/fleet/blocked', permission: 'owners.view' },
             ],
           },
         ],
