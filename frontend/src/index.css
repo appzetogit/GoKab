@@ -540,3 +540,45 @@ body {
 .redigo-admin-root td {
   border-color: #f1f5f9 !important;
 }
+
+/* ---- Admin UI polish (look only, no behaviour change) ---- */
+
+/* The sidebar search sits on the coloured sidebar: the global input rule above made it
+   white with a white placeholder, so it looked like an empty box. Keep it a clear glass field. */
+.redigo-admin-root input.sidebar-search[type="text"] {
+  background-color: rgba(255, 255, 255, 0.16) !important;
+  border: 1px solid rgba(255, 255, 255, 0.4) !important;
+  color: #ffffff !important;
+  border-radius: 14px !important;
+}
+.redigo-admin-root input.sidebar-search[type="text"]::placeholder {
+  color: rgba(255, 255, 255, 0.78) !important;
+  opacity: 1 !important;
+}
+.redigo-admin-root input.sidebar-search[type="text"]:focus {
+  background-color: rgba(255, 255, 255, 0.24) !important;
+  border-color: #fde047 !important;
+  box-shadow: 0 0 0 3px rgba(253, 224, 71, 0.28) !important;
+}
+
+/* Search boxes everywhere: show the hint text clearly and give a visible focus ring. */
+.redigo-admin-root input[type="text"]::placeholder,
+.redigo-admin-root input[type="search"]::placeholder {
+  color: #94a3b8;
+  opacity: 1;
+}
+
+/* Tables: a soft highlight on the row under the mouse makes long lists easier to follow. */
+.redigo-admin-root table tbody tr {
+  transition: background-color 0.12s ease;
+}
+.redigo-admin-root table tbody tr:hover > td {
+  background-color: #f8fafc;
+}
+
+/* Keyboard users: always see where the focus is on buttons and links. */
+.redigo-admin-root button:focus-visible,
+.redigo-admin-root a:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}

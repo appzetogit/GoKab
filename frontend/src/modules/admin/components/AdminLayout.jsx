@@ -1890,8 +1890,9 @@ const AdminLayout = () => {
                   type="text"
                   value={sidebarSearchQuery}
                   onChange={(e) => setSidebarSearchQuery(e.target.value)}
-                  placeholder="Search pages & features..."
-                  className="w-full rounded-2xl bg-[#0B1329]/60 border border-white/20 py-2.5 pl-9 pr-14 text-[12px] font-semibold text-white placeholder-white/40 shadow-inner outline-none transition-all duration-300 backdrop-blur-md focus:bg-[#0B1329]/90 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
+                  placeholder="Search menu or feature..."
+                  aria-label="Search the admin menu"
+                  className="sidebar-search w-full rounded-2xl bg-[#0B1329]/60 border border-white/20 py-2.5 pl-9 pr-14 text-[12px] font-semibold text-white placeholder-white/40 shadow-inner outline-none transition-all duration-300 backdrop-blur-md focus:bg-[#0B1329]/90 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
                 />
                 {sidebarSearchQuery ? (
                   <button
@@ -2022,9 +2023,12 @@ const AdminLayout = () => {
               <button
                 type="button"
                 onClick={() => setIsSearchOpen((current) => !current)}
-                className="group flex items-center justify-center rounded-xl h-10 w-10 text-slate-400 transition-all hover:bg-slate-50 hover:text-slate-900"
+                aria-label="Search pages and features"
+                className="group flex items-center gap-2 rounded-xl h-10 px-3 md:min-w-[220px] border border-slate-200 bg-slate-50 text-slate-500 transition-all hover:border-indigo-300 hover:bg-white hover:text-slate-900"
               >
-                <Search size={20} strokeWidth={2.5} />
+                <Search size={18} strokeWidth={2.5} className="shrink-0" />
+                <span className="hidden md:inline flex-1 text-left text-[13px] font-medium">Search pages, settings...</span>
+                <kbd className="hidden lg:inline-flex h-5 items-center rounded-md border border-slate-200 bg-white px-1.5 font-mono text-[10px] font-bold text-slate-400">Ctrl K</kbd>
               </button>
 
               <div ref={notificationsMenuRef} className="relative">
