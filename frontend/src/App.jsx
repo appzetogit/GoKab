@@ -250,6 +250,7 @@ const AdminFareConfig = lazy(() => import('./modules/admin/pages/finance/FareCon
 const AdminSafetyCenter = lazy(() => import('./modules/admin/pages/safety/SafetyCenter'));
 const AdminCMSBuilder = lazy(() => import('./modules/admin/pages/cms/CMSBuilder'));
 const AdminHeaderFooter = lazy(() => import('./modules/admin/pages/cms/HeaderFooter'));
+const AdminCmsContent = lazy(() => import('./modules/admin/pages/cms/CmsContent'));
 const AdminGlobalSettings = lazy(() => import('./modules/admin/pages/settings/GlobalSettings'));
 const AdminGeneralSettings = lazy(() => import('./modules/admin/pages/settings/GeneralSettings'));
 const AdminCustomizationSettings = lazy(() => import('./modules/admin/pages/settings/CustomizationSettings'));
@@ -1353,6 +1354,22 @@ function App() {
                 <Route
                   path="settings/cms/header-footer"
                   element={<AdminHeaderFooter />}
+                />
+                <Route
+                  path="settings/cms/about"
+                  element={<AdminCmsContent slug="about" heading="About Us" description="The About Us page shown in the Rider app and the Driver app." />}
+                />
+                <Route
+                  path="settings/cms/privacy"
+                  element={<AdminCmsContent slug="privacy" heading="Privacy Policy" description="The Privacy Policy shown in the Rider app and the Driver app." />}
+                />
+                <Route
+                  path="settings/cms/terms"
+                  element={<AdminCmsContent slug="terms" heading="Terms & Conditions" description="The Terms & Conditions shown in the Rider app and the Driver app." />}
+                />
+                <Route
+                  path="settings/cms/contact"
+                  element={<AdminCmsContent slug="contact" heading="Contact Us" description="The Contact Us page (text, phone, WhatsApp, email, address) shown in the Rider app and the Driver app." />}
                 />
                 <Route
                   path="support/ticket-title"

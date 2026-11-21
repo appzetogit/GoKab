@@ -8,6 +8,7 @@ import { supportModuleRouter } from '../support/routes/index.js';
 import { userModuleRouter } from '../user/routes/index.js';
 import { commonRouter } from '../common/routes/commonRoutes.js';
 import { userAdvertisementRouter } from '../user/routes/advertisementRoutes.js';
+import { cmsPublicRouter } from '../admin/routes/cmsRoutes.js';
 import { asyncHandler } from '../../../utils/asyncHandler.js';
 import { Vehicle } from '../admin/models/Vehicle.js';
 import { DriverPreference } from '../admin/models/DriverPreference.js';
@@ -24,6 +25,7 @@ taxiRouter.use(driverModuleRouter);
 taxiRouter.use(supportModuleRouter);
 taxiRouter.use(commonRouter);
 taxiRouter.use('/advertisements', userAdvertisementRouter);
+taxiRouter.use('/cms', cmsPublicRouter);
 
 // Endpoint to fetch active vehicle types
 taxiRouter.get('/vehicle-types/active', asyncHandler(async (req, res) => {
