@@ -430,7 +430,7 @@ const Airport = ({ mode: initialMode = "list" }) => {
                       <tr>
                         <td colSpan="4" className="py-32 text-center text-gray-400">
                           <FileSearch size={48} className="mx-auto mb-4 opacity-20" />
-                          <h3 className="text-gray-900 font-semibold">No Data Found</h3>
+                          <h3 className="text-gray-900 font-semibold">No airports yet. Press Add Airport to add the first one.</h3>
                           <p className="text-xs">Try adjusting your search or add a new airport.</p>
                         </td>
                       </tr>

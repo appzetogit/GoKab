@@ -137,7 +137,7 @@ const OwnerNeededDocuments = () => {
                       <td colSpan="5" className="border-b border-gray-200 px-3 py-12 text-center">
                         <div className="flex min-h-[130px] flex-col items-center justify-center text-slate-700">
                           <FileSearch size={92} strokeWidth={1.7} className="mb-2 text-indigo-950" />
-                          <p className="text-xl font-medium">No Data Found</p>
+                          <p className="text-xl font-medium">No documents set yet. Add the documents an organisation must give.</p>
                         </div>
                       </td>
                     </tr>

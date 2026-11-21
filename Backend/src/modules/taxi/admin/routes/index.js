@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { adminRouter } from './adminRoutes.js';
 import { driverNetworkRouter } from './driverNetworkRoutes.js';
 import { cmsAdminRouter } from './cmsRoutes.js';
+import { insightsRouter } from './insightsRoutes.js';
 
 export const adminModuleRouter = Router();
 
@@ -9,4 +10,5 @@ export const adminModuleRouter = Router();
 // shadowed by the parameterised routes already registered there.
 adminModuleRouter.use('/admin/driver-network', driverNetworkRouter);
 adminModuleRouter.use('/admin/cms-pages', cmsAdminRouter);
+adminModuleRouter.use('/admin/insights', insightsRouter);
 adminModuleRouter.use('/', adminRouter);

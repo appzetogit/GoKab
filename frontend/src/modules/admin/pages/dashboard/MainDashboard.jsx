@@ -17,6 +17,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { adminService } from '../../services/adminService';
+import AttentionPanel from './AttentionPanel';
 import { BACKEND_LABEL } from '../../../../shared/api/runtimeConfig';
 
 const currency = (value) => Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 0 });
@@ -139,6 +140,8 @@ const MainDashboard = () => {
             {isRefreshing && <p className="text-[9px] font-black text-emerald-500 uppercase tracking-[0.2em] animate-pulse">Syncing live data...</p>}
           </div>
         </div>
+
+        <AttentionPanel />
 
         {dashboardError && (
           <div className="rounded-3xl bg-rose-50 border border-rose-100 p-4 md:p-6 flex items-center gap-5">

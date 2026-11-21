@@ -5,6 +5,8 @@ import { socketService } from '../../../shared/api/socket';
 import { useSettings } from '../../../shared/context/SettingsContext';
 import { getSupportConversations, markSupportMessagesRead } from '../../shared/chat/chatApi';
 import { adminService } from '../services/adminService';
+import api from '../../../shared/api/axiosInstance';
+import TableExportButton from './TableExportButton';
 import { hasAdminPermission } from '../constants/adminAccess';
 import toast from 'react-hot-toast';
 import {
@@ -961,6 +963,8 @@ const AdminLayout = () => {
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [notificationTab, setNotificationTab] = useState('ride_requests');
   const [searchTerm, setSearchTerm] = useState('');
+  // Drivers, riders and a ride id found from the same search box (3+ letters).
+  const [recordResults, setRecordResults] = useState(null);
   const [searchCategory, setSearchCategory] = useState('All');
   const [sidebarSearchQuery, setSidebarSearchQuery] = useState('');
   const [rideRequestFeed, setRideRequestFeed] = useState({
@@ -1289,7 +1293,7 @@ const AdminLayout = () => {
         items: [
           {
             icon: Gem,
-            label: 'Elite Drivers',
+            label: 'Elite and Pro Drivers',
             permission: 'driver_network.view',
             subItems: [
               { label: 'Elite Drivers', path: '/admin/elite/drivers', permission: 'driver_network.view' },
@@ -1721,6 +1725,28 @@ const AdminLayout = () => {
   }, [bookingPage, isNotificationsOpen, notificationTab, rideRequestPage]);
 
   useEffect(() => {
+    const q = searchTerm.trim();
+    if (!isSearchOpen || q.length < 3) {
+      setRecordResults(null);
+      return undefined;
+    }
+    let alive = true;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await api.get('/admin/insights/search', { params: { q } });
+        const body = res?.data ?? res;
+        if (alive) setRecordResults(body?.data || body || null);
+      } catch {
+        if (alive) setRecordResults(null);
+      }
+    }, 350);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [searchTerm, isSearchOpen]);
+
+  useEffect(() => {
     if (!isSearchOpen) return undefined;
 
     const handleKeyDown = (event) => {
@@ -2018,6 +2044,7 @@ const AdminLayout = () => {
             
 
             <div className="flex items-center gap-2 border-l border-slate-100 pl-4 h-8">
+              <TableExportButton />
               <button
                 type="button"
                 onClick={() => setIsSearchOpen((current) => !current)}
@@ -2398,7 +2425,7 @@ const AdminLayout = () => {
                     type="text"
                     value={searchTerm}
                     onChange={(event) => setSearchTerm(event.target.value)}
-                    placeholder="Search pages, settings, features, or action tools (e.g. withdrawal, razorpay, surge)..."
+                    placeholder="Search a page, or a driver / rider by name or phone (e.g. withdrawal, surge, 98765...)"
                     className="w-full bg-transparent text-sm font-bold text-slate-900 outline-none placeholder:text-slate-400 placeholder:font-medium"
                   />
                   {searchTerm && (
@@ -2440,7 +2467,74 @@ const AdminLayout = () => {
 
               {/* Results Feed */}
               <div className="max-h-[440px] overflow-y-auto p-4 space-y-2">
-                {filteredDeepSearchResults.length === 0 ? (
+                {recordResults &&
+                  (recordResults.drivers?.length > 0 || recordResults.users?.length > 0 || recordResults.ride) && (
+                    <div className="space-y-1.5 pb-2">
+                      <p className="px-1 text-[10px] font-black uppercase tracking-widest text-slate-400">People and rides</p>
+                      {(recordResults.drivers || []).map((d) => (
+                        <button
+                          key={`d-${d.id}`}
+                          type="button"
+                          onClick={() => {
+                            navigate(`/admin/drivers/${d.id}`);
+                            setIsSearchOpen(false);
+                            setSearchTerm('');
+                          }}
+                          className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-100 bg-white px-4 py-2.5 text-left hover:border-slate-900"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-black text-slate-900">{d.name}</span>
+                            <span className="block truncate text-[11px] font-semibold text-slate-500">
+                              Driver | {d.phone}
+                              {d.vehicle ? ` | ${d.vehicle}` : ''}
+                              {d.approved ? '' : ' | waiting for approval'}
+                            </span>
+                          </span>
+                          <ChevronRight size={16} className="shrink-0 text-slate-300" />
+                        </button>
+                      ))}
+                      {(recordResults.users || []).map((u) => (
+                        <button
+                          key={`u-${u.id}`}
+                          type="button"
+                          onClick={() => {
+                            navigate(`/admin/users/${u.id}`);
+                            setIsSearchOpen(false);
+                            setSearchTerm('');
+                          }}
+                          className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-100 bg-white px-4 py-2.5 text-left hover:border-slate-900"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-black text-slate-900">{u.name || 'Rider'}</span>
+                            <span className="block truncate text-[11px] font-semibold text-slate-500">Rider | {u.phone}</span>
+                          </span>
+                          <ChevronRight size={16} className="shrink-0 text-slate-300" />
+                        </button>
+                      ))}
+                      {recordResults.ride && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigate('/admin/trips');
+                            setIsSearchOpen(false);
+                            setSearchTerm('');
+                          }}
+                          className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-100 bg-white px-4 py-2.5 text-left hover:border-slate-900"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-black text-slate-900">
+                              Ride {recordResults.ride.status}: Rs {recordResults.ride.fare}
+                            </span>
+                            <span className="block truncate text-[11px] font-semibold text-slate-500">
+                              {recordResults.ride.from} to {recordResults.ride.to} (opens Trip Requests)
+                            </span>
+                          </span>
+                          <ChevronRight size={16} className="shrink-0 text-slate-300" />
+                        </button>
+                      )}
+                    </div>
+                  )}
+                {filteredDeepSearchResults.length === 0 && !recordResults?.drivers?.length && !recordResults?.users?.length && !recordResults?.ride ? (
                   <div className="rounded-3xl border border-slate-100 bg-slate-50 px-6 py-12 text-center">
                     <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-slate-300 mx-auto mb-3 border border-slate-200/60 shadow-sm">
                       <Search size={22} />

@@ -142,7 +142,7 @@ const WithdrawalRequestDrivers = () => {
                   <td colSpan={8} className="px-6 py-16 text-center">
                     <div className="flex flex-col items-center gap-3 text-gray-400">
                       <FileSearch size={44} strokeWidth={1.5} />
-                      <p className="text-sm font-medium">No Data Found</p>
+                      <p className="text-sm font-medium">No withdrawal requests. When a driver asks to take money out, it appears here.</p>
                     </div>
                   </td>
                 </tr>

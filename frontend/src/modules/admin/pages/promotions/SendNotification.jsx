@@ -349,7 +349,7 @@ const SendNotification = () => {
                         <td colSpan="5" className="px-6 py-16 text-center">
                           <div className="flex flex-col items-center gap-3 text-gray-400">
                             <Bell size={40} strokeWidth={1.5} />
-                            <p className="text-sm font-medium">No notifications found.</p>
+                            <p className="text-sm font-medium">No notifications sent yet. Press Create Push Notification to send your first message.</p>
                           </div>
                         </td>
                       </tr>

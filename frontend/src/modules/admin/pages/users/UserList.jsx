@@ -209,7 +209,7 @@ const UserList = () => {
 
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-xl font-semibold text-gray-900">Passengers</h1>
+        <h1 className="text-xl font-semibold text-gray-900">User List (Passengers)</h1>
         <div className="flex items-center gap-3">
           <button className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
             <Download size={15} /> Export

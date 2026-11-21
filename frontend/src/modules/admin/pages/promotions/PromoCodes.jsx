@@ -514,7 +514,7 @@ const PromoCodes = () => {
                         <td colSpan="6" className="px-6 py-16 text-center">
                           <div className="flex flex-col items-center gap-3 text-gray-400">
                             <Ticket size={44} strokeWidth={1.5} />
-                            <p className="text-sm font-medium">No promo codes found.</p>
+                            <p className="text-sm font-medium">No promo codes yet. Press Add Promo Code to create your first discount.</p>
                           </div>
                         </td>
                       </tr>

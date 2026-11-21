@@ -181,7 +181,7 @@ const BlockedFleetDrivers = () => {
   return (
     <div className="min-h-screen bg-gray-50 font-sans text-gray-950">
       <div className="px-5 pt-3">
-        <AdminPageHeader module="Fleet Management" page="Blocked Fleet Drivers" title="Blocked Fleet Drivers" />
+        <AdminPageHeader module="Fleet Management" page="Pending Fleet Drivers" title="Pending Fleet Drivers" />
       </div>
 
       <div className="px-5 pb-6">
@@ -271,7 +271,7 @@ const BlockedFleetDrivers = () => {
                       <td colSpan="11" className="border-b border-gray-200 px-3 py-12 text-center">
                         <div className="flex min-h-[130px] flex-col items-center justify-center text-slate-700">
                           <FileSearch size={92} strokeWidth={1.7} className="mb-2 text-indigo-950" />
-                          <p className="text-xl font-medium">No Data Found</p>
+                          <p className="text-xl font-medium">No pending fleet drivers right now.</p>
                         </div>
                       </td>
                     </tr>

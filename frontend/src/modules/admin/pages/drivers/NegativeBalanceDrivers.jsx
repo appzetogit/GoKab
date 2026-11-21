@@ -143,7 +143,7 @@ const NegativeBalanceDrivers = () => {
                   <td colSpan={8} className="px-6 py-16 text-center">
                     <div className="flex flex-col items-center gap-3 text-gray-400">
                       <FileSearch size={44} strokeWidth={1.5} />
-                      <p className="text-sm font-medium">No Data Found</p>
+                      <p className="text-sm font-medium">No driver owes money right now. A driver appears here when the wallet goes below zero.</p>
                     </div>
                   </td>
                 </tr>

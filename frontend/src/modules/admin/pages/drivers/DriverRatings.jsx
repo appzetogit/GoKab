@@ -96,7 +96,7 @@ const DriverRatings = () => {
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan="5" className="py-10 text-center text-gray-400">No data found.</td>
+                  <td colSpan="5" className="py-10 text-center text-gray-400">No ratings yet. Riders rate a driver after a completed ride.</td>
                 </tr>
               ) : (
                 filtered.map((driver) => (
