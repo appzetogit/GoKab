@@ -1,4 +1,5 @@
 import { ApiError } from '../../../../utils/ApiError.js';
+import { sendPushNotificationToEntities } from '../../services/pushNotificationService.js';
 import {
   broadcastSupportConversationDeleted,
   broadcastSupportMessage,
@@ -86,6 +87,18 @@ export const sendSupportMessage = async (req, res) => {
   });
 
   broadcastSupportMessage(savedMessage);
+
+  // The app may be closed: tell the rider or driver that the support team replied.
+  if (req.auth.role === 'admin' && ['user', 'driver'].includes(savedMessage.receiver?.role)) {
+    const receiverId = String(savedMessage.receiver.id);
+    const target = savedMessage.receiver.role === 'driver' ? { driverIds: [receiverId] } : { userIds: [receiverId] };
+    sendPushNotificationToEntities({
+      ...target,
+      title: 'Support Team',
+      body: String(savedMessage.message || '').slice(0, 120),
+      data: { type: 'support_chat', conversationKey: String(savedMessage.conversationKey || '') },
+    }).catch((error) => console.error('[supportChat] reply push failed:', error.message));
+  }
 
   res.status(201).json({
     success: true,
