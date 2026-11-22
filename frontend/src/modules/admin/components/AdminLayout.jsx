@@ -1179,7 +1179,7 @@ const AdminLayout = () => {
               { label: 'Driver Bulk Upload', path: '/admin/drivers/bulk-upload', permission: 'drivers.view' },
               { label: 'Delete Request Drivers', path: '/admin/drivers/delete-requests', permission: 'drivers.view' },
               {
-                label: 'Plans (Elite, Pro, Basic)',
+                label: 'Plans',
                 subItems: [
                   { label: 'Driver Plans (Subscription)', path: '/admin/drivers/subscription', permission: 'drivers.view' },
                   { label: 'Elite Drivers', path: '/admin/elite/drivers', permission: 'driver_network.view' },
