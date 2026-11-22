@@ -375,6 +375,8 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
   // Filter candidates by Subscription Tier rules (Module permissions, Cash Debt limits, and Priority score sort)
   const routeCache = new Map();
   const qualifiedDrivers = [];
+  const skippedForDebt = [];
+  const candidateCount = rawDrivers.length;
   for (const driver of rawDrivers) {
     // Honour the corridor the driver selected: in `route` mode they only want
     // trips that run along it, in the right direction.
@@ -405,6 +407,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
         const currentBalance = Number(driver?.wallet?.balance || 0);
         const maxDebtAllowed = Number(tier.max_cash_debt_allowed || 0);
         if (currentBalance < -maxDebtAllowed) {
+          skippedForDebt.push(`${driver.phone || driver._id}(balance ${currentBalance}, limit ${maxDebtAllowed})`);
           continue; // Driver cash debt exceeds tier limit
         }
       }
@@ -421,6 +424,12 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
       qualifiedDrivers.push(driver);
     }
   }
+
+  console.log(
+    `[matching] pickup=${coordinates.join(',')} vehicleTypes=${normalizedVehicleTypeIds.join('|') || 'any'} payment=${paymentMethod} ` +
+      `candidates=${candidateCount} qualified=${qualifiedDrivers.length}` +
+      (skippedForDebt.length ? ` skippedForCashDebt=[${skippedForDebt.join(', ')}]` : ''),
+  );
 
   // Sort qualified drivers by Priority Score descending (highest priority wave first)
   qualifiedDrivers.sort((a, b) => {
