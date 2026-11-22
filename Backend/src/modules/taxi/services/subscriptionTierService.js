@@ -274,6 +274,11 @@ export const subscriptionTierService = {
       });
     }
 
+    // A changed "Max Cash Debt Allowed" moves the line for drivers who owe money: re-check their block flag now.
+    import('../driver/services/walletService.js')
+      .then((wallet) => wallet.refreshWalletBlockFlags())
+      .catch((error) => console.error('[tier] wallet flag refresh failed:', error.message));
+
     return updated;
   },
 

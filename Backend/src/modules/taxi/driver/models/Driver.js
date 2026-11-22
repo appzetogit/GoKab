@@ -389,6 +389,12 @@ const driverSchema = new mongoose.Schema(
         type: Boolean,
         default: false,
       },
+      // The wallet status the driver was last told about (ok | low | blocked), so a push is sent only when it changes.
+      cashNoticeStatus: {
+        type: String,
+        enum: ['ok', 'low', 'blocked'],
+        default: 'ok',
+      },
       // Money committed to an in-flight escrow on a published ride. It stays
       // part of `balance` (nothing has moved yet) but is not spendable, so
       // every "can you afford this" check works off `balance - frozenBalance`.

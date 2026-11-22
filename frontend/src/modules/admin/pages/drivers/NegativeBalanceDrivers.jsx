@@ -128,19 +128,22 @@ const NegativeBalanceDrivers = () => {
                 <th className="px-6 py-4">Mobile Number</th>
                 <th className="px-6 py-4">Transport Type</th>
                 <th className="px-6 py-4">Approved Status</th>
+                <th className="px-6 py-4 text-right">Wallet</th>
+                <th className="px-6 py-4 text-right">Plan limit</th>
+                <th className="px-6 py-4">Ride requests</th>
                 <th className="px-6 py-4 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-16 text-center text-sm text-gray-400">
+                  <td colSpan={11} className="px-6 py-16 text-center text-sm text-gray-400">
                     Loading...
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-16 text-center">
+                  <td colSpan={11} className="px-6 py-16 text-center">
                     <div className="flex flex-col items-center gap-3 text-gray-400">
                       <FileSearch size={44} strokeWidth={1.5} />
                       <p className="text-sm font-medium">No driver owes money right now. A driver appears here when the wallet goes below zero.</p>
@@ -167,6 +170,23 @@ const NegativeBalanceDrivers = () => {
                         }`}
                       >
                         {item.approve ? 'Approved' : 'Pending'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-right text-sm font-semibold text-rose-600">Rs {Number(item.balance || 0).toFixed(2)}</td>
+                    <td className="px-6 py-4 text-right text-sm text-gray-600">
+                      {item.cash_limit === null || item.cash_limit === undefined ? '-' : `Rs ${Number(item.cash_limit).toFixed(0)}`}
+                    </td>
+                    <td className="px-6 py-4 text-sm">
+                      <span
+                        className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                          item.requests_paused
+                            ? 'bg-rose-50 text-rose-700'
+                            : item.cash_status === 'low'
+                              ? 'bg-amber-50 text-amber-700'
+                              : 'bg-emerald-50 text-emerald-700'
+                        }`}
+                      >
+                        {item.requests_paused ? 'Paused' : item.cash_status === 'low' ? 'Low' : 'Getting requests'}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-right">

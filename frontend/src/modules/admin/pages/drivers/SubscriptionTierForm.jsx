@@ -246,7 +246,7 @@ export default function SubscriptionTierForm({ tier, onClose, onSuccess }) {
                   onChange={(e) => setFormData({ ...formData, max_cash_debt_allowed: Number(e.target.value) })}
                   className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl text-sm font-bold"
                 />
-                <span className="text-[11px] text-gray-400 block mt-1">e.g. 1000 = driver wallet balance can drop down to -1000</span>
+                <span className="text-[11px] text-gray-400 block mt-1">e.g. 200 = the wallet can drop to -200. Below that the driver stops getting ride requests, and the driver app shows a warning and sends a notification. This is the only limit used for drivers on this plan.</span>
               </div>
             </div>
           </div>

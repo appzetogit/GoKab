@@ -3307,9 +3307,11 @@ export const listNegativeBalanceDrivers = async ({ page = 1, limit = 50, search 
   ]);
 
   const totalOutstanding = Number(totals?.[0]?.total_outstanding || 0);
+  // The plan limit and whether this driver is paused (same rule the dispatch uses).
+  const snapshots = await Promise.all(drivers.map((driver) => getWalletSnapshot(driver).catch(() => null)));
 
   return {
-    results: drivers.map((driver) => ({
+    results: drivers.map((driver, index) => ({
       _id: driver._id,
       name: driver.name || '',
       service_location_name: driver.city || '',
@@ -3319,6 +3321,9 @@ export const listNegativeBalanceDrivers = async ({ page = 1, limit = 50, search 
       approve: Boolean(driver.approve),
       status: driver.status || (driver.approve ? 'approved' : 'pending'),
       balance: Number(driver.wallet?.balance || 0),
+      cash_limit: snapshots[index] ? snapshots[index].debtLimit : null,
+      requests_paused: snapshots[index] ? snapshots[index].isBlocked : false,
+      cash_status: snapshots[index] ? snapshots[index].cashStatus : 'ok',
     })),
     paginator: {
       current_page: safePage,
@@ -3656,7 +3661,7 @@ export const adjustDriverWallet = async (id, payload = {}) => {
     const cashLimit = wallet.cashLimit;
     const isBlockedAfter = wallet.isOwnerManagedDriver
       ? false
-      : (!wallet.rules.isWalletEnabled || wallet.balance <= wallet.minimumBalanceForOrders);
+      : (!wallet.rules.isWalletEnabled || wallet.balance < wallet.minimumBalanceForOrders);
 
     driver.wallet.cashLimit = cashLimit;
     driver.wallet.isBlocked = isBlockedAfter;

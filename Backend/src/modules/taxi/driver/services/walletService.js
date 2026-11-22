@@ -7,6 +7,7 @@ import { WalletTransaction } from '../models/WalletTransaction.js';
 import { Ride } from '../../user/models/Ride.js';
 import { getWalletSettings } from '../../services/appSettingsService.js';
 import { subscriptionTierService } from '../../services/subscriptionTierService.js';
+import { sendPushNotificationToEntities } from '../../services/pushNotificationService.js';
 
 const normalizeAmount = (value, fieldName = 'amount') => {
   const amount = Number(value);
@@ -149,8 +150,29 @@ const resolveWalletRules = async () => {
   };
 };
 
+/**
+ * How far below zero this driver's wallet may go: the plan's "Max Cash Debt Allowed" (admin: Driver Plans).
+ * Null when the driver has no plan at all, so the old wallet setting is used as a last resort.
+ */
+const resolvePlanDebtLimit = async (driver) => {
+  try {
+    const tier = await subscriptionTierService.getEffectiveDriverTier(driver?._id);
+    const limit = Number(tier?.max_cash_debt_allowed);
+    return tier && Number.isFinite(limit) ? Math.max(0, limit) : null;
+  } catch {
+    return null;
+  }
+};
+
+/** ok | low (80% of the limit used) | blocked (below the limit). One rule for the app, matching and accepting. */
+const cashStatusOf = (balance, debtLimit) => {
+  if (balance < -debtLimit) return 'blocked';
+  if (debtLimit > 0 && balance <= -0.8 * debtLimit) return 'low';
+  return 'ok';
+};
+
 export const getWalletSnapshot = async (driver) => {
-  const rules = await resolveWalletRules();
+  const baseRules = await resolveWalletRules();
   const balance = Number(driver?.wallet?.balance || 0);
   const isOwnerManagedDriver = Boolean(driver?.owner_id);
   // Money committed to an open escrow on a published ride. It is still part of
@@ -158,14 +180,26 @@ export const getWalletSnapshot = async (driver) => {
   const frozenBalance = Math.max(0, Number(driver?.wallet?.frozenBalance || 0));
   const available = Math.round((balance - frozenBalance) * 100) / 100;
 
+  // The limit comes from the plan, so what the driver is shown is what the server enforces.
+  const planLimit = await resolvePlanDebtLimit(driver);
+  const debtLimit = planLimit ?? baseRules.cashLimit;
+  const rules = { ...baseRules, cashLimit: debtLimit, minimumBalanceForOrders: -debtLimit };
+  const status = isOwnerManagedDriver || !rules.isWalletEnabled ? 'ok' : cashStatusOf(available, debtLimit);
+
   return {
     balance,
     frozenBalance,
     available,
-    cashLimit: rules.cashLimit,
-    minimumBalanceForOrders: rules.minimumBalanceForOrders,
-    availableForOrders: Math.round((available - rules.minimumBalanceForOrders) * 100) / 100,
-    isBlocked: isOwnerManagedDriver ? false : Boolean(driver?.wallet?.isBlocked),
+    cashLimit: debtLimit,
+    debtLimit,
+    minimumBalanceForOrders: -debtLimit,
+    availableForOrders: Math.round((available + debtLimit) * 100) / 100,
+    // Worked out live from the balance, never from the stored flag, so a changed plan limit takes effect at once.
+    isBlocked: isOwnerManagedDriver ? false : (!rules.isWalletEnabled || available < -debtLimit),
+    cashStatus: status,
+    // Smallest top-up that lets the driver get requests again, and the top-up that clears the balance to zero.
+    amountToUnblock: status === 'blocked' ? Math.ceil((-debtLimit - available) * 100) / 100 : 0,
+    amountToClear: available < 0 ? Math.ceil(-available * 100) / 100 : 0,
     isOwnerManagedDriver,
     rules,
   };
@@ -181,13 +215,19 @@ export const serializeDriverWallet = async (driver) => {
     cashLimit: wallet.cashLimit,
     minimumBalanceForOrders: wallet.minimumBalanceForOrders,
     availableForOrders: wallet.availableForOrders,
+    // For the app's warning banner (the same rule the server enforces).
+    cashDebtLimit: wallet.debtLimit,
+    cashStatus: wallet.cashStatus,
+    cashRidesBlocked: wallet.cashStatus === 'blocked',
+    amountToUnblock: wallet.amountToUnblock,
+    amountToClear: wallet.amountToClear,
     isWalletEnabled: wallet.rules.isWalletEnabled,
     isTransferEnabled: wallet.rules.isTransferEnabled,
     minimumTopUpAmount: wallet.rules.minimumTopUpAmount,
     minimumTransferAmount: wallet.rules.minimumTransferAmount,
     isBlocked: wallet.isOwnerManagedDriver
       ? false
-      : (wallet.isBlocked || !wallet.rules.isWalletEnabled || wallet.available <= wallet.minimumBalanceForOrders),
+      : (wallet.isBlocked || !wallet.rules.isWalletEnabled || wallet.available < wallet.minimumBalanceForOrders),
   };
 };
 
@@ -214,7 +254,7 @@ export const ensureDriverWalletCanAcceptRide = async (driverOrId, { session } = 
   }
 
   const isBlocked =
-    wallet.isBlocked || !wallet.rules.isWalletEnabled || wallet.available <= wallet.minimumBalanceForOrders;
+    wallet.isBlocked || !wallet.rules.isWalletEnabled || wallet.available < wallet.minimumBalanceForOrders;
 
   if (isBlocked) {
     await Driver.findByIdAndUpdate(driver._id, {
@@ -261,7 +301,7 @@ export const applyDriverWalletAdjustment = async ({
   const balanceAfter = Math.round((before.balance + normalizedAmount) * 100) / 100;
   const isBlockedAfter = before.isOwnerManagedDriver
     ? false
-    : (!before.rules.isWalletEnabled || balanceAfter <= before.minimumBalanceForOrders);
+    : (!before.rules.isWalletEnabled || balanceAfter < before.minimumBalanceForOrders);
 
   const updatedDriver = await Driver.findByIdAndUpdate(
     driverId,
@@ -293,11 +333,75 @@ export const applyDriverWalletAdjustment = async ({
     { session },
   );
 
+  // Tell the driver when the wallet crosses a line (low, blocked, recharged). It is checked again a moment
+  // later, so a transaction that rolls back never sends a wrong message.
+  setTimeout(() => {
+    notifyWalletStatusChange(driverId).catch((error) => console.error('[wallet] status notice failed:', error.message));
+  }, 2500);
+
   return {
     driver: updatedDriver,
     wallet: await serializeDriverWallet(updatedDriver),
     transaction,
   };
+};
+
+const money = (value) => `Rs ${Number(value || 0).toFixed(2).replace(/\.00$/, '')}`;
+
+const WALLET_NOTICES = {
+  blocked: (w) => ({
+    title: 'Ride requests paused',
+    body: `Your wallet is ${money(w.balance)}, below your ${money(w.debtLimit)} limit. Add ${money(w.amountToUnblock)} to get ride requests again.`,
+  }),
+  low: (w) => ({
+    title: 'Wallet is running low',
+    body: `You have used most of your ${money(w.debtLimit)} limit (wallet ${money(w.balance)}). Add money to keep getting ride requests.`,
+  }),
+  recovered: () => ({
+    title: 'Ride requests are back',
+    body: 'Your wallet is fine again. You will get ride requests now.',
+  }),
+};
+
+/** Sends one push when the driver's wallet status changes, and remembers the status that was announced. */
+export const notifyWalletStatusChange = async (driverId) => {
+  const driver = await Driver.findById(driverId);
+  if (!driver || driver.owner_id) return;
+
+  const wallet = await getWalletSnapshot(driver);
+  const announced = driver.wallet?.cashNoticeStatus || 'ok';
+  if (wallet.cashStatus === announced) return;
+
+  await Driver.updateOne({ _id: driver._id }, { $set: { 'wallet.cashNoticeStatus': wallet.cashStatus } });
+
+  // low -> ok is silent; only a recovery from blocked is worth a message.
+  const notice =
+    wallet.cashStatus === 'blocked' ? WALLET_NOTICES.blocked(wallet)
+    : wallet.cashStatus === 'low' ? WALLET_NOTICES.low(wallet)
+    : announced === 'blocked' ? WALLET_NOTICES.recovered(wallet)
+    : null;
+  if (!notice) return;
+
+  await sendPushNotificationToEntities({
+    driverIds: [String(driver._id)],
+    title: notice.title,
+    body: notice.body,
+    data: { type: 'wallet_status', status: wallet.cashStatus },
+  });
+};
+
+/** Re-checks the stored block flag of every driver that owes money (used after a plan limit changes). */
+export const refreshWalletBlockFlags = async () => {
+  const drivers = await Driver.find({ $or: [{ 'wallet.balance': { $lt: 0 } }, { 'wallet.isBlocked': true }] });
+  let changed = 0;
+  for (const driver of drivers) {
+    const wallet = await getWalletSnapshot(driver);
+    if (Boolean(driver.wallet?.isBlocked) !== wallet.isBlocked || Number(driver.wallet?.cashLimit) !== wallet.cashLimit) {
+      await Driver.updateOne({ _id: driver._id }, { $set: { 'wallet.isBlocked': wallet.isBlocked, 'wallet.cashLimit': wallet.cashLimit } });
+      changed += 1;
+    }
+  }
+  return { checked: drivers.length, changed };
 };
 
 export const topUpDriverWallet = async ({ driverId, amount, metadata = {} }) => {
