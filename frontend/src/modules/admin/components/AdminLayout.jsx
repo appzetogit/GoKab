@@ -1144,228 +1144,212 @@ const AdminLayout = () => {
       {
         title: 'Home',
         items: [
-          {
-            icon: UserCog,
-            label: 'Admin Management',
-            subItems: [
-              { label: 'Admins', path: '/admin/management/admins', permission: 'subadmins.manage' },
-            ],
-          },
           { icon: Home, label: 'Dashboard', path: '/admin/dashboard', permission: 'dashboard.view' },
-          { icon: IndianRupee, label: 'Admin Earnings', path: '/admin/earnings', permission: 'earnings.view' },
-          { icon: MessageCircle, label: 'Chat', path: '/admin/chat', permission: 'chat.view' },
-          {
-            icon: TrendingUp,
-            label: 'Promotions Management',
-            subItems: [
-              { label: 'Promo Code', path: '/admin/promotions/promo-codes', permission: 'promotions.view' },
-              { label: 'Push Notifications', path: '/admin/promotions/send-notification', permission: 'promotions.view' },
-              { label: 'Advertisements', path: '/admin/promotions/advertisements', permission: 'promotions.view' },
-              { label: 'Driver Offers', path: '/admin/promotions/driver-offers', permission: 'promotions.view' },
-              //{ label: 'Banner Image', path: '/admin/promotions/banner-image', permission: 'promotions.view' },
-            ],
-          },
-          {
-            icon: IndianRupee,
-            label: 'Price Management',
-            subItems: [
-              { label: 'Service Location', path: '/admin/pricing/service-location', permission: 'service_locations.view' },
-              { label: 'Zone', path: '/admin/pricing/zone', permission: 'zones.view' },
-              { label: 'Airport', path: '/admin/pricing/airport', permission: 'airports.view' },
-              { label: 'Railway Station', path: '/admin/pricing/railway-station', permission: 'airports.view' },
-              { label: 'App Modules', path: '/admin/pricing/app-modules', permission: 'settings.view' },
-              { label: 'Vehicle Type', path: '/admin/pricing/vehicle-type', permission: 'vehicle_types.view' },
-              { label: 'Set Price', path: '/admin/pricing/set-price', permission: 'set_prices.view' },
-            ],
-          },
-          // {
-          //   icon: Plane,
-          //   label: 'Airport Management',
-          //   subItems: [
-          //     { label: 'Airport', path: '/admin/pricing/airport', permission: 'airports.view' },
-          //     { label: 'Airport Requests', path: '/admin/airport/requests', permission: 'trips.view' },
-          //   ],
-          // },
-          // {
-          //   icon: Share2,
-          //   label: 'Car Pooling',
-          //   subItems: [
-          //     { label: 'Pooling Vehicles', path: '/admin/pooling/vehicles', permission: 'pooling.view' },
-          //     { label: 'Pending Pooling Drivers', path: '/admin/pooling/drivers/pending', permission: 'pooling.view' },
-          //     { label: 'Pooling Commission', path: '/admin/pooling/commission', permission: 'pooling.view' },
-          //     { label: 'Routes & Stops', path: '/admin/pooling/routes', permission: 'pooling.view' },
-          //     { label: 'Pooling Bookings', path: '/admin/pooling/bookings', permission: 'pooling.view' },
-          //   ],
-          // },
-          {
-            icon: MapPin,
-            label: 'Geofencing',
-            subItems: [
-              { label: 'Heat Map', path: '/admin/geo/heatmap', permission: 'geofencing.view' },
-              { label: "God's Eye", path: '/admin/geo/gods-eye', permission: 'geofencing.view' },
-              // { label: 'Peak Zone', path: '/admin/geo/peak-zone', permission: 'geofencing.view' },
-            ],
-          },
-          { icon: ShieldAlert, label: 'SOS', path: '/admin/safety', permission: 'dashboard.view' },
-          { icon: Car, label: 'Trip Requests', path: '/admin/trips', permission: 'trips.view' },
-          { icon: Globe, label: 'Outstation Requests', path: '/admin/outstation', permission: 'trips.view' },
-          { icon: Clock, label: 'Ongoing Requests', path: '/admin/ongoing', permission: 'ongoing.view' },
         ],
       },
       {
-        title: 'Users',
+        title: 'Operations',
         items: [
           {
+            icon: Clock,
+            label: 'Live Operations',
+            subItems: [
+              { label: 'Ongoing Requests', path: '/admin/ongoing', permission: 'ongoing.view' },
+              { label: 'Trip Requests', path: '/admin/trips', permission: 'trips.view' },
+              { label: 'Outstation Requests', path: '/admin/outstation', permission: 'trips.view' },
+              { label: 'SOS', path: '/admin/safety', permission: 'dashboard.view' },
+              { label: 'Heat Map', path: '/admin/geo/heatmap', permission: 'geofencing.view' },
+              { label: "God's Eye", path: '/admin/geo/gods-eye', permission: 'geofencing.view' },
+            ],
+          },
+        ],
+      },
+      {
+        title: 'People',
+        items: [
+          {
+            icon: Car,
+            label: 'Drivers',
+            subItems: [
+              { label: 'Pending Drivers', path: '/admin/drivers/pending', permission: 'drivers.view' },
+              { label: 'Approved Drivers', path: '/admin/drivers', permission: 'drivers.view' },
+              { label: 'Active Drivers', path: '/admin/drivers/active', permission: 'drivers.view' },
+              { label: 'Drivers Ratings', path: '/admin/drivers/ratings', permission: 'drivers.view' },
+              { label: 'Driver Needed Documents', path: '/admin/drivers/documents', permission: 'drivers.view' },
+              { label: 'Driver Bulk Upload', path: '/admin/drivers/bulk-upload', permission: 'drivers.view' },
+              { label: 'Delete Request Drivers', path: '/admin/drivers/delete-requests', permission: 'drivers.view' },
+              {
+                label: 'Plans (Elite, Pro, Basic)',
+                subItems: [
+                  { label: 'Driver Plans (Subscription)', path: '/admin/drivers/subscription', permission: 'drivers.view' },
+                  { label: 'Elite Drivers', path: '/admin/elite/drivers', permission: 'driver_network.view' },
+                  { label: 'Add Driver with Plan', path: '/admin/elite/create', permission: 'driver_network.view' },
+                  { label: 'Elite Slots', path: '/admin/elite/slots', permission: 'driver_network.view' },
+                ],
+              },
+              {
+                label: 'Wallet and Payouts',
+                subItems: [
+                  { label: 'Withdrawal Requests', path: '/admin/drivers/wallet/withdrawals', permission: 'wallet.view' },
+                  { label: 'Negative Balance Drivers', path: '/admin/drivers/wallet/negative', permission: 'wallet.view' },
+                  { label: 'Payment Methods', path: '/admin/drivers/payment-methods', permission: 'wallet.view' },
+                ],
+              },
+              {
+                label: 'Driver Features',
+                subItems: [
+                  { label: 'Driver Offers', path: '/admin/promotions/driver-offers', permission: 'promotions.view' },
+                  { label: 'Driver Routes', path: '/admin/settings/business/driver-routes', permission: 'settings.view' },
+                  { label: 'Bid Ride Settings', path: '/admin/settings/business/bid-ride', permission: 'settings.view' },
+                  { label: 'Driver Referral Settings', path: '/admin/referrals/driver-settings', permission: 'referrals.view' },
+                ],
+              },
+            ],
+          },
+          {
             icon: Users,
-            label: 'Customer Management',
+            label: 'Riders',
             subItems: [
               { label: 'User List', path: '/admin/users', permission: 'users.view' },
               { label: 'Subscription Management', path: '/admin/users/subscriptions', permission: 'users.view' },
               { label: 'Delete Request Users', path: '/admin/users/delete-requests', permission: 'users.view' },
               { label: 'User Bulk Upload', path: '/admin/users/bulk-upload', permission: 'users.view' },
-            ],
-          },
-          { icon: Wallet, label: 'Wallet Payment', path: '/admin/wallet/payment', permission: 'wallet.view' },
-          {
-            icon: Car,
-            label: 'Driver Management',
-            subItems: [
-              { label: 'Pending Drivers', path: '/admin/drivers/pending', permission: 'drivers.view' },
-              { label: 'Approved Drivers', path: '/admin/drivers', permission: 'drivers.view' },
-              { label: 'Active Drivers', path: '/admin/drivers/active', permission: 'drivers.view' },
-              { label: 'Subscription', path: '/admin/drivers/subscription', permission: 'drivers.view' },
-              { label: 'Drivers Ratings', path: '/admin/drivers/ratings', permission: 'drivers.view' },
-              {
-                label: 'Driver Wallet',
-                subItems: [
-                  { label: 'Withdrawal Requests', path: '/admin/drivers/wallet/withdrawals', permission: 'wallet.view' },
-                  { label: 'Negative Balance Drivers', path: '/admin/drivers/wallet/negative', permission: 'wallet.view' },
-                ],
-              },
-              { label: 'Delete Request Drivers', path: '/admin/drivers/delete-requests', permission: 'drivers.view' },
-              { label: 'Driver Needed Documents', path: '/admin/drivers/documents', permission: 'drivers.view' },
-              { label: 'Driver Bulk Upload', path: '/admin/drivers/bulk-upload', permission: 'drivers.view' },
-              { label: 'Payment Methods', path: '/admin/drivers/payment-methods', permission: 'wallet.view' },
-            ],
-          },
-          {
-            icon: Share2,
-            label: 'Referral Management',
-            subItems: [
-              { label: 'Referral Dashboard', path: '/admin/referrals/dashboard', permission: 'referrals.view' },
               { label: 'User Referral Settings', path: '/admin/referrals/user-settings', permission: 'referrals.view' },
               { label: 'User Referral Redemptions', path: '/admin/referrals/user-redemptions', permission: 'referrals.view' },
-              { label: 'Driver Referral Settings', path: '/admin/referrals/driver-settings', permission: 'referrals.view' },
-              { label: 'Referral Translation', path: '/admin/referrals/translation', permission: 'referrals.view' },
             ],
           },
+        ],
+      },
+      {
+        title: 'Business',
+        items: [
           {
-            icon: Car,
-            label: 'Vehicles',
+            icon: Package,
+            label: 'Vehicles and Fares',
             subItems: [
+              { label: 'Vehicle Types', path: '/admin/pricing/vehicle-type', permission: 'vehicle_types.view' },
+              { label: 'Set Price (Fares)', path: '/admin/pricing/set-price', permission: 'set_prices.view' },
               { label: 'Vehicle Approvals', path: '/admin/fleet/manage', permission: 'owners.view' },
               { label: 'Vehicle Documents', path: '/admin/fleet/documents', permission: 'owners.view' },
+              { label: 'Commercial Vehicle Check', path: '/admin/elite/commercial', permission: 'driver_network.view' },
             ],
           },
           {
-            icon: FileText,
-            label: 'Report',
+            icon: MapPin,
+            label: 'Locations',
             subItems: [
-              { label: 'User Report', path: '/admin/reports/user', permission: 'reports.view' },
-              { label: 'Driver Report', path: '/admin/reports/driver', permission: 'reports.view' },
-              { label: 'Driver Duty Report', path: '/admin/reports/driver-duty', permission: 'reports.view' },
+              { label: 'Service Location', path: '/admin/pricing/service-location', permission: 'service_locations.view' },
+              { label: 'Zone', path: '/admin/pricing/zone', permission: 'zones.view' },
+              { label: 'Airport', path: '/admin/pricing/airport', permission: 'airports.view' },
+              { label: 'Railway Station', path: '/admin/pricing/railway-station', permission: 'airports.view' },
+            ],
+          },
+        ],
+      },
+      {
+        title: 'Money and Growth',
+        items: [
+          {
+            icon: Wallet,
+            label: 'Money',
+            subItems: [
+              { label: 'Admin Earnings', path: '/admin/earnings', permission: 'earnings.view' },
+              { label: 'Wallet Payment', path: '/admin/wallet/payment', permission: 'wallet.view' },
               { label: 'Finance Report', path: '/admin/reports/finance', permission: 'reports.view' },
               { label: 'Fleet Finance Report', path: '/admin/reports/fleet-finance', permission: 'reports.view' },
             ],
           },
           {
-            icon: ShieldCheck,
-            label: 'Support Management',
+            icon: TrendingUp,
+            label: 'Marketing',
             subItems: [
-              { label: 'Ticket Title', path: '/admin/support/ticket-title', permission: 'support.view' },
+              { label: 'Promo Code', path: '/admin/promotions/promo-codes', permission: 'promotions.view' },
+              { label: 'Push Notifications', path: '/admin/promotions/send-notification', permission: 'promotions.view' },
+              { label: 'Advertisements', path: '/admin/promotions/advertisements', permission: 'promotions.view' },
+              { label: 'Referral Dashboard', path: '/admin/referrals/dashboard', permission: 'referrals.view' },
+              { label: 'Referral Translation', path: '/admin/referrals/translation', permission: 'referrals.view' },
+            ],
+          },
+        ],
+      },
+      {
+        title: 'Help and Reports',
+        items: [
+          {
+            icon: MessageCircle,
+            label: 'Support',
+            subItems: [
+              { label: 'Chat', path: '/admin/chat', permission: 'chat.view' },
               { label: 'Support Tickets', path: '/admin/support/tickets', permission: 'support.view' },
+              { label: 'Ticket Title', path: '/admin/support/ticket-title', permission: 'support.view' },
+            ],
+          },
+          {
+            icon: FileText,
+            label: 'Reports',
+            subItems: [
+              { label: 'User Report', path: '/admin/reports/user', permission: 'reports.view' },
+              { label: 'Driver Report', path: '/admin/reports/driver', permission: 'reports.view' },
+              { label: 'Driver Duty Report', path: '/admin/reports/driver-duty', permission: 'reports.view' },
             ],
           },
         ],
       },
       {
-        title: 'Elite',
+        title: 'Setup',
         items: [
-          {
-            icon: Gem,
-            label: 'Elite and Pro Drivers',
-            permission: 'driver_network.view',
-            subItems: [
-              { label: 'Elite Drivers', path: '/admin/elite/drivers', permission: 'driver_network.view' },
-              { label: 'Add Driver with Plan', path: '/admin/elite/create', permission: 'driver_network.view' },
-              { label: 'Elite Slots', path: '/admin/elite/slots', permission: 'driver_network.view' },
-              { label: 'Commercial Vehicle Check', path: '/admin/elite/commercial', permission: 'driver_network.view' },
-            ],
-          },
-        ],
-      },
-      {
-        title: 'Masters',
-        items: [
-          { icon: Globe, label: 'Language', path: '/admin/masters/languages', permission: 'settings.view' },
-          // { icon: Star, label: 'Preferences', path: '/admin/masters/preferences' },
-          // { icon: ShieldCheck, label: 'Roles', path: '/admin/masters/roles' },
-        ],
-      },
-      {
-        title: 'Settings',
-        items: [
-          {
-            icon: Settings,
-            label: 'Business Settings',
-            permission: 'settings.view',
-            subItems: [
-              { label: 'General Settings', path: '/admin/settings/business/general', permission: 'settings.view' },
-              { label: 'Customization Settings', path: '/admin/settings/business/customization', permission: 'settings.view' },
-              { label: 'Transport Ride Settings', path: '/admin/settings/business/transport-ride', permission: 'settings.view' },
-              { label: 'Carpool Settings', path: '/admin/settings/business/carpool', permission: 'settings.view' },
-              { label: 'Driver Routes', path: '/admin/settings/business/driver-routes', permission: 'settings.view' },
-              { label: 'Bid Ride Settings', path: '/admin/settings/business/bid-ride', permission: 'settings.view' },
-            ],
-          },
-          {
-            icon: Smartphone,
-            label: 'App Settings',
-            permission: 'settings.view',
-            subItems: [
-              { label: 'Wallet Settings', path: '/admin/settings/app/wallet', permission: 'settings.view' },
-              { label: 'Tip Settings', path: '/admin/settings/app/tip', permission: 'settings.view' },
-              { label: 'Mobile App Landing/Onboard Screens Settings', path: '/admin/settings/app/onboard', permission: 'settings.view' },
-            ],
-          },
-          {
-            icon: Settings2,
-            label: 'Third-party Settings',
-            permission: 'settings.view',
-            subItems: [
-              { label: 'Payment Gateway Settings', path: '/admin/settings/third-party/payment', permission: 'settings.view' },
-              { label: 'SMS Gateway Settings', path: '/admin/settings/third-party/sms', permission: 'settings.view' },
-              { label: 'Firebase Settings', path: '/admin/settings/third-party/firebase', permission: 'settings.view' },
-              { label: 'Map and Map APIs Settings', path: '/admin/settings/third-party/map-apis', permission: 'settings.view' },
-              { label: 'Mail Configuration', path: '/admin/settings/third-party/mail', permission: 'settings.view' },
-              // { label: 'Notification Channel', path: '/admin/settings/third-party/notification-channel' },
-            ],
-          },
-          // {
-          //   icon: PlusCircle,
-          //   label: 'Addons',
-          //   subItems: [{ label: 'Dispatcher Addons', path: '/admin/settings/addons/dispatcher' }],
-          // },
           {
             icon: Monitor,
-            label: 'CMS - App Pages',
+            label: 'App and Website Content',
             permission: 'settings.view',
             subItems: [
-              { label: 'Header-Footer', path: '/admin/settings/cms/header-footer', permission: 'settings.view' },
+              { label: 'App Modules', path: '/admin/pricing/app-modules', permission: 'settings.view' },
+              { label: 'Mobile App Landing/Onboard Screens Settings', path: '/admin/settings/app/onboard', permission: 'settings.view' },
               { label: 'About Us', path: '/admin/settings/cms/about', permission: 'settings.view' },
               { label: 'Privacy Policy', path: '/admin/settings/cms/privacy', permission: 'settings.view' },
               { label: 'Terms & Conditions', path: '/admin/settings/cms/terms', permission: 'settings.view' },
               { label: 'Contact Us', path: '/admin/settings/cms/contact', permission: 'settings.view' },
+              { label: 'Language', path: '/admin/masters/languages', permission: 'settings.view' },
+              { label: 'Header-Footer', path: '/admin/settings/cms/header-footer', permission: 'settings.view' },
+            ],
+          },
+          {
+            icon: Settings,
+            label: 'Settings',
+            permission: 'settings.view',
+            subItems: [
+              {
+                label: 'Business Settings',
+                subItems: [
+                  { label: 'General Settings', path: '/admin/settings/business/general', permission: 'settings.view' },
+                  { label: 'Customization Settings', path: '/admin/settings/business/customization', permission: 'settings.view' },
+                  { label: 'Transport Ride Settings', path: '/admin/settings/business/transport-ride', permission: 'settings.view' },
+                  { label: 'Carpool Settings', path: '/admin/settings/business/carpool', permission: 'settings.view' },
+                ],
+              },
+              {
+                label: 'App Settings',
+                subItems: [
+                  { label: 'Wallet Settings', path: '/admin/settings/app/wallet', permission: 'settings.view' },
+                  { label: 'Tip Settings', path: '/admin/settings/app/tip', permission: 'settings.view' },
+                ],
+              },
+              {
+                label: 'Third-party Settings',
+                subItems: [
+                  { label: 'Payment Gateway Settings', path: '/admin/settings/third-party/payment', permission: 'settings.view' },
+                  { label: 'SMS Gateway Settings', path: '/admin/settings/third-party/sms', permission: 'settings.view' },
+                  { label: 'Firebase Settings', path: '/admin/settings/third-party/firebase', permission: 'settings.view' },
+                  { label: 'Map and Map APIs Settings', path: '/admin/settings/third-party/map-apis', permission: 'settings.view' },
+                  { label: 'Mail Configuration', path: '/admin/settings/third-party/mail', permission: 'settings.view' },
+                ],
+              },
+              {
+                label: 'Admin Management',
+                subItems: [
+                  { label: 'Admins', path: '/admin/management/admins', permission: 'subadmins.manage' },
+                ],
+              },
             ],
           },
         ],
