@@ -78,6 +78,13 @@ const PUBLIC_VEHICLE_CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
 // unfiltered catalog (rider app) and a filtered one (driver registration,
 // `?transport_type=taxi&active=true`) don't serve each other's results.
 const publicVehicleCatalogCache = new Map();
+// The rider app's fare list. It reads big vehicle documents from the database, so it is kept for a minute
+// and dropped as soon as a vehicle, fare or zone is changed.
+const publicSetPriceCache = new Map();
+const clearPublicPricingCache = () => {
+  publicVehicleCatalogCache.clear();
+  publicSetPriceCache.clear();
+};
 
 const deepMerge = (target, source) => {
   const result = { ...target };
@@ -5391,7 +5398,7 @@ export const createVehicleType = async (payload) => {
       : [],
   });
 
-  publicVehicleCatalogCache.clear();
+  clearPublicPricingCache();
 
   return vehicle.toObject();
 };
@@ -5459,7 +5466,7 @@ export const updateVehicleType = async (id, payload) => {
   }
 
   await vehicle.save();
-  publicVehicleCatalogCache.clear();
+  clearPublicPricingCache();
   return vehicle.toObject();
 };
 
@@ -5484,12 +5491,12 @@ export const deleteVehicleType = async (id) => {
     vehicle.active = false;
     vehicle.status = 0;
     await vehicle.save();
-    publicVehicleCatalogCache.clear();
+    clearPublicPricingCache();
     return { deleted: false, deactivated: true, id: String(vehicle._id) };
   }
 
   await Vehicle.findByIdAndDelete(id);
-  publicVehicleCatalogCache.clear();
+  clearPublicPricingCache();
   return { deleted: true, deactivated: false, id: String(id) };
 };
 
@@ -5517,10 +5524,12 @@ export const listSetPrices = async (queryArgs = {}, currentAdmin = null) => {
   }
 
   const items = await SetPrice.find(query)
-    .populate('vehicle_type')
+    // The vehicle pictures (icon, map_icon) are stored inside the vehicle document, about 300 KB each, and
+    // no fare list needs them. Leaving them out is what makes this list load in a second instead of 20.
+    .populate({ path: 'vehicle_type', select: '-icon -map_icon' })
     .populate('service_location_id')
     .populate('package_type_id')
-    .populate('package_vehicle_prices.vehicle_type')
+    .populate({ path: 'package_vehicle_prices.vehicle_type', select: '-icon -map_icon' })
     .populate({
       path: 'zone_id',
       populate: { path: 'service_location_id' }
@@ -5654,7 +5663,7 @@ export const listSetPrices = async (queryArgs = {}, currentAdmin = null) => {
   };
 };
 
-export const createSetPrice = async (payload, currentAdmin = null) => {
+const createSetPriceImpl = async (payload, currentAdmin = null) => {
   if (currentAdmin) {
     assertAdminPermission(currentAdmin, 'set_prices.view', 'set prices');
     if (payload.service_location_id) {
@@ -5736,7 +5745,7 @@ export const createSetPrice = async (payload, currentAdmin = null) => {
   return setPrice.toObject();
 };
 
-export const updateSetPrice = async (id, payload, currentAdmin = null) => {
+const updateSetPriceImpl = async (id, payload, currentAdmin = null) => {
   const setPrice = await SetPrice.findById(id);
   if (!setPrice) throw new ApiError(404, 'Set Price not found');
   if (currentAdmin) {
@@ -5818,7 +5827,7 @@ export const updateSetPrice = async (id, payload, currentAdmin = null) => {
   return setPrice.toObject();
 };
 
-export const deleteSetPrice = async (id, currentAdmin = null) => {
+const deleteSetPriceImpl = async (id, currentAdmin = null) => {
   if (currentAdmin) {
     const setPrice = await SetPrice.findById(id).select('service_location_id zone_id').lean();
     if (!setPrice) throw new ApiError(404, 'Set Price not found');
@@ -8969,3 +8978,44 @@ export const buildDriverDutyReport = async (query = {}) => {
     }
     return results;
   };
+
+const withPricingCacheReset = (fn) => async (...args) => {
+  const result = await fn(...args);
+  clearPublicPricingCache();
+  return result;
+};
+export const createSetPrice = withPricingCacheReset(createSetPriceImpl);
+export const updateSetPrice = withPricingCacheReset(updateSetPriceImpl);
+export const deleteSetPrice = withPricingCacheReset(deleteSetPriceImpl);
+
+const PUBLIC_TARIFF_FIELDS = [
+  'base_price', 'base_distance', 'price_per_distance', 'time_price', 'waiting_charge',
+  'free_waiting_before', 'free_waiting_after', 'service_tax',
+  'enable_outstation_ride', 'support_outstation', 'outstation_base_price', 'outstation_base_distance',
+  'outstation_price_per_distance', 'outstation_time_price',
+  'enable_airport_ride', 'airport_surge', 'support_airport_fee',
+];
+const refId = (ref) => (ref ? String(ref._id || ref.id || ref) : null);
+
+/** Rider app: the active fare tariffs (no admin scoping), kept in memory for a minute. */
+export const listPublicSetPriceRows = async (scope = 'ride') => {
+  const key = String(scope || 'ride');
+  const cached = publicSetPriceCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  const { results, paginator } = await listSetPrices({ scope: key });
+  const raw = new Map(paginator.data.map((item) => [String(item.id), item]));
+  const rows = results
+    .filter((item) => Number(item.active) === 1)
+    .map(({ icon: _icon, ...item }) => {
+      const source = raw.get(String(item.id)) || {};
+      return {
+        ...item,
+        zone_id: refId(source.zone_id),
+        service_location_id: refId(source.service_location_id),
+        ...Object.fromEntries(PUBLIC_TARIFF_FIELDS.map((field) => [field, source[field]])),
+      };
+    });
+  publicSetPriceCache.set(key, { value: rows, expiresAt: Date.now() + 60 * 1000 });
+  return rows;
+};

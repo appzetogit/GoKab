@@ -746,19 +746,7 @@ const idOf = (ref) => (ref ? String(ref._id || ref.id || ref) : null);
  * which also carries heavy populated vehicle art that is deliberately left out).
  */
 export const getPublicSetPrices = asyncHandler(async (req, res) => {
-  const { results, paginator } = await adminService.listSetPrices({ scope: String(req.query?.scope || 'ride') });
-  const raw = new Map(paginator.data.map((item) => [String(item.id), item]));
-  const rows = results
-    .filter((item) => Number(item.active) === 1)
-    .map(({ icon: _icon, ...item }) => {
-      const source = raw.get(String(item.id)) || {};
-      return {
-        ...item,
-        zone_id: idOf(source.zone_id),
-        service_location_id: idOf(source.service_location_id),
-        ...Object.fromEntries(PUBLIC_TARIFF_FIELDS.map((key) => [key, source[key]])),
-      };
-    });
+  const rows = await adminService.listPublicSetPriceRows(String(req.query?.scope || 'ride'));
   res.json({ success: true, data: { results: rows } });
 });
 export const createSetPrice = asyncHandler(async (req, res) =>
