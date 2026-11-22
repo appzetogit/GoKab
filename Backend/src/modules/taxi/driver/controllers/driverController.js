@@ -923,13 +923,17 @@ const serializeEmergencyContact = (contact = {}) => ({
       : "manual",
 });
 
-const resolveVehicleMapIcon = async (vehicleTypeId) => {
+/** The vehicle type's name (for example "GoKab Premium") and picture, for the driver's own profile. */
+const resolveVehicleTypeInfo = async (vehicleTypeId) => {
   if (!vehicleTypeId) {
-    return "";
+    return { name: "", iconUrl: "" };
   }
 
-  const vehicle = await Vehicle.findById(vehicleTypeId).select("icon map_icon image").lean();
-  return vehicle?.map_icon || vehicle?.icon || vehicle?.image || "";
+  const vehicle = await Vehicle.findById(vehicleTypeId).select("name type_name icon map_icon image").lean();
+  return {
+    name: String(vehicle?.name || vehicle?.type_name || "").trim(),
+    iconUrl: vehicle?.map_icon || vehicle?.icon || vehicle?.image || "",
+  };
 };
 
 const normalizePhone = (value) =>
@@ -1453,12 +1457,14 @@ export const goOnline = async (req, res) => {
     throw new ApiError(404, "Driver not found");
   }
 
-  const vehicleIconUrl = await resolveVehicleMapIcon(driver.vehicleTypeId);
+  const vehicleTypeInfo = await resolveVehicleTypeInfo(driver.vehicleTypeId);
+  const vehicleIconUrl = vehicleTypeInfo.iconUrl;
 
   res.json({
     success: true,
     data: {
       ...driver.toObject(),
+      vehicleTypeName: vehicleTypeInfo.name,
       vehicleIconUrl,
       onlineSelfie: driver.onlineSelfie || {},
     },
@@ -1542,7 +1548,8 @@ const buildCurrentDriverProfile = async (driver) => {
 
   await clearDriverActiveRideIfStale(driver);
   await driver.populate("zoneId", "name");
-  const vehicleIconUrl = await resolveVehicleMapIcon(driver.vehicleTypeId);
+  const vehicleTypeInfo = await resolveVehicleTypeInfo(driver.vehicleTypeId);
+  const vehicleIconUrl = vehicleTypeInfo.iconUrl;
   const todaySummary = await syncDriverTodaySummaryDocument(driver);
   // Lifetime count of trips this driver actually drove to completion.
   const totalRides = await Ride.countDocuments({ driverId: driver._id, status: RIDE_STATUS.COMPLETED });
@@ -1560,6 +1567,8 @@ const buildCurrentDriverProfile = async (driver) => {
     total_rides: totalRides,
     vehicleType: driver.vehicleType,
     vehicleTypeId: driver.vehicleTypeId,
+    // The category riders and the admin know ("GoKab Premium"); `vehicleType` is only the generic "car".
+    vehicleTypeName: vehicleTypeInfo.name,
     vehicleIconType: driver.vehicleIconType,
     vehicleIconUrl,
     vehicleMake: driver.vehicleMake,
@@ -4201,7 +4210,8 @@ export const updateDriverVehicle = async (req, res) => {
     returnDocument: 'after',
   });
 
-  const vehicleIconUrl = await resolveVehicleMapIcon(updatedDriver.vehicleTypeId);
+  const vehicleTypeInfo = await resolveVehicleTypeInfo(updatedDriver.vehicleTypeId);
+  const vehicleIconUrl = vehicleTypeInfo.iconUrl;
 
   res.json({
     success: true,
@@ -4214,6 +4224,7 @@ export const updateDriverVehicle = async (req, res) => {
       phone: updatedDriver.phone,
       vehicleType: updatedDriver.vehicleType,
       vehicleTypeId: updatedDriver.vehicleTypeId,
+      vehicleTypeName: vehicleTypeInfo.name,
       vehicleIconType: updatedDriver.vehicleIconType,
       vehicleIconUrl,
       vehicleMake: updatedDriver.vehicleMake,
