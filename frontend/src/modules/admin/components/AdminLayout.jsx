@@ -1152,7 +1152,7 @@ const AdminLayout = () => {
         items: [
           {
             icon: Clock,
-            label: 'Live Operations',
+            label: 'Rides and Safety',
             subItems: [
               { label: 'Ongoing Requests', path: '/admin/ongoing', permission: 'ongoing.view' },
               { label: 'Trip Requests', path: '/admin/trips', permission: 'trips.view' },
@@ -1238,7 +1238,7 @@ const AdminLayout = () => {
           },
           {
             icon: MapPin,
-            label: 'Locations',
+            label: 'Cities and Zones',
             subItems: [
               { label: 'Service Location', path: '/admin/pricing/service-location', permission: 'service_locations.view' },
               { label: 'Zone', path: '/admin/pricing/zone', permission: 'zones.view' },
@@ -1253,7 +1253,7 @@ const AdminLayout = () => {
         items: [
           {
             icon: Wallet,
-            label: 'Money',
+            label: 'Earnings and Wallet',
             subItems: [
               { label: 'Admin Earnings', path: '/admin/earnings', permission: 'earnings.view' },
               { label: 'Wallet Payment', path: '/admin/wallet/payment', permission: 'wallet.view' },
@@ -1263,7 +1263,7 @@ const AdminLayout = () => {
           },
           {
             icon: TrendingUp,
-            label: 'Marketing',
+            label: 'Promotions',
             subItems: [
               { label: 'Promo Code', path: '/admin/promotions/promo-codes', permission: 'promotions.view' },
               { label: 'Push Notifications', path: '/admin/promotions/send-notification', permission: 'promotions.view' },
@@ -1279,7 +1279,7 @@ const AdminLayout = () => {
         items: [
           {
             icon: MessageCircle,
-            label: 'Support',
+            label: 'Help and Support',
             subItems: [
               { label: 'Chat', path: '/admin/chat', permission: 'chat.view' },
               { label: 'Support Tickets', path: '/admin/support/tickets', permission: 'support.view' },
@@ -1302,7 +1302,7 @@ const AdminLayout = () => {
         items: [
           {
             icon: Monitor,
-            label: 'App and Website Content',
+            label: 'App Content',
             permission: 'settings.view',
             subItems: [
               { label: 'App Modules', path: '/admin/pricing/app-modules', permission: 'settings.view' },
