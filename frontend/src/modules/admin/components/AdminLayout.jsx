@@ -1178,15 +1178,7 @@ const AdminLayout = () => {
               { label: 'Driver Needed Documents', path: '/admin/drivers/documents', permission: 'drivers.view' },
               { label: 'Driver Bulk Upload', path: '/admin/drivers/bulk-upload', permission: 'drivers.view' },
               { label: 'Delete Request Drivers', path: '/admin/drivers/delete-requests', permission: 'drivers.view' },
-              {
-                label: 'Plans',
-                subItems: [
-                  { label: 'Driver Plans (Subscription)', path: '/admin/drivers/subscription', permission: 'drivers.view' },
-                  { label: 'Elite Drivers', path: '/admin/elite/drivers', permission: 'driver_network.view' },
-                  { label: 'Add Driver with Plan', path: '/admin/elite/create', permission: 'driver_network.view' },
-                  { label: 'Elite Slots', path: '/admin/elite/slots', permission: 'driver_network.view' },
-                ],
-              },
+              { label: 'Driver Plans (Subscription)', path: '/admin/drivers/subscription', permission: 'drivers.view' },
               {
                 label: 'Wallet and Payouts',
                 subItems: [
@@ -1204,6 +1196,17 @@ const AdminLayout = () => {
                   { label: 'Driver Referral Settings', path: '/admin/referrals/driver-settings', permission: 'referrals.view' },
                 ],
               },
+            ],
+          },
+          {
+            icon: Gem,
+            label: 'Elite and Pro Drivers',
+            permission: 'driver_network.view',
+            subItems: [
+              { label: 'Elite Drivers', path: '/admin/elite/drivers', permission: 'driver_network.view' },
+              { label: 'Add Driver with Plan', path: '/admin/elite/create', permission: 'driver_network.view' },
+              { label: 'Elite Slots', path: '/admin/elite/slots', permission: 'driver_network.view' },
+              { label: 'Commercial Vehicle Check', path: '/admin/elite/commercial', permission: 'driver_network.view' },
             ],
           },
           {
@@ -1231,7 +1234,6 @@ const AdminLayout = () => {
               { label: 'Set Price (Fares)', path: '/admin/pricing/set-price', permission: 'set_prices.view' },
               { label: 'Vehicle Approvals', path: '/admin/fleet/manage', permission: 'owners.view' },
               { label: 'Vehicle Documents', path: '/admin/fleet/documents', permission: 'owners.view' },
-              { label: 'Commercial Vehicle Check', path: '/admin/elite/commercial', permission: 'driver_network.view' },
             ],
           },
           {
