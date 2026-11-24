@@ -11,6 +11,7 @@ import { FleetVehicle } from '../models/FleetVehicle.js';
 import { PrimeCitySlot } from '../models/PrimeCitySlot.js';
 import { ServiceLocation } from '../models/ServiceLocation.js';
 import { SubscriptionTier } from '../models/SubscriptionTier.js';
+import { getEarningsSummary } from '../services/earningsService.js';
 import { getDriverFleet, listPlanDrivers } from '../services/planDriversService.js';
 import {
   DEFAULT_DRIVER_NETWORK_SETTINGS,
@@ -288,6 +289,14 @@ export const createDriverWithPlanController = asyncHandler(async (req, res) => {
       valid_until: granted?.validUntil || null,
     },
   });
+});
+
+export const earningsSummaryController = asyncHandler(async (req, res) => {
+  const permissions = req.auth?.admin?.permissions || [];
+  if (!permissions.includes('*') && !permissions.includes('earnings.view')) {
+    throw new ApiError(403, 'You do not have permission to see earnings', null, 'FORBIDDEN');
+  }
+  res.json({ success: true, data: await getEarningsSummary(req.query) });
 });
 
 export const listPlanDriversController = asyncHandler(async (req, res) => {

@@ -1,0 +1,166 @@
+import mongoose from 'mongoose';
+import { ApiError } from '../../../../utils/ApiError.js';
+import { RIDE_STATUS } from '../../constants/index.js';
+import { Driver } from '../../driver/models/Driver.js';
+import { DriverSubscription } from '../../driver/models/DriverSubscription.js';
+import { SubscriptionPayment } from '../../driver/models/SubscriptionPayment.js';
+import { WalletTransaction } from '../../driver/models/WalletTransaction.js';
+import { DriverOffer } from '../../offers/models/DriverOffer.js';
+import { Ride } from '../../user/models/Ride.js';
+import { ServiceLocation } from '../models/ServiceLocation.js';
+import { SubscriptionTier } from '../models/SubscriptionTier.js';
+import { changePercent, earningsRange, planAt, roundMoney } from './earningsRules.js';
+
+/**
+ * What the company earned, read only: plans sold, ride commission and fees. Each
+ * amount belongs to a driver, and takes the driver's state (from their city) and
+ * the plan they were on then. Plans given free by an admin are counted, not earned.
+ */
+
+const FEE_TYPES = ['lead_contact_fee', 'feed_accept_fee'];
+const PARTS = ['sales', 'commission', 'fees'];
+
+/** Every amount in the period, as { part, amount, driverId, at, planId? }. */
+const loadEntries = async (start, end) => {
+  const period = { $gte: start, $lt: end };
+  const [payments, rides, fees, offers] = await Promise.all([
+    SubscriptionPayment.find({
+      status: 'paid',
+      $or: [{ verified_at: period }, { verified_at: null, createdAt: period }],
+    }).select('driver_id tier_id amount verified_at createdAt').lean(),
+    Ride.find({ status: RIDE_STATUS.COMPLETED, completedAt: period }).select('driverId commissionAmount completedAt').lean(),
+    WalletTransaction.find({ type: { $in: FEE_TYPES }, createdAt: period }).select('driverId amount createdAt').lean(),
+    DriverOffer.find({ paid_at: period }).select('driver_id fee_amount paid_at').lean(),
+  ]);
+
+  return [
+    ...payments.map((item) => ({
+      part: 'sales', amount: item.amount, driverId: item.driver_id, at: item.verified_at || item.createdAt, planId: String(item.tier_id),
+    })),
+    ...rides.map((item) => ({ part: 'commission', amount: item.commissionAmount, driverId: item.driverId, at: item.completedAt, isRide: true })),
+    // A fee leaves the driver's wallet, so it is stored negative; a refund gives it back.
+    ...fees.map((item) => ({ part: 'fees', amount: -Number(item.amount || 0), driverId: item.driverId, at: item.createdAt })),
+    ...offers.map((item) => ({ part: 'fees', amount: item.fee_amount, driverId: item.driver_id, at: item.paid_at })),
+  ];
+};
+
+const emptyRow = (extra) => ({ ...extra, drivers: 0, sales: 0, sales_count: 0, free_count: 0, commission: 0, rides: 0, fees: 0, total: 0 });
+
+const addEntry = (row, entry) => {
+  const amount = Number(entry.amount || 0);
+  row[entry.part] += amount;
+  row.total += amount;
+  if (entry.part === 'sales') row.sales_count += 1;
+  if (entry.isRide) row.rides += 1;
+};
+
+const finishRow = (row) => {
+  for (const key of [...PARTS, 'total']) row[key] = roundMoney(row[key]);
+  return row;
+};
+
+export const getEarningsSummary = async ({ from, to, state = '', cityId = '', planId = '' }) => {
+  const range = earningsRange(from, to);
+  if (!range) throw new ApiError(400, 'Choose a valid from and to date', null, 'INVALID_RANGE');
+  for (const [value, field] of [[cityId, 'cityId'], [planId, 'planId']]) {
+    if (value && !mongoose.isValidObjectId(value)) throw new ApiError(400, `${field} is invalid`, null, 'INVALID_ID');
+  }
+
+  const [entries, tiers, cities, subscriptions, paidSubscriptions] = await Promise.all([
+    // The period before is loaded too, for the change against it.
+    loadEntries(range.previousStart, range.end),
+    SubscriptionTier.find({}).select('name badge_color_hex price_monthly is_active is_default').lean(),
+    ServiceLocation.find({}).select('name service_location_name state').sort({ name: 1 }).lean(),
+    DriverSubscription.find({}).select('driver_id tier_id status start_date end_date updatedAt').lean(),
+    SubscriptionPayment.distinct('driver_subscription_id', { status: 'paid', driver_subscription_id: { $ne: null } }),
+  ]);
+  // ponytail: driver, subscription and ride rows are joined in memory; move to Mongo aggregation past ~50k rides a period.
+  const drivers = await Driver.find({}).select('service_location_id deletedAt').lean();
+
+  const cityById = new Map(cities.map((city) => [String(city._id), city]));
+  const driverById = new Map(drivers.map((driver) => [String(driver._id), driver]));
+  const subscriptionsBy = new Map();
+  for (const item of subscriptions) {
+    const key = String(item.driver_id);
+    subscriptionsBy.set(key, [...(subscriptionsBy.get(key) || []), item]);
+  }
+  const defaultPlan = tiers.find((tier) => tier.is_default);
+  const now = new Date();
+
+  const cityOf = (driverId) => String(driverById.get(String(driverId || ''))?.service_location_id || '');
+  const stateOf = (driverId) => cityById.get(cityOf(driverId))?.state || '';
+  const planOf = (driverId, at) => (driverId ? planAt(subscriptionsBy.get(String(driverId)), at, defaultPlan?._id) : '');
+  const inFilters = (driverId, plan) =>
+    (!state || stateOf(driverId) === (state === 'none' ? '' : state)) &&
+    (!cityId || cityOf(driverId) === String(cityId)) &&
+    (!planId || plan === String(planId));
+
+  const plans = new Map(
+    tiers
+      .sort((a, b) => Number(b.price_monthly || 0) - Number(a.price_monthly || 0))
+      .map((tier) => [
+        String(tier._id),
+        emptyRow({ id: String(tier._id), name: tier.name, color: tier.badge_color_hex || '#10B981', is_active: Boolean(tier.is_active) }),
+      ]),
+  );
+  const states = new Map();
+  const planRow = (id) => {
+    if (!plans.has(id)) plans.set(id, emptyRow({ id, name: id ? 'Deleted plan' : 'No driver', color: '#94A3B8', is_active: false }));
+    return plans.get(id);
+  };
+  const stateRow = (name) => {
+    if (!states.has(name)) states.set(name, emptyRow({ id: name || 'none', name: name || 'State not set' }));
+    return states.get(name);
+  };
+
+  const summary = emptyRow({});
+  let previousTotal = 0;
+  for (const entry of entries) {
+    const plan = entry.planId || planOf(entry.driverId, entry.at);
+    if (!inFilters(entry.driverId, plan)) continue;
+    if (new Date(entry.at) < range.start) {
+      previousTotal += Number(entry.amount || 0);
+      continue;
+    }
+    addEntry(summary, entry);
+    addEntry(planRow(plan), entry);
+    addEntry(stateRow(stateOf(entry.driverId)), entry);
+  }
+
+  // Drivers as they are now; a deleted driver's past earnings still count above.
+  for (const driver of drivers) {
+    if (driver.deletedAt) continue;
+    const plan = planOf(driver._id, now);
+    if (!inFilters(driver._id, plan)) continue;
+    summary.drivers += 1;
+    planRow(plan).drivers += 1;
+    stateRow(stateOf(driver._id)).drivers += 1;
+  }
+
+  const paid = new Set(paidSubscriptions.map(String));
+  for (const item of subscriptions) {
+    const at = new Date(item.start_date);
+    const plan = String(item.tier_id);
+    if (paid.has(String(item._id)) || item.status === 'pending_payment' || at < range.start || at >= range.end) continue;
+    if (!inFilters(item.driver_id, plan)) continue;
+    summary.free_count += 1;
+    planRow(plan).free_count += 1;
+    stateRow(stateOf(item.driver_id)).free_count += 1;
+  }
+
+  const hasSomething = (row) => row.total || row.drivers || row.rides || row.free_count;
+  finishRow(summary);
+  return {
+    from,
+    to,
+    summary: { ...summary, previous_total: roundMoney(previousTotal), change_percent: changePercent(summary.total, previousTotal) },
+    plans: [...plans.values()].filter((row) => hasSomething(row) || (row.is_active && !planId)).map(finishRow),
+    states: [...states.values()].filter(hasSomething).map(finishRow).sort((a, b) => b.total - a.total || b.drivers - a.drivers),
+    options: {
+      plans: tiers.map((tier) => ({ id: String(tier._id), name: tier.name })),
+      states: [...new Set(cities.map((city) => city.state).filter(Boolean))].sort(),
+      cities: cities.map((city) => ({ id: String(city._id), name: city.name || city.service_location_name || '', state: city.state || '' })),
+    },
+    test_payments: String(process.env.RAZORPAY_KEY_ID || '').startsWith('rzp_test'),
+  };
+};

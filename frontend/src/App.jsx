@@ -148,6 +148,7 @@ const AddDriver = lazy(() => import('./modules/driver/pages/settings/AddDriver')
 const AdminLayout = lazy(() => import('./modules/admin/components/AdminLayout'));
 const AdminLogin = lazy(() => import('./modules/admin/pages/auth/AdminLogin'));
 const AdminDashboard = lazy(() => import('./modules/admin/pages/dashboard/MainDashboard'));
+const AdminEarningsSummary = lazy(() => import('./modules/admin/pages/dashboard/Earnings'));
 const AdminEarnings = lazy(() => import('./modules/admin/pages/dashboard/AdminEarnings'));
 const AdminChat = lazy(() => import('./modules/admin/pages/operations/Chat'));
 const AdminTrips = lazy(() => import('./modules/admin/pages/operations/Trips'));
@@ -994,7 +995,8 @@ function App() {
               <Route path="/admin" element={<AdminLayout />}>
                 <Route index element={<Navigate to="/admin/dashboard" />} />
                 <Route path="dashboard" element={<AdminDashboard />} />
-                <Route path="earnings" element={<AdminEarnings />} />
+                <Route path="earnings" element={<AdminEarningsSummary />} />
+                <Route path="earnings/rides" element={<AdminEarnings />} />
                 <Route path="chat" element={<AdminChat />} />
                 <Route path="trips" element={<AdminTrips />} />
                 <Route path="outstation" element={<AdminOutstation />} />

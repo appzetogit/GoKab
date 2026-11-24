@@ -20,6 +20,7 @@ import {
   createDriverWithPlanController,
   listEliteDriversController,
   listPlanDriversController,
+  earningsSummaryController,
   getDriverFleetController,
   listCommercialVerificationController,
   setVehicleUsageVerifiedController,
@@ -44,6 +45,7 @@ driverNetworkRouter.patch('/cities/:cityId/prime-limit', adminOnly, asyncHandler
 
 driverNetworkRouter.patch('/drivers/:driverId/category', adminOnly, asyncHandler(overrideDriverCategoryController));
 driverNetworkRouter.patch('/drivers/:driverId/route-limit', adminOnly, asyncHandler(updateDriverRouteLimitController));
+driverNetworkRouter.get('/earnings', adminOnly, asyncHandler(earningsSummaryController));
 driverNetworkRouter.get('/plans/:tierId/drivers', adminOnly, asyncHandler(listPlanDriversController));
 driverNetworkRouter.get('/drivers/:driverId/fleet', adminOnly, asyncHandler(getDriverFleetController));
 driverNetworkRouter.get('/drivers/:driverId/routes', adminOnly, asyncHandler(listDriverRoutesForAdminController));
