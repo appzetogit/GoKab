@@ -44,6 +44,24 @@ export const planAt = (subscriptions = [], at, defaultPlanId = '') => {
   return String(running[0]?.tier_id || defaultPlanId || '');
 };
 
+const MAX_DAILY_POINTS = 62;
+
+/** One point per Indian day, or per month when the range is long. `keyOf` says which point an instant belongs to. */
+export const trendPoints = (from, to) => {
+  const range = earningsRange(from, to);
+  if (!range) return { unit: 'day', keys: [], keyOf: () => '' };
+  const days = Math.round((range.end - range.start) / DAY_MS);
+  const unit = days <= MAX_DAILY_POINTS ? 'day' : 'month';
+  const size = unit === 'day' ? 10 : 7;
+  const keyOf = (at) => new Date(time(at) + IST_MS).toISOString().slice(0, size);
+  const keys = [];
+  for (let i = 0; i < days; i += 1) {
+    const key = keyOf(new Date(range.start.getTime() + i * DAY_MS));
+    if (keys[keys.length - 1] !== key) keys.push(key);
+  }
+  return { unit, keys, keyOf };
+};
+
 export const roundMoney = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
 /** Percent change, or null when there is nothing to compare with. */

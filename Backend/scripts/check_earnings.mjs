@@ -1,6 +1,6 @@
 // node scripts/check_earnings.mjs
 import assert from 'node:assert/strict';
-import { changePercent, earningsRange, planAt, roundMoney } from '../src/modules/taxi/admin/services/earningsRules.js';
+import { changePercent, earningsRange, planAt, roundMoney, trendPoints } from '../src/modules/taxi/admin/services/earningsRules.js';
 
 // Days are Indian days, both ends included; the period before is equally long.
 const range = earningsRange('2026-11-01', '2026-11-30');
@@ -25,4 +25,11 @@ assert.equal(planAt([], '2026-11-05'), '');
 assert.equal(roundMoney(0.1 + 0.2), 0.3);
 assert.equal(changePercent(112, 100), 12);
 assert.equal(changePercent(5, 0), null);
+
+const daily = trendPoints('2026-11-28', '2026-12-02');
+assert.deepEqual([daily.unit, daily.keys], ['day', ['2026-11-28', '2026-11-29', '2026-11-30', '2026-12-01', '2026-12-02']]);
+assert.equal(daily.keyOf('2026-11-30T18:30:00Z'), '2026-12-01'); // midnight in India
+const monthly = trendPoints('2026-01-15', '2026-04-02');
+assert.deepEqual([monthly.unit, monthly.keys], ['month', ['2026-01', '2026-02', '2026-03', '2026-04']]);
+assert.deepEqual(trendPoints('x', 'y').keys, []);
 console.log('earnings: ok');

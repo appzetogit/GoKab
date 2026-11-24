@@ -9,7 +9,7 @@ import { DriverOffer } from '../../offers/models/DriverOffer.js';
 import { Ride } from '../../user/models/Ride.js';
 import { ServiceLocation } from '../models/ServiceLocation.js';
 import { SubscriptionTier } from '../models/SubscriptionTier.js';
-import { changePercent, earningsRange, planAt, roundMoney } from './earningsRules.js';
+import { changePercent, earningsRange, planAt, roundMoney, trendPoints } from './earningsRules.js';
 
 /**
  * What the company earned, read only: plans sold, ride commission and fees. Each
@@ -18,6 +18,8 @@ import { changePercent, earningsRange, planAt, roundMoney } from './earningsRule
  */
 
 const FEE_TYPES = ['lead_contact_fee', 'feed_accept_fee'];
+const DRIVERS_PER_PAGE = 20;
+const MAX_DRIVER_ENTRIES = 200;
 const PARTS = ['sales', 'commission', 'fees'];
 
 /** Every amount in the period, as { part, amount, driverId, at, planId? }. */
@@ -29,18 +31,18 @@ const loadEntries = async (start, end) => {
       $or: [{ verified_at: period }, { verified_at: null, createdAt: period }],
     }).select('driver_id tier_id amount verified_at createdAt').lean(),
     Ride.find({ status: RIDE_STATUS.COMPLETED, completedAt: period }).select('driverId commissionAmount completedAt').lean(),
-    WalletTransaction.find({ type: { $in: FEE_TYPES }, createdAt: period }).select('driverId amount createdAt').lean(),
+    WalletTransaction.find({ type: { $in: FEE_TYPES }, createdAt: period }).select('driverId amount type createdAt').lean(),
     DriverOffer.find({ paid_at: period }).select('driver_id fee_amount paid_at').lean(),
   ]);
 
   return [
     ...payments.map((item) => ({
-      part: 'sales', amount: item.amount, driverId: item.driver_id, at: item.verified_at || item.createdAt, planId: String(item.tier_id),
+      part: 'sales', kind: 'plan', amount: item.amount, driverId: item.driver_id, at: item.verified_at || item.createdAt, planId: String(item.tier_id),
     })),
-    ...rides.map((item) => ({ part: 'commission', amount: item.commissionAmount, driverId: item.driverId, at: item.completedAt, isRide: true })),
+    ...rides.map((item) => ({ part: 'commission', kind: 'ride', rideId: String(item._id), amount: item.commissionAmount, driverId: item.driverId, at: item.completedAt, isRide: true })),
     // A fee leaves the driver's wallet, so it is stored negative; a refund gives it back.
-    ...fees.map((item) => ({ part: 'fees', amount: -Number(item.amount || 0), driverId: item.driverId, at: item.createdAt })),
-    ...offers.map((item) => ({ part: 'fees', amount: item.fee_amount, driverId: item.driver_id, at: item.paid_at })),
+    ...fees.map((item) => ({ part: 'fees', kind: item.type, amount: -Number(item.amount || 0), driverId: item.driverId, at: item.createdAt })),
+    ...offers.map((item) => ({ part: 'fees', kind: 'paid_offer', amount: item.fee_amount, driverId: item.driver_id, at: item.paid_at })),
   ];
 };
 
@@ -59,10 +61,10 @@ const finishRow = (row) => {
   return row;
 };
 
-export const getEarningsSummary = async ({ from, to, state = '', cityId = '', planId = '' }) => {
+export const getEarningsSummary = async ({ from, to, state = '', cityId = '', planId = '', driverId = '', search = '', page = 1 }) => {
   const range = earningsRange(from, to);
   if (!range) throw new ApiError(400, 'Choose a valid from and to date', null, 'INVALID_RANGE');
-  for (const [value, field] of [[cityId, 'cityId'], [planId, 'planId']]) {
+  for (const [value, field] of [[cityId, 'cityId'], [planId, 'planId'], [driverId, 'driverId']]) {
     if (value && !mongoose.isValidObjectId(value)) throw new ApiError(400, `${field} is invalid`, null, 'INVALID_ID');
   }
 
@@ -75,7 +77,7 @@ export const getEarningsSummary = async ({ from, to, state = '', cityId = '', pl
     SubscriptionPayment.distinct('driver_subscription_id', { status: 'paid', driver_subscription_id: { $ne: null } }),
   ]);
   // ponytail: driver, subscription and ride rows are joined in memory; move to Mongo aggregation past ~50k rides a period.
-  const drivers = await Driver.find({}).select('service_location_id deletedAt').lean();
+  const drivers = await Driver.find({}).select('name phone service_location_id deletedAt').lean();
 
   const cityById = new Map(cities.map((city) => [String(city._id), city]));
   const driverById = new Map(drivers.map((driver) => [String(driver._id), driver]));
@@ -90,9 +92,10 @@ export const getEarningsSummary = async ({ from, to, state = '', cityId = '', pl
   const cityOf = (driverId) => String(driverById.get(String(driverId || ''))?.service_location_id || '');
   const stateOf = (driverId) => cityById.get(cityOf(driverId))?.state || '';
   const planOf = (driverId, at) => (driverId ? planAt(subscriptionsBy.get(String(driverId)), at, defaultPlan?._id) : '');
-  const inFilters = (driverId, plan) =>
-    (!state || stateOf(driverId) === (state === 'none' ? '' : state)) &&
-    (!cityId || cityOf(driverId) === String(cityId)) &&
+  const inFilters = (id, plan) =>
+    (!driverId || String(id || '') === String(driverId)) &&
+    (!state || stateOf(id) === (state === 'none' ? '' : state)) &&
+    (!cityId || cityOf(id) === String(cityId)) &&
     (!planId || plan === String(planId));
 
   const plans = new Map(
@@ -113,6 +116,28 @@ export const getEarningsSummary = async ({ from, to, state = '', cityId = '', pl
     return states.get(name);
   };
 
+  const { unit, keys, keyOf } = trendPoints(from, to);
+  const trend = new Map(keys.map((key) => [key, emptyRow({ id: key })]));
+  const driverRows = new Map();
+  const driverRow = (id) => {
+    const key = String(id || '');
+    if (!driverRows.has(key)) {
+      const driver = driverById.get(key);
+      const planNow = driver ? plans.get(planOf(key, now))?.name || '' : '';
+      driverRows.set(
+        key,
+        emptyRow({
+          id: key,
+          name: driver?.name || (key ? 'Deleted driver' : 'No driver'),
+          phone: driver?.phone || '',
+          plan: planNow,
+          city: cityById.get(cityOf(key))?.name || '',
+        }),
+      );
+    }
+    return driverRows.get(key);
+  };
+  const driverEntries = [];
   const summary = emptyRow({});
   let previousTotal = 0;
   for (const entry of entries) {
@@ -125,6 +150,19 @@ export const getEarningsSummary = async ({ from, to, state = '', cityId = '', pl
     addEntry(summary, entry);
     addEntry(planRow(plan), entry);
     addEntry(stateRow(stateOf(entry.driverId)), entry);
+    const point = trend.get(keyOf(entry.at));
+    if (point) addEntry(point, entry);
+    if (entry.amount || entry.isRide) addEntry(driverRow(entry.driverId), entry);
+    if (driverId && entry.amount) {
+      driverEntries.push({
+        at: entry.at,
+        part: entry.part,
+        kind: entry.kind,
+        plan: plans.get(plan)?.name || '',
+        ride_id: entry.rideId || null,
+        amount: roundMoney(entry.amount),
+      });
+    }
   }
 
   // Drivers as they are now; a deleted driver's past earnings still count above.
@@ -148,6 +186,15 @@ export const getEarningsSummary = async ({ from, to, state = '', cityId = '', pl
     stateRow(stateOf(item.driver_id)).free_count += 1;
   }
 
+  const term = String(search || '').trim().toLowerCase().slice(0, 60);
+  const rankedDrivers = [...driverRows.values()]
+    .map(finishRow)
+    .filter((row) => !term || row.name.toLowerCase().includes(term) || row.phone.includes(term))
+    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+  const totalPages = Math.max(1, Math.ceil(rankedDrivers.length / DRIVERS_PER_PAGE));
+  const safePage = Math.min(totalPages, Math.max(1, Math.floor(Number(page)) || 1));
+  const chosen = driverId ? driverById.get(String(driverId)) : null;
+
   const hasSomething = (row) => row.total || row.drivers || row.rides || row.free_count;
   finishRow(summary);
   return {
@@ -156,6 +203,20 @@ export const getEarningsSummary = async ({ from, to, state = '', cityId = '', pl
     summary: { ...summary, previous_total: roundMoney(previousTotal), change_percent: changePercent(summary.total, previousTotal) },
     plans: [...plans.values()].filter((row) => hasSomething(row) || (row.is_active && !planId)).map(finishRow),
     states: [...states.values()].filter(hasSomething).map(finishRow).sort((a, b) => b.total - a.total || b.drivers - a.drivers),
+    trend: { unit, points: [...trend.values()].map(finishRow) },
+    drivers: {
+      results: rankedDrivers.slice((safePage - 1) * DRIVERS_PER_PAGE, safePage * DRIVERS_PER_PAGE),
+      pagination: { page: safePage, total: rankedDrivers.length, totalPages },
+    },
+    driver: driverId
+      ? {
+          id: String(driverId),
+          name: chosen?.name || 'Deleted driver',
+          phone: chosen?.phone || '',
+          entries: driverEntries.sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, MAX_DRIVER_ENTRIES),
+          entries_total: driverEntries.length,
+        }
+      : null,
     options: {
       plans: tiers.map((tier) => ({ id: String(tier._id), name: tier.name })),
       states: [...new Set(cities.map((city) => city.state).filter(Boolean))].sort(),

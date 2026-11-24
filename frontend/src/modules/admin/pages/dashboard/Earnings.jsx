@@ -1,10 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { BarChart3, Loader2, Table2, X } from 'lucide-react';
+import { BarChart3, Loader2, Search, Table2, X } from 'lucide-react';
 import api from '../../../../shared/api/axiosInstance';
 
 const unwrap = (res) => res?.data ?? res ?? {};
-const money = (value) => `₹${Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+const money = (value) => {
+  const amount = Number(value || 0);
+  return `₹${amount.toLocaleString('en-IN', { minimumFractionDigits: Number.isInteger(amount) ? 0 : 2, maximumFractionDigits: 2 })}`;
+};
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** "2026-11-24" → "24 Nov"; "2026-11" → "Nov 2026". */
+const pointLabel = (key) => {
+  const [year, month, date] = key.split('-');
+  return date ? `${Number(date)} ${MONTHS[month - 1]}` : `${MONTHS[month - 1]} ${year}`;
+};
+const KIND_LABEL = {
+  plan: 'Plan sold', ride: 'Ride commission', lead_contact_fee: 'Lead contact fee', feed_accept_fee: 'Ride accept fee', paid_offer: 'Paid offer',
+};
 
 const PARTS = [
   { key: 'sales', label: 'Plan sales', color: '#4f46e5' },
@@ -59,7 +71,7 @@ const Bars = ({ rows, onPick }) => {
             >
               <span className="flex items-baseline justify-between gap-3 mb-1.5">
                 <span className="text-sm font-bold text-slate-800">
-                  {row.name} <span className="font-medium text-xs text-slate-500">{row.drivers} drivers</span>
+                  {row.name} <span className="font-medium text-xs text-slate-500">{row.phone !== undefined ? [row.plan, row.city].filter(Boolean).join(' · ') : `${row.drivers} drivers`}</span>
                 </span>
                 <span className="text-sm font-black text-slate-900 tabular-nums">{money(row.total)}</span>
               </span>
@@ -84,34 +96,165 @@ const Bars = ({ rows, onPick }) => {
   );
 };
 
+const CHART = { width: 720, height: 240, left: 56, right: 12, top: 12, bottom: 28 };
+
+/** A round number at or above the largest value, so the axis reads 0, half, full. */
+const niceTop = (value) => {
+  if (value <= 0) return 100;
+  const size = 10 ** Math.floor(Math.log10(value));
+  return [1, 2, 2.5, 5, 10].map((step) => step * size).find((step) => step >= value);
+};
+
+/** Total per day or month. Pointer and arrow keys read each point; the table view has every number. */
+const Trend = ({ points }) => {
+  const [at, setAt] = useState(null);
+  const { width, height, left, right, top, bottom } = CHART;
+  const max = niceTop(Math.max(...points.map((point) => point.total), 0));
+  const x = (index) => (points.length === 1 ? (left + width - right) / 2 : left + (index / (points.length - 1)) * (width - left - right));
+  const y = (value) => top + (1 - Math.max(0, value) / max) * (height - top - bottom);
+  const line = points.map((point, index) => `${index ? 'L' : 'M'}${x(index).toFixed(1)},${y(point.total).toFixed(1)}`).join('');
+  const every = Math.max(1, Math.ceil(points.length / 6));
+  const point = at == null ? null : points[Math.min(at, points.length - 1)];
+  const index = at == null ? 0 : Math.min(at, points.length - 1);
+
+  const follow = (event) => {
+    const box = event.currentTarget.getBoundingClientRect();
+    const share = (((event.clientX - box.left) / box.width) * width - left) / (width - left - right);
+    setAt(Math.min(points.length - 1, Math.max(0, Math.round(share * (points.length - 1)))));
+  };
+  const onKey = (event) => {
+    const by = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+    if (!by) return;
+    event.preventDefault();
+    setAt((prev) => Math.min(points.length - 1, Math.max(0, (prev ?? (by > 0 ? -1 : points.length)) + by)));
+  };
+
+  return (
+    <div className="relative">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="w-full h-auto touch-pan-y focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600 rounded-lg"
+        role="img"
+        tabIndex={0}
+        aria-label={`Total earned, ${pointLabel(points[0].id)} to ${pointLabel(points[points.length - 1].id)}. Use arrow keys to read each point.`}
+        onPointerMove={follow}
+        onPointerDown={follow}
+        onPointerLeave={() => setAt(null)}
+        onBlur={() => setAt(null)}
+        onKeyDown={onKey}
+      >
+        {[0, max / 2, max].map((tick) => (
+          <g key={tick}>
+            <line x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} stroke="#e2e8f0" strokeWidth="1" />
+            <text x={left - 8} y={y(tick) + 4} textAnchor="end" fontSize="11" fill="#64748b">{money(tick)}</text>
+          </g>
+        ))}
+        {points.map((item, i) => (i % every === 0 ? (
+          <text key={item.id} x={x(i)} y={height - 8} textAnchor="middle" fontSize="11" fill="#64748b">{pointLabel(item.id)}</text>
+        ) : null))}
+        <path d={line} fill="none" stroke={PARTS[0].color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        {points.length === 1 && <circle cx={x(0)} cy={y(points[0].total)} r="4" fill={PARTS[0].color} />}
+        {point && (
+          <g>
+            <line x1={x(index)} x2={x(index)} y1={top} y2={height - bottom} stroke="#94a3b8" strokeWidth="1" />
+            <circle cx={x(index)} cy={y(point.total)} r="5" fill={PARTS[0].color} stroke="#fff" strokeWidth="2" />
+          </g>
+        )}
+      </svg>
+      <div
+        aria-live="polite"
+        className={`absolute top-0 pointer-events-none bg-white border border-slate-200 rounded-xl shadow-md px-3 py-2 text-xs ${point ? '' : 'invisible'}`}
+        style={{ left: `${(x(index) / width) * 100}%`, transform: index > points.length / 2 ? 'translateX(calc(-100% - 10px))' : 'translateX(10px)' }}
+      >
+        {point && (
+          <>
+            <span className="block font-bold text-slate-800">{pointLabel(point.id)}</span>
+            <span className="block font-black text-slate-900 tabular-nums">{money(point.total)}</span>
+            {PARTS.filter((part) => point[part.key]).map((part) => (
+              <span key={part.key} className="flex items-center gap-1.5 text-slate-600 tabular-nums whitespace-nowrap">
+                <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: part.color }} /> {part.label} {money(point[part.key])}
+              </span>
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const DriverEntries = ({ driver }) => (
+  <div className="space-y-3">
+    <div className="flex flex-wrap items-baseline justify-between gap-2">
+      <h2 className="text-sm font-black text-slate-900">{driver.name} <span className="font-medium text-slate-500">{driver.phone}</span></h2>
+      <Link to={`/admin/drivers/${driver.id}`} className="text-xs font-bold text-indigo-600">Open driver details</Link>
+    </div>
+    {driver.entries.length === 0 ? (
+      <p className="text-sm text-slate-500">Nothing earned from this driver in this period.</p>
+    ) : (
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm min-w-[520px] tabular-nums">
+          <thead>
+            <tr className="text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-200">
+              <th className="p-3 text-left">Date</th><th className="p-3 text-left">What</th><th className="p-3 text-left">Plan then</th><th className="p-3 text-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {driver.entries.map((entry, index) => (
+              <tr key={`${entry.at}-${index}`} className="border-b border-slate-100 text-slate-700">
+                <td className="p-3">{new Date(entry.at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                <td className="p-3">{KIND_LABEL[entry.kind] || entry.kind}</td>
+                <td className="p-3">{entry.plan || '-'}</td>
+                <td className="p-3 text-right font-bold">{money(entry.amount)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )}
+    {driver.entries_total > driver.entries.length && (
+      <p className="text-[11px] text-slate-500">Newest {driver.entries.length} of {driver.entries_total}. Choose a shorter period to see the rest.</p>
+    )}
+  </div>
+);
+
+const TABS = [['overview', 'Overview'], ['plans', 'Plan wise'], ['states', 'State wise'], ['drivers', 'Driver wise']];
+const ROW_HEADING = { overview: 'Date', plans: 'Plan', states: 'State', drivers: 'Driver' };
+// Plans sold and drivers are counts of the whole choice; a day or one driver has no driver count.
+const COLUMNS_FOR = (tab) => (tab === 'overview' || tab === 'drivers' ? COLUMNS.filter(([key]) => !['drivers', 'free_count'].includes(key)) : COLUMNS);
+
 const COLUMNS = [
   ['drivers', 'Drivers'], ['sales_count', 'Plans sold'], ['free_count', 'Given free'], ['sales', 'Plan sales', true],
   ['rides', 'Rides'], ['commission', 'Commission', true], ['fees', 'Fees', true], ['total', 'Total', true],
 ];
 
-const Grid = ({ rows, summary, heading, onPick }) => (
+const Grid = ({ rows, summary, heading, columns, onPick }) => (
   <div className="overflow-x-auto">
     <table className="w-full text-sm min-w-[780px] tabular-nums">
       <thead>
         <tr className="text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-200">
           <th className="p-3 text-left">{heading}</th>
-          {COLUMNS.map(([key, label]) => <th key={key} className="p-3 text-right">{label}</th>)}
+          {columns.map(([key, label]) => <th key={key} className="p-3 text-right">{label}</th>)}
         </tr>
       </thead>
       <tbody>
         {rows.map((row) => (
           <tr key={row.id || row.name} className="border-b border-slate-100 hover:bg-slate-50">
             <td className="p-3">
-              <button type="button" onClick={() => onPick(row)} className="font-bold text-slate-800 hover:text-indigo-600">{row.name}</button>
+              {onPick ? (
+                <button type="button" onClick={() => onPick(row)} className="font-bold text-slate-800 hover:text-indigo-600 text-left">{row.name}</button>
+              ) : (
+                <span className="font-bold text-slate-800">{pointLabel(row.id)}</span>
+              )}
+              {row.phone !== undefined && <span className="block text-[11px] text-slate-500">{[row.phone, row.plan, row.city].filter(Boolean).join(' · ')}</span>}
             </td>
-            {COLUMNS.map(([key, , isMoney]) => <td key={key} className="p-3 text-right text-slate-700">{isMoney ? money(row[key]) : row[key]}</td>)}
+            {columns.map(([key, , isMoney]) => <td key={key} className="p-3 text-right text-slate-700">{isMoney ? money(row[key]) : row[key]}</td>)}
           </tr>
         ))}
       </tbody>
       <tfoot>
         <tr className="font-black text-slate-900">
           <td className="p-3">Total</td>
-          {COLUMNS.map(([key, , isMoney]) => <td key={key} className="p-3 text-right">{isMoney ? money(summary[key]) : summary[key]}</td>)}
+          {columns.map(([key, , isMoney]) => <td key={key} className="p-3 text-right">{isMoney ? money(summary[key]) : summary[key]}</td>)}
         </tr>
       </tfoot>
     </table>
@@ -130,13 +273,18 @@ const Earnings = () => {
   const state = params.get('state') || '';
   const cityId = params.get('cityId') || '';
   const planId = params.get('planId') || '';
-  const tab = params.get('tab') === 'states' ? 'states' : 'plans';
+  const driverId = params.get('driverId') || '';
+  const search = params.get('search') || '';
+  const page = params.get('page') || '';
+  const tab = TABS.some(([key]) => key === params.get('tab')) ? params.get('tab') : 'overview';
   const view = params.get('view') === 'table' ? 'table' : 'graph';
 
   const change = (patch) =>
     setParams(
       (prev) => {
         const next = new URLSearchParams(prev);
+        // Any other choice starts the driver list again.
+        if (!('page' in patch)) next.delete('page');
         for (const [key, value] of Object.entries(patch)) {
           if (value) next.set(key, value);
           else next.delete(key);
@@ -152,20 +300,26 @@ const Earnings = () => {
     if (state) query.state = state;
     if (cityId) query.cityId = cityId;
     if (planId) query.planId = planId;
+    if (driverId) query.driverId = driverId;
+    if (search) query.search = search;
+    if (page) query.page = page;
     setLoading(true);
-    api
-      .get('/admin/driver-network/earnings', { params: query })
-      .then((res) => {
-        if (!live) return;
-        setData(unwrap(res));
-        setError('');
-      })
-      .catch((err) => live && setError(err?.response?.data?.message || err?.message || 'Failed to load earnings'))
-      .finally(() => live && setLoading(false));
+    const timer = setTimeout(() => {
+      api
+        .get('/admin/driver-network/earnings', { params: query })
+        .then((res) => {
+          if (!live) return;
+          setData(unwrap(res));
+          setError('');
+        })
+        .catch((err) => live && setError(err?.response?.data?.message || err?.message || 'Failed to load earnings'))
+        .finally(() => live && setLoading(false));
+    }, search ? 300 : 0);
     return () => {
       live = false;
+      clearTimeout(timer);
     };
-  }, [from, to, state, cityId, planId]);
+  }, [from, to, state, cityId, planId, driverId, search, page]);
 
   const options = data?.options || { plans: [], states: [], cities: [] };
   const cities = options.cities.filter((city) => !state || city.state === (state === 'none' ? '' : state));
@@ -173,17 +327,19 @@ const Earnings = () => {
     state && ['State', state === 'none' ? 'State not set' : state, { state: '', cityId: '' }],
     cityId && ['City', options.cities.find((city) => city.id === cityId)?.name || 'City', { cityId: '' }],
     planId && ['Plan', options.plans.find((plan) => plan.id === planId)?.name || 'Plan', { planId: '' }],
+    driverId && ['Driver', data?.driver?.name || 'Driver', { driverId: '' }],
   ].filter(Boolean);
 
   const summary = data?.summary;
-  const rows = (tab === 'plans' ? data?.plans : data?.states) || [];
-  // Plan → its states; state → its plans.
+  const points = data?.trend?.points || [];
+  const rows = { overview: points, plans: data?.plans, states: data?.states, drivers: data?.drivers?.results }[tab] || [];
+  const meta = data?.drivers?.pagination || { page: 1, totalPages: 1, total: 0 };
+  // One step in each click: plan → state → drivers → that driver's entries.
   const pick = (row) => {
-    if (tab === 'plans') {
-      if (row.id) change({ planId: row.id, tab: 'states' });
-    } else {
-      change({ state: row.id, cityId: '', tab: '' });
-    }
+    if (!row.id) return;
+    if (tab === 'plans') change({ planId: row.id, tab: state ? 'drivers' : 'states' });
+    else if (tab === 'states') change({ state: row.id, cityId: '', tab: planId ? 'drivers' : 'plans' });
+    else if (tab === 'drivers') change({ driverId: row.id });
   };
   const changeNote =
     summary?.change_percent == null
@@ -241,7 +397,7 @@ const Earnings = () => {
                   {kind}: {label} <X size={12} />
                 </button>
               ))}
-              <button type="button" onClick={() => change({ state: '', cityId: '', planId: '' })} className="text-xs font-bold text-slate-500">Clear all</button>
+              <button type="button" onClick={() => change({ state: '', cityId: '', planId: '', driverId: '', search: '' })} className="text-xs font-bold text-slate-500">Clear all</button>
             </div>
           )}
         </div>
@@ -264,9 +420,9 @@ const Earnings = () => {
 
             <div className="bg-white rounded-2xl border border-slate-200 p-4 md:p-6 space-y-5">
               <div className="flex flex-wrap justify-between gap-3">
-                <div role="tablist" aria-label="Break down by" className="flex gap-2">
-                  {[['plans', 'Plan wise'], ['states', 'State wise']].map(([key, label]) => (
-                    <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => change({ tab: key === 'plans' ? '' : key })} className={toggle(tab === key)}>{label}</button>
+                <div role="tablist" aria-label="Break down by" className="flex flex-wrap gap-2">
+                  {TABS.map(([key, label]) => (
+                    <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => change({ tab: key === 'overview' ? '' : key })} className={toggle(tab === key)}>{label}</button>
                   ))}
                 </div>
                 <div className="flex gap-2">
@@ -274,12 +430,33 @@ const Earnings = () => {
                   <button type="button" aria-pressed={view === 'table'} onClick={() => change({ view: 'table' })} className={toggle(view === 'table')}><Table2 size={14} /> Table</button>
                 </div>
               </div>
-              {rows.length === 0 ? (
+              {tab === 'drivers' && !driverId && (
+                <label className="relative block max-w-sm">
+                  <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input aria-label="Search drivers" value={search} onChange={(event) => change({ search: event.target.value })} placeholder="Driver name or phone" className="w-full border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-sm" />
+                </label>
+              )}
+              {tab === 'drivers' && driverId ? (
+                data.driver?.id === driverId ? <DriverEntries driver={data.driver} /> : <Loader2 size={18} className="animate-spin text-indigo-600" />
+              ) : rows.length === 0 || (tab === 'overview' && view === 'graph' && !points.some((point) => point.total)) ? (
                 <p className="p-8 text-center text-sm text-slate-500">No earnings for this choice.</p>
-              ) : view === 'graph' ? (
-                <Bars rows={rows} onPick={pick} />
+              ) : view === 'table' ? (
+                <Grid rows={rows} summary={summary} heading={ROW_HEADING[tab]} columns={COLUMNS_FOR(tab)} onPick={tab === 'overview' ? null : pick} />
+              ) : tab === 'overview' ? (
+                <Trend key={`${from}${to}`} points={points} />
               ) : (
-                <Grid rows={rows} summary={summary} heading={tab === 'plans' ? 'Plan' : 'State'} onPick={pick} />
+                <Bars rows={tab === 'drivers' ? rows.slice(0, 10) : rows} onPick={pick} />
+              )}
+              {tab === 'drivers' && !driverId && view === 'graph' && rows.length > 10 && <p className="text-[11px] text-slate-500">Top 10 here. The table lists every driver.</p>}
+              {tab === 'drivers' && !driverId && view === 'table' && (search || meta.totalPages > 1) && (
+                <p className="text-[11px] text-slate-500">Total is for every driver in this choice, not only the rows shown.</p>
+              )}
+              {tab === 'drivers' && !driverId && view === 'table' && meta.totalPages > 1 && (
+                <div className="flex items-center justify-center gap-4 text-sm">
+                  <button type="button" disabled={meta.page <= 1 || loading} onClick={() => change({ page: String(meta.page - 1) })} className="font-bold text-indigo-600 disabled:opacity-30">Previous</button>
+                  <span className="text-slate-500">Page {meta.page} of {meta.totalPages} ({meta.total})</span>
+                  <button type="button" disabled={meta.page >= meta.totalPages || loading} onClick={() => change({ page: String(meta.page + 1) })} className="font-bold text-indigo-600 disabled:opacity-30">Next</button>
+                </div>
               )}
               <p className="text-[11px] text-slate-400">
                 State is the driver&apos;s city today. Commission goes to the plan the driver was on when the ride ended. Click a row to look inside it.
