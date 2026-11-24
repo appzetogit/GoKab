@@ -12,7 +12,8 @@ import {
   MapPin,
   Phone,
 } from 'lucide-react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import api from '../../../../shared/api/axiosInstance';
 import { adminService } from '../../services/adminService';
 import { DELHI_CENTER, HAS_VALID_GOOGLE_MAPS_KEY, useAppGoogleMapsLoader } from '../../utils/googleMaps';
 import BikeIcon from '@/assets/icons/bike.png';
@@ -220,6 +221,34 @@ const normalizeDocumentEntry = (doc = {}, fallbackKey = '') => {
     reviewedAt: doc?.reviewedAt ?? null,
     reverificationRequestedAt: doc?.reverificationRequestedAt ?? null,
   };
+};
+
+/** "In Ramesh's team", linking to the lead. Silent when there is none or it cannot be read. */
+const TeamOfBanner = ({ driverId, from }) => {
+  const [lead, setLead] = useState(null);
+
+  useEffect(() => {
+    let live = true;
+    setLead(null);
+    api
+      .get(`/admin/driver-network/drivers/${driverId}/fleet`)
+      .then((res) => live && setLead((res?.data ?? res)?.team_of || null))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [driverId]);
+
+  if (!lead) return null;
+  return (
+    <Link
+      to={`/admin/drivers/${lead.id}`}
+      state={{ from }}
+      className="inline-block mb-4 px-4 py-2 rounded-lg bg-indigo-50 text-indigo-700 text-sm font-semibold hover:bg-indigo-100"
+    >
+      In {lead.name || 'a lead'}&apos;s team
+    </Link>
+  );
 };
 
 const DriverDetails = () => {
@@ -540,6 +569,8 @@ const DriverDetails = () => {
           </button>
         </div>
       </div>
+
+      <TeamOfBanner driverId={id} from={backRoute} />
 
       <div className="bg-white rounded-xl border border-gray-200 p-4 md:p-6 mb-6">
         <div className="grid grid-cols-1 lg:grid-cols-[240px_1fr_280px] gap-4 md:gap-6 items-center">

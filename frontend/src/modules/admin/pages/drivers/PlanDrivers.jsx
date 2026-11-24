@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { ChevronDown, ChevronRight, Loader2, Search, X } from 'lucide-react';
 import api from '../../../../shared/api/axiosInstance';
 
@@ -7,6 +7,29 @@ const unwrap = (res) => res?.data ?? res ?? {};
 const errorText = (err, fallback) => err?.response?.data?.message || err?.message || fallback;
 const day = (value) =>
   value ? new Date(value).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+
+/** A whole row that opens a driver's details; Back there returns to this exact list. */
+const DriverLink = ({ id, className, children }) => {
+  const location = useLocation();
+  return (
+    <Link to={`/admin/drivers/${id}`} state={{ from: location.pathname + location.search }} className={className}>
+      {children}
+    </Link>
+  );
+};
+
+const MemberLink = ({ member }) => (
+  <DriverLink id={member.id} className="group flex items-center justify-between gap-3 p-3 hover:bg-indigo-50 rounded-xl">
+    <span className="text-xs">
+      <span className="font-bold text-slate-800 group-hover:text-indigo-600">{member.name || 'No name'}</span>
+      <span className="block text-slate-500">{[member.phone, member.vehicle_number].filter(Boolean).join(' · ')}</span>
+    </span>
+    <span className="flex items-center gap-2">
+      <Status approved={member.approved} online={member.online} onRide={member.on_ride} />
+      <ChevronRight size={15} className="text-slate-300 group-hover:text-indigo-600" />
+    </span>
+  </DriverLink>
+);
 
 /** "3/10", "3" when there is no limit; red when over. */
 const Count = ({ used, max }) => (
@@ -82,13 +105,7 @@ const FleetPanel = ({ driverId, onClose }) => {
               ) : (
                 <ul className="divide-y divide-slate-100 border border-slate-200 rounded-xl">
                   {data.team.map((member) => (
-                    <li key={member.id} className="flex items-center justify-between gap-3 p-3">
-                      <span className="text-xs">
-                        <Link to={`/admin/drivers/${member.id}`} className="font-bold text-slate-800 hover:text-indigo-600">{member.name}</Link>
-                        <span className="block text-slate-500">{[member.phone, member.vehicle_number].filter(Boolean).join(' · ')}</span>
-                      </span>
-                      <Status approved={member.approved} online={member.online} onRide={member.on_ride} />
-                    </li>
+                    <li key={member.id}><MemberLink member={member} /></li>
                   ))}
                 </ul>
               )}
@@ -119,7 +136,7 @@ const FleetPanel = ({ driverId, onClose }) => {
               </p>
             )}
 
-            <Link to={`/admin/drivers/${data.driver.id}`} className="inline-block rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white hover:bg-indigo-700">Open full profile</Link>
+            <DriverLink id={data.driver.id} className="inline-block rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white hover:bg-indigo-700">Open full profile</DriverLink>
           </>
         )}
       </aside>
@@ -149,14 +166,10 @@ const TeamRows = ({ driverId, columns }) => {
         {error && <p className="text-xs text-rose-600">{error}</p>}
         {!team && !error && <Loader2 size={16} className="animate-spin text-indigo-600" />}
         {team && (
-          <ul className="ml-8 border-l-2 border-indigo-200 pl-4 space-y-2">
+          <ul className="ml-8 border-l-2 border-indigo-200 pl-2 max-w-xl">
             {team.length === 0 && <li className="text-xs text-slate-500">No team drivers.</li>}
             {team.map((member) => (
-              <li key={member.id} className="flex flex-wrap items-center gap-3 text-xs">
-                <Link to={`/admin/drivers/${member.id}`} className="font-bold text-slate-800 hover:text-indigo-600">{member.name || 'No name'}</Link>
-                <span className="text-slate-500">{[member.phone, member.vehicle_number].filter(Boolean).join(' · ')}</span>
-                <Status approved={member.approved} online={member.online} onRide={member.on_ride} />
-              </li>
+              <li key={member.id}><MemberLink member={member} /></li>
             ))}
           </ul>
         )}
@@ -165,7 +178,7 @@ const TeamRows = ({ driverId, columns }) => {
   );
 };
 
-const EMPTY_FILTERS = { search: '', cityId: '', online: false, expiring: false, includeTeam: false };
+const SWITCHES = ['online', 'expiring', 'includeTeam'];
 
 const PlanDrivers = () => {
   const [params, setParams] = useSearchParams();
@@ -173,15 +186,36 @@ const PlanDrivers = () => {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [panelId, setPanelId] = useState('');
-  const [openTeams, setOpenTeams] = useState([]);
+
+  // Page, filters and open teams live in the address, so Back from a driver
+  // returns to the same list.
+  const page = Math.max(1, Number(params.get('page')) || 1);
+  const openTeams = (params.get('teams') || '').split(',').filter(Boolean);
+  const filters = {
+    search: params.get('search') || '',
+    cityId: params.get('cityId') || '',
+    ...Object.fromEntries(SWITCHES.map((key) => [key, params.get(key) === 'true'])),
+  };
+  const filterKey = JSON.stringify(filters);
+
+  const setAddress = (patch) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        for (const [key, value] of Object.entries(patch)) {
+          if (value) next.set(key, String(value));
+          else next.delete(key);
+        }
+        return next;
+      },
+      { replace: true },
+    );
 
   useEffect(() => {
     let live = true;
     const query = { page, limit: 20 };
-    for (const [key, value] of Object.entries(filters)) if (value) query[key] = value;
+    for (const [key, value] of Object.entries(JSON.parse(filterKey))) if (value) query[key] = value;
     const timer = setTimeout(async () => {
       setLoading(true);
       try {
@@ -194,24 +228,20 @@ const PlanDrivers = () => {
       } finally {
         if (live) setLoading(false);
       }
-    }, filters.search ? 300 : 0);
+    }, query.search ? 300 : 0);
     return () => {
       live = false;
       clearTimeout(timer);
     };
-  }, [planId, page, filters]);
+  }, [planId, page, filterKey]);
 
-  const change = (patch) => {
-    setPage(1);
-    setFilters((prev) => ({ ...prev, ...patch }));
-  };
+  const change = (patch) => setAddress({ ...patch, page: '' });
   const openTab = (id) => {
-    setPage(1);
-    setOpenTeams([]);
     setError('');
-    setParams(id === 'all' ? {} : { plan: id });
+    setAddress({ plan: id === 'all' ? '' : id, page: '', teams: '' });
   };
-  const toggleTeam = (id) => setOpenTeams((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const toggleTeam = (id) =>
+    setAddress({ teams: (openTeams.includes(id) ? openTeams.filter((x) => x !== id) : [...openTeams, id]).join(',') });
 
   const tabs = [
     { id: 'all', name: 'All', count: data?.tabs?.total },
@@ -316,7 +346,11 @@ const PlanDrivers = () => {
                               <span className="w-6" />
                             )}
                             <div>
-                              <button type="button" onClick={() => setPanelId(row.id)} className="font-bold text-slate-800 hover:text-indigo-600 block text-left">{row.name || 'No name'}</button>
+                              {row.team_of ? (
+                                <DriverLink id={row.id} className="font-bold text-slate-800 hover:text-indigo-600 block">{row.name || 'No name'}</DriverLink>
+                              ) : (
+                                <button type="button" onClick={() => setPanelId(row.id)} className="font-bold text-slate-800 hover:text-indigo-600 block text-left">{row.name || 'No name'}</button>
+                              )}
                               <span className="text-xs text-slate-500">{row.phone}</span>
                               {row.team_of && <span className="block text-[11px] font-bold text-indigo-600">{row.team_of}&apos;s team</span>}
                             </div>
@@ -338,7 +372,11 @@ const PlanDrivers = () => {
                         <td className="p-4"><Count used={row.vehicle_count} max={row.limits.max_vehicles} /></td>
                         <td className="p-4"><Status approved={row.approved} online={row.online} onRide={row.on_ride} /></td>
                         <td className="p-4 text-right">
-                          <button type="button" onClick={() => setPanelId(row.id)} className="text-xs font-bold text-indigo-600">Details</button>
+                          {row.team_of ? (
+                            <DriverLink id={row.id} className="text-xs font-bold text-indigo-600">Details</DriverLink>
+                          ) : (
+                            <button type="button" onClick={() => setPanelId(row.id)} className="text-xs font-bold text-indigo-600">Details</button>
+                          )}
                         </td>
                       </tr>
                       {open && <TeamRows driverId={row.id} columns={heads.length} />}
@@ -353,9 +391,9 @@ const PlanDrivers = () => {
 
         {meta.totalPages > 1 && (
           <div className="flex items-center justify-center gap-4 text-sm">
-            <button type="button" disabled={meta.page <= 1 || loading} onClick={() => setPage(meta.page - 1)} className="font-bold text-indigo-600 disabled:opacity-30">Previous</button>
+            <button type="button" disabled={meta.page <= 1 || loading} onClick={() => setAddress({ page: meta.page - 1 })} className="font-bold text-indigo-600 disabled:opacity-30">Previous</button>
             <span className="text-slate-500">Page {meta.page} of {meta.totalPages} ({meta.total})</span>
-            <button type="button" disabled={meta.page >= meta.totalPages || loading} onClick={() => setPage(meta.page + 1)} className="font-bold text-indigo-600 disabled:opacity-30">Next</button>
+            <button type="button" disabled={meta.page >= meta.totalPages || loading} onClick={() => setAddress({ page: meta.page + 1 })} className="font-bold text-indigo-600 disabled:opacity-30">Next</button>
           </div>
         )}
       </div>
