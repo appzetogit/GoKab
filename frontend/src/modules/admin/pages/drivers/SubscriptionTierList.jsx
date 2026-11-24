@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { Plus, Edit2, Trash2, ShieldCheck, Car, Loader2, RefreshCw, Sparkles, History, CheckCircle2, Zap, Layers, HelpCircle } from 'lucide-react';
 import { adminService } from '../../services/adminService.js';
 import SubscriptionTierForm from './SubscriptionTierForm.jsx';
@@ -206,6 +207,12 @@ export default function SubscriptionTierList() {
                         <span className="text-gray-500">Drivers with this subscription</span>
                         <span className="font-bold text-gray-900">{tier.active_drivers ?? '-'}</span>
                       </div>
+                      <Link
+                        to={`/admin/drivers/subscription/${tier._id}/drivers`}
+                        className="block text-center p-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-xl font-bold"
+                      >
+                        See drivers and their teams
+                      </Link>
                       <div className="flex items-center justify-between p-2 bg-gray-50 rounded-xl">
                         <span className="text-gray-500">Bills</span>
                         <span className="font-bold text-gray-900">

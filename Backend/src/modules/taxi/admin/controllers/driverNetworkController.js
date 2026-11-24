@@ -11,6 +11,7 @@ import { FleetVehicle } from '../models/FleetVehicle.js';
 import { PrimeCitySlot } from '../models/PrimeCitySlot.js';
 import { ServiceLocation } from '../models/ServiceLocation.js';
 import { SubscriptionTier } from '../models/SubscriptionTier.js';
+import { getDriverFleet, listPlanDrivers } from '../services/planDriversService.js';
 import {
   DEFAULT_DRIVER_NETWORK_SETTINGS,
   getDriverNetworkSettings,
@@ -287,6 +288,16 @@ export const createDriverWithPlanController = asyncHandler(async (req, res) => {
       valid_until: granted?.validUntil || null,
     },
   });
+});
+
+export const listPlanDriversController = asyncHandler(async (req, res) => {
+  assertNetworkAdmin(req);
+  res.json({ success: true, data: await listPlanDrivers({ ...req.query, tierId: req.params.tierId }) });
+});
+
+export const getDriverFleetController = asyncHandler(async (req, res) => {
+  assertNetworkAdmin(req);
+  res.json({ success: true, data: await getDriverFleet({ driverId: req.params.driverId }) });
 });
 
 export const listEliteDriversController = asyncHandler(async (req, res) => {
