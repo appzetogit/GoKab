@@ -218,18 +218,17 @@ const formatAdminNotificationLocation = (value, fallback) => {
 };
 
 const resolvePageTitle = (pathname, sections, appName) => {
-  const findLabel = (items = []) => {
+  // The closest match wins: /admin/drivers also matches every page under it.
+  let best = null;
+  const visit = (items = []) => {
     for (const item of items) {
-      if (item.path && pathMatches(pathname, item.path)) return item.label;
-      if (item.subItems) {
-        const nested = findLabel(item.subItems);
-        if (nested) return nested;
-      }
+      if (item.path && pathMatches(pathname, item.path) && (!best || item.path.length > best.path.length)) best = item;
+      if (item.subItems) visit(item.subItems);
     }
-    return null;
   };
+  visit(flattenItems(sections));
 
-  const label = findLabel(flattenItems(sections));
+  const label = best?.label;
   if (label) return label;
   if (pathname.includes('/owners')) return 'Owner Management';
   if (pathname.includes('/fleet')) return 'Vehicles';
