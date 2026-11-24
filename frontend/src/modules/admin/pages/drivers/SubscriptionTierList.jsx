@@ -205,14 +205,10 @@ export default function SubscriptionTierList() {
                       </div>
                       <div className="flex items-center justify-between p-2 bg-gray-50 rounded-xl">
                         <span className="text-gray-500">Drivers with this subscription</span>
-                        <span className="font-bold text-gray-900">{tier.active_drivers ?? '-'}</span>
+                        <Link to={`/admin/drivers/by-plan?plan=${tier._id}`} className="font-bold text-indigo-700 hover:underline">
+                          {tier.active_drivers ?? '-'}
+                        </Link>
                       </div>
-                      <Link
-                        to={`/admin/drivers/subscription/${tier._id}/drivers`}
-                        className="block text-center p-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-xl font-bold"
-                      >
-                        See drivers and their teams
-                      </Link>
                       <div className="flex items-center justify-between p-2 bg-gray-50 rounded-xl">
                         <span className="text-gray-500">Bills</span>
                         <span className="font-bold text-gray-900">

@@ -58,24 +58,51 @@ const limitsOf = (tier) => {
   };
 };
 
+/** One tab per plan on sale (or still holding drivers), dearest first, with how many drivers each has. */
+const buildPlanTabs = async ({ tiers, byDriver, notTeam }) => {
+  // ponytail: reads every driver id to count; aggregate in Mongo if drivers reach tens of thousands.
+  const drivers = await Driver.find({ $and: [{ deletedAt: null }, notTeam] }).select('_id').lean();
+  const defaultPlan = tiers.find((tier) => tier.is_default && tier.is_active);
+  const counts = new Map();
+  for (const driver of drivers) {
+    const planId = String(byDriver.get(String(driver._id))?.tier_id || defaultPlan?._id || '');
+    counts.set(planId, (counts.get(planId) || 0) + 1);
+  }
+  return {
+    total: drivers.length,
+    plans: tiers
+      .filter((tier) => tier.is_active || counts.get(String(tier._id)))
+      .sort((a, b) => Number(b.price_monthly || 0) - Number(a.price_monthly || 0))
+      .map((tier) => ({
+        id: String(tier._id),
+        name: tier.name,
+        badge_color_hex: tier.badge_color_hex || '#10B981',
+        is_active: Boolean(tier.is_active),
+        count: counts.get(String(tier._id)) || 0,
+      })),
+  };
+};
+
+/** `tierId` "all" = drivers of every plan. */
 export const listPlanDrivers = async ({ tierId, page = 1, limit = 20, search = '', cityId = '', online = '', expiring = '', includeTeam = '' }) => {
-  assertId(tierId, 'tierId');
+  const everyPlan = String(tierId) === 'all';
+  if (!everyPlan) assertId(tierId, 'tierId');
   const safePage = Math.max(1, Number(page) || 1);
   const safeLimit = Math.min(50, Math.max(1, Number(limit) || 20));
   const { tiers, byDriver } = await loadPlanMembership();
   const tier = tiers.find((item) => String(item._id) === String(tierId));
-  if (!tier) throw new ApiError(404, 'Plan not found', null, 'TIER_NOT_FOUND');
+  if (!tier && !everyPlan) throw new ApiError(404, 'Plan not found', null, 'TIER_NOT_FOUND');
 
-  const onThisPlan = [...byDriver.values()].filter((item) => String(item.tier_id) === String(tierId));
+  const onThisPlan = [...byDriver.values()].filter((item) => everyPlan || String(item.tier_id) === String(tierId));
   const isExpiring = (item) => new Date(item.end_date).getTime() - Date.now() <= EXPIRING_DAYS * DAY_MS;
   const planIds = onThisPlan.map((item) => item.driver_id);
-  const isDefault = Boolean(tier.is_default && tier.is_active);
+  const isDefault = Boolean(tier?.is_default && tier.is_active);
 
   // The default plan also holds every driver without a running subscription.
   const others = [...byDriver.values()]
     .filter((item) => String(item.tier_id) !== String(tierId))
     .map((item) => item.driver_id);
-  const membership = isDefault ? { _id: { $nin: others } } : { _id: { $in: planIds } };
+  const membership = everyPlan ? {} : isDefault ? { _id: { $nin: others } } : { _id: { $in: planIds } };
 
   // A team member (their organisation has a lead who drives) is listed under the lead.
   const leadOrgs = (await Driver.distinct('owner_id', { is_self_drive_owner: true, deletedAt: null })).filter(Boolean);
@@ -95,7 +122,7 @@ export const listPlanDrivers = async ({ tierId, page = 1, limit = 20, search = '
   if (String(online) === 'true') filters.push({ isOnline: true });
   if (String(expiring) === 'true') filters.push({ _id: { $in: onThisPlan.filter(isExpiring).map((item) => item.driver_id) } });
 
-  const [drivers, total, planTotal, planOnline, expiringCount, cities] = await Promise.all([
+  const [drivers, total, planTotal, planOnline, expiringCount, cities, tabs] = await Promise.all([
     Driver.find({ $and: filters })
       .select('name phone city service_location_id owner_id is_self_drive_owner isOnline isOnRide approve status vehicleNumber')
       .sort({ createdAt: -1, _id: -1 })
@@ -107,6 +134,7 @@ export const listPlanDrivers = async ({ tierId, page = 1, limit = 20, search = '
     Driver.countDocuments({ $and: [...base, { isOnline: true }] }),
     Driver.countDocuments({ $and: [...base, { _id: { $in: onThisPlan.filter(isExpiring).map((item) => item.driver_id) } }] }),
     ServiceLocation.find({}).select('name service_location_name').sort({ name: 1 }).lean(),
+    buildPlanTabs({ tiers, byDriver, notTeam }),
   ]);
 
   const orgIds = drivers.map((driver) => driver.owner_id).filter(Boolean);
@@ -131,7 +159,8 @@ export const listPlanDrivers = async ({ tierId, page = 1, limit = 20, search = '
       const lead = leadByOrg.get(org);
       const isMember = Boolean(lead) && driver.is_self_drive_owner !== true;
       // What the driver really has, benefits kept from their purchase included.
-      const limits = limitsOf((await subscriptionTierService.getEffectiveDriverTier(driver._id)) || tier);
+      const ownTier = (await subscriptionTierService.getEffectiveDriverTier(driver._id)) || tier;
+      const limits = limitsOf(ownTier);
       return {
         id: String(driver._id),
         name: driver.name || '',
@@ -140,6 +169,7 @@ export const listPlanDrivers = async ({ tierId, page = 1, limit = 20, search = '
         approved: driver.approve === true,
         online: Boolean(driver.isOnline),
         on_ride: Boolean(driver.isOnRide),
+        plan: ownTier ? { name: ownTier.name, badge_color_hex: ownTier.badge_color_hex || '#10B981' } : null,
         valid_until: byDriver.get(String(driver._id))?.end_date || null,
         team_of: isMember ? lead.name || 'Team lead' : null,
         team_count: isMember || !org ? 0 : Math.max(0, (teamSize.get(org) || 0) - 1),
@@ -150,7 +180,8 @@ export const listPlanDrivers = async ({ tierId, page = 1, limit = 20, search = '
   );
 
   return {
-    plan: { id: String(tier._id), name: tier.name, badge_color_hex: tier.badge_color_hex || '#10B981', is_default: isDefault, is_active: Boolean(tier.is_active) },
+    plan: tier ? { id: String(tier._id), name: tier.name, is_default: isDefault } : null,
+    tabs,
     summary: { drivers: planTotal, online: planOnline, expiring: expiringCount, expiring_days: EXPIRING_DAYS },
     results,
     cities: cities.map((city) => ({ id: String(city._id), name: city.name || city.service_location_name || '' })),

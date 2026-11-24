@@ -1179,6 +1179,7 @@ const AdminLayout = () => {
               { label: 'Driver Bulk Upload', path: '/admin/drivers/bulk-upload', permission: 'drivers.view' },
               { label: 'Delete Request Drivers', path: '/admin/drivers/delete-requests', permission: 'drivers.view' },
               { label: 'Driver Plans (Subscription)', path: '/admin/drivers/subscription', permission: 'drivers.view' },
+              { label: 'Drivers by Plan', path: '/admin/drivers/by-plan', permission: 'driver_network.view' },
               { label: 'Request Steps', path: '/admin/settings/business/request-steps', permission: 'driver_network.view' },
               {
                 label: 'Wallet and Payouts',

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, Loader2, Search, X } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { ChevronDown, ChevronRight, Loader2, Search, X } from 'lucide-react';
 import api from '../../../../shared/api/axiosInstance';
 
 const unwrap = (res) => res?.data ?? res ?? {};
@@ -127,27 +127,67 @@ const FleetPanel = ({ driverId, onClose }) => {
   );
 };
 
+/** A driver's team, opened under their row. */
+const TeamRows = ({ driverId, columns }) => {
+  const [team, setTeam] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let live = true;
+    api
+      .get(`/admin/driver-network/drivers/${driverId}/fleet`)
+      .then((res) => live && setTeam(unwrap(res).team || []))
+      .catch((err) => live && setError(errorText(err, 'Failed to load the team')));
+    return () => {
+      live = false;
+    };
+  }, [driverId]);
+
+  return (
+    <tr className="bg-slate-50">
+      <td colSpan={columns} className="px-4 pb-4 pt-1">
+        {error && <p className="text-xs text-rose-600">{error}</p>}
+        {!team && !error && <Loader2 size={16} className="animate-spin text-indigo-600" />}
+        {team && (
+          <ul className="ml-8 border-l-2 border-indigo-200 pl-4 space-y-2">
+            {team.length === 0 && <li className="text-xs text-slate-500">No team drivers.</li>}
+            {team.map((member) => (
+              <li key={member.id} className="flex flex-wrap items-center gap-3 text-xs">
+                <Link to={`/admin/drivers/${member.id}`} className="font-bold text-slate-800 hover:text-indigo-600">{member.name || 'No name'}</Link>
+                <span className="text-slate-500">{[member.phone, member.vehicle_number].filter(Boolean).join(' · ')}</span>
+                <Status approved={member.approved} online={member.online} onRide={member.on_ride} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </td>
+    </tr>
+  );
+};
+
 const EMPTY_FILTERS = { search: '', cityId: '', online: false, expiring: false, includeTeam: false };
 
 const PlanDrivers = () => {
-  const { tierId } = useParams();
+  const [params, setParams] = useSearchParams();
+  const planId = params.get('plan') || 'all';
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState(EMPTY_FILTERS);
-  const [openId, setOpenId] = useState('');
+  const [panelId, setPanelId] = useState('');
+  const [openTeams, setOpenTeams] = useState([]);
 
   useEffect(() => {
     let live = true;
-    const params = { page, limit: 20 };
-    for (const [key, value] of Object.entries(filters)) if (value) params[key] = value;
+    const query = { page, limit: 20 };
+    for (const [key, value] of Object.entries(filters)) if (value) query[key] = value;
     const timer = setTimeout(async () => {
       setLoading(true);
       try {
-        const res = await api.get(`/admin/driver-network/plans/${tierId}/drivers`, { params });
+        const res = await api.get(`/admin/driver-network/plans/${planId}/drivers`, { params: query });
         if (!live) return;
-        setData(unwrap(res));
+        setData({ ...unwrap(res), forPlan: planId });
         setError('');
       } catch (err) {
         if (live) setError(errorText(err, 'Failed to load drivers'));
@@ -159,30 +199,61 @@ const PlanDrivers = () => {
       live = false;
       clearTimeout(timer);
     };
-  }, [tierId, page, filters]);
+  }, [planId, page, filters]);
 
   const change = (patch) => {
     setPage(1);
     setFilters((prev) => ({ ...prev, ...patch }));
   };
-  const rows = data?.results || [];
-  const meta = data?.pagination || { page: 1, totalPages: 1, total: 0 };
+  const openTab = (id) => {
+    setPage(1);
+    setOpenTeams([]);
+    setError('');
+    setParams(id === 'all' ? {} : { plan: id });
+  };
+  const toggleTeam = (id) => setOpenTeams((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  const tabs = [
+    { id: 'all', name: 'All', count: data?.tabs?.total },
+    ...(data?.tabs?.plans || []),
+  ];
+  // The rows of the tab before are not shown under the new tab's name.
+  const ready = data?.forPlan === planId;
+  const rows = ready ? data.results || [] : [];
+  const meta = (ready && data.pagination) || { page: 1, totalPages: 1, total: 0 };
+  const heads = ['Driver', ...(planId === 'all' ? ['Plan'] : []), 'City', 'Plan till', 'Team', 'Vehicles', 'Status', ''];
 
   return (
     <div className="min-h-screen bg-[#F1F5F9]">
       <div className="max-w-[1300px] mx-auto p-4 md:p-8 space-y-5 pb-24">
-        <div className="flex items-center gap-3">
-          <Link to="/admin/drivers/subscription" aria-label="Back to plans" className="p-2 rounded-lg hover:bg-white"><ArrowLeft size={18} /></Link>
-          <div>
-            <h1 className="text-xl font-black text-slate-900 flex items-center gap-2">
-              {data?.plan && <span className="w-3 h-3 rounded-full" style={{ backgroundColor: data.plan.badge_color_hex }} />}
-              {data?.plan ? `${data.plan.name} drivers` : 'Plan drivers'}
-            </h1>
-            {data?.plan?.is_default && <p className="text-xs text-slate-500">Default plan: also holds every driver without a running subscription.</p>}
-          </div>
+        <div>
+          <h1 className="text-xl font-black text-slate-900">Drivers by Plan</h1>
+          <p className="text-xs text-slate-500">Choose a plan to see its drivers. Open a driver to see the team under them.</p>
         </div>
 
-        {data?.summary && (
+        <div role="tablist" aria-label="Plans" className="flex gap-2 overflow-x-auto pb-1">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={planId === tab.id}
+              onClick={() => openTab(tab.id)}
+              className={`shrink-0 inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold border ${planId === tab.id ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'}`}
+            >
+              {tab.badge_color_hex && <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: tab.badge_color_hex }} />}
+              {tab.name}
+              {tab.is_active === false ? ' (off)' : ''}
+              {tab.count != null && <span className={planId === tab.id ? 'text-indigo-100' : 'text-slate-400'}>({tab.count})</span>}
+            </button>
+          ))}
+        </div>
+
+        {ready && data.plan?.is_default && (
+          <p className="text-xs text-slate-500">This is the default plan: every driver without a running subscription is here.</p>
+        )}
+
+        {ready && data.summary && (
           <div className="grid grid-cols-3 gap-3">
             {[
               ['Drivers', data.summary.drivers],
@@ -221,32 +292,59 @@ const PlanDrivers = () => {
 
         {error && <p className="text-sm font-bold text-rose-600 bg-rose-50 rounded-xl p-4">{error}</p>}
 
-        {!error && data && (
+        {!error && ready && (
           <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto">
-            <table className="w-full text-sm min-w-[760px]">
+            <table className="w-full text-sm min-w-[820px]">
               <thead>
                 <tr className="text-left text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-100">
-                  {['Driver', 'City', 'Plan till', 'Team', 'Vehicles', 'Status', ''].map((head) => <th key={head} className="p-4">{head}</th>)}
+                  {heads.map((head) => <th key={head} className="p-4">{head}</th>)}
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
-                  <tr key={row.id} className="border-b border-slate-50 hover:bg-slate-50 cursor-pointer" onClick={() => setOpenId(row.id)}>
-                    <td className="p-4">
-                      <span className="font-bold text-slate-800 block">{row.name || 'No name'}</span>
-                      <span className="text-xs text-slate-500">{row.phone}</span>
-                      {row.team_of && <span className="block text-[11px] font-bold text-indigo-600">{row.team_of}&apos;s team</span>}
-                    </td>
-                    <td className="p-4 text-slate-600">{row.city || '-'}</td>
-                    <td className="p-4 text-slate-600">{day(row.valid_until) || 'No subscription'}</td>
-                    <td className="p-4">{row.limits.can_manage_fleet || row.team_count ? <Count used={row.team_count} max={row.limits.can_manage_fleet ? row.limits.max_team : 0} /> : '-'}</td>
-                    <td className="p-4"><Count used={row.vehicle_count} max={row.limits.max_vehicles} /></td>
-                    <td className="p-4"><Status approved={row.approved} online={row.online} onRide={row.on_ride} /></td>
-                    <td className="p-4 text-right">
-                      <button type="button" onClick={() => setOpenId(row.id)} className="text-xs font-bold text-indigo-600">View fleet</button>
-                    </td>
-                  </tr>
-                ))}
+                {rows.map((row) => {
+                  const open = openTeams.includes(row.id);
+                  return (
+                    <React.Fragment key={row.id}>
+                      <tr className="border-b border-slate-50">
+                        <td className="p-4">
+                          <div className="flex items-start gap-2">
+                            {row.team_count > 0 ? (
+                              <button type="button" aria-expanded={open} aria-label={`${open ? 'Hide' : 'Show'} team of ${row.name}`} onClick={() => toggleTeam(row.id)} className="p-1 rounded hover:bg-slate-100 text-indigo-600">
+                                {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                              </button>
+                            ) : (
+                              <span className="w-6" />
+                            )}
+                            <div>
+                              <button type="button" onClick={() => setPanelId(row.id)} className="font-bold text-slate-800 hover:text-indigo-600 block text-left">{row.name || 'No name'}</button>
+                              <span className="text-xs text-slate-500">{row.phone}</span>
+                              {row.team_of && <span className="block text-[11px] font-bold text-indigo-600">{row.team_of}&apos;s team</span>}
+                            </div>
+                          </div>
+                        </td>
+                        {planId === 'all' && (
+                          <td className="p-4">
+                            {row.plan ? (
+                              <span className="inline-flex items-center gap-2 font-bold text-slate-700">
+                                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: row.plan.badge_color_hex }} />
+                                {row.plan.name}
+                              </span>
+                            ) : '-'}
+                          </td>
+                        )}
+                        <td className="p-4 text-slate-600">{row.city || '-'}</td>
+                        <td className="p-4 text-slate-600">{day(row.valid_until) || 'No subscription'}</td>
+                        <td className="p-4">{row.limits.can_manage_fleet || row.team_count ? <Count used={row.team_count} max={row.limits.can_manage_fleet ? row.limits.max_team : 0} /> : '-'}</td>
+                        <td className="p-4"><Count used={row.vehicle_count} max={row.limits.max_vehicles} /></td>
+                        <td className="p-4"><Status approved={row.approved} online={row.online} onRide={row.on_ride} /></td>
+                        <td className="p-4 text-right">
+                          <button type="button" onClick={() => setPanelId(row.id)} className="text-xs font-bold text-indigo-600">Details</button>
+                        </td>
+                      </tr>
+                      {open && <TeamRows driverId={row.id} columns={heads.length} />}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
             {rows.length === 0 && <p className="p-10 text-center text-sm text-slate-500">No drivers found.</p>}
@@ -262,7 +360,7 @@ const PlanDrivers = () => {
         )}
       </div>
 
-      {openId && <FleetPanel driverId={openId} onClose={() => setOpenId('')} />}
+      {panelId && <FleetPanel driverId={panelId} onClose={() => setPanelId('')} />}
     </div>
   );
 };

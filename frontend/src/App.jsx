@@ -1054,7 +1054,7 @@ function App() {
                   path="drivers/pending"
                   element={<AdminPendingDrivers />}
                 />
-                <Route path="drivers/subscription/:tierId/drivers" element={<AdminPlanDrivers />} />
+                <Route path="drivers/by-plan" element={<AdminPlanDrivers />} />
                 <Route
                   path="drivers/subscription"
                   element={<AdminDriverSubscriptions />}
