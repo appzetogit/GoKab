@@ -7,6 +7,8 @@ import { TierAuditLog } from '../admin/models/TierAuditLog.js';
 import { DriverSubscription } from '../driver/models/DriverSubscription.js';
 import { SubscriptionPayment } from '../driver/models/SubscriptionPayment.js';
 import { env } from '../../../config/env.js';
+import { isPlanRulesEnabled } from './appSettingsService.js';
+import { mergeBenefits } from './planBenefits.js';
 import { isValidRazorpayPaymentSignature, isValidRazorpayWebhookSignature } from './razorpaySecurity.js';
 
 // Subscription checkout uses its own env-configured Razorpay account. No
@@ -19,6 +21,21 @@ const getRazorpayKeys = () => {
     throw new ApiError(503, 'Subscription payments are not configured (RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET)');
   }
   return { key_id, key_secret };
+};
+
+/** The plan at the better of now and purchase. Any error falls back to the plan as it is now. */
+const withBoughtBenefits = async (liveTier, snapshot) => {
+  try {
+    const merged = mergeBenefits(liveTier, snapshot);
+    if (merged?.ride_module_ids?.some((item) => !item?.code)) {
+      const ids = merged.ride_module_ids.map((item) => item?._id || item);
+      merged.ride_module_ids = await RideModule.find({ _id: { $in: ids } }).lean();
+    }
+    return merged;
+  } catch (error) {
+    console.error('[subscriptionTierService] bought benefits skipped:', error.message);
+    return liveTier;
+  }
 };
 
 const getRazorpayInstance = () => new Razorpay(getRazorpayKeys());
@@ -150,6 +167,8 @@ export const subscriptionTierService = {
       customer_lead_contact_fee,
       driver_lead_contact_fee,
       customer_ride_accept_fee,
+      can_generate_bills,
+      max_bills_per_month,
     } = payload;
 
     if (!String(name || '').trim()) throw new ApiError(400, 'Tier name is required');
@@ -188,6 +207,10 @@ export const subscriptionTierService = {
       customer_lead_contact_fee: Math.max(0, Number(customer_lead_contact_fee || 0)),
       driver_lead_contact_fee: Math.max(0, Number(driver_lead_contact_fee || 0)),
       customer_ride_accept_fee: Math.max(0, Number(customer_ride_accept_fee || 0)),
+      ...(can_generate_bills !== undefined && can_generate_bills !== null
+        ? { can_generate_bills: Boolean(can_generate_bills) }
+        : {}),
+      max_bills_per_month: Math.max(0, Number(max_bills_per_month || 0)),
     });
 
     // Enforce Singleton Default Tier
@@ -295,6 +318,20 @@ export const subscriptionTierService = {
       );
     }
 
+    const driversOnPlan = await DriverSubscription.countDocuments({
+      status: 'active',
+      end_date: { $gte: new Date() },
+      $or: [{ tier_id: existing._id }, { queued_tier_id: existing._id }],
+    });
+    if (driversOnPlan > 0) {
+      throw new ApiError(
+        409,
+        `${driversOnPlan} driver(s) are on this plan. Turn it off instead of deleting it`,
+        { drivers: driversOnPlan },
+        'TIER_IN_USE',
+      );
+    }
+
     await SubscriptionTier.findByIdAndDelete(tierId);
 
     await TierAuditLog.create({
@@ -375,12 +412,16 @@ export const subscriptionTierService = {
       .populate('queued_tier_id')
       .lean();
 
-    if (activeSub && activeSub.tier_id && activeSub.tier_id.is_active) {
+    // With plan rules on, a plan turned off for sale still serves those who paid for it.
+    const planRulesOn = activeSub ? await isPlanRulesEnabled() : false;
+
+    if (activeSub && activeSub.tier_id && (activeSub.tier_id.is_active || planRulesOn)) {
       // Re-populate module codes
-      const tier = await SubscriptionTier.findById(activeSub.tier_id._id)
+      const liveTier = await SubscriptionTier.findById(activeSub.tier_id._id)
         .populate('ride_module_ids')
         .populate('support_channel_type_id')
         .lean();
+      const tier = planRulesOn ? await withBoughtBenefits(liveTier, activeSub.benefits_snapshot) : liveTier;
 
       return {
         ...tier,

@@ -9,6 +9,7 @@ import { ServiceLocation } from '../admin/models/ServiceLocation.js';
 import { SubscriptionTier } from '../admin/models/SubscriptionTier.js';
 import { TierAuditLog } from '../admin/models/TierAuditLog.js';
 import { getDriverNetworkSettings } from './appSettingsService.js';
+import { canGenerateBills } from './planBenefits.js';
 import { subscriptionTierService } from './subscriptionTierService.js';
 
 export const CATEGORY_RANK = Object.freeze({ lower: 1, middle: 2, prime: 3 });
@@ -260,6 +261,8 @@ export const resolveTierPermissions = (tier) => ({
   customer_lead_contact_fee: Math.max(0, Number(tier?.customer_lead_contact_fee ?? 0)),
   driver_lead_contact_fee: Math.max(0, Number(tier?.driver_lead_contact_fee ?? 0)),
   customer_ride_accept_fee: Math.max(0, Number(tier?.customer_ride_accept_fee ?? 0)),
+  can_generate_bills: canGenerateBills(tier),
+  max_bills_per_month: Math.max(0, Number(tier?.max_bills_per_month ?? 0)),
 });
 
 /**
@@ -288,6 +291,7 @@ export const getDriverPermissions = async (driverOrId, { session = null } = {}) 
   return {
     driver,
     category,
+    plan_id: tier?._id ? String(tier._id) : null,
     tier,
     ...permissions,
     max_routes: maxRoutes,

@@ -34,7 +34,25 @@ export const DEFAULT_DRIVER_NETWORK_SETTINGS = Object.freeze({
   // Published rides go to a driver the publisher approves (request → approve)
   // instead of the first driver to tap Accept.
   feed_requires_approval: true,
+  // Admin-managed plans: drivers keep the benefits they bought until renewal.
+  // Off = plans work as before.
+  plan_rules_enabled: false,
 });
+
+let planRules = { enabled: false, readAt: 0 };
+
+/** The `plan_rules_enabled` switch, read at most every 15 s. Any doubt means off. */
+export const isPlanRulesEnabled = async () => {
+  if (Date.now() - planRules.readAt < 15_000) return planRules.enabled;
+  planRules = { ...planRules, readAt: Date.now() };
+  try {
+    planRules.enabled = (await getDriverNetworkSettings()).plan_rules_enabled === true;
+  } catch (error) {
+    planRules.enabled = false;
+    console.error('[appSettings] plan rules switch unreadable, treating as off:', error.message);
+  }
+  return planRules.enabled;
+};
 
 export const getTipSettings = async () => {
   const settings = await AdminAppSetting.findOne({ scope: 'default' })

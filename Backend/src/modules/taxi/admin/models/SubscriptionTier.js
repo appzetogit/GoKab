@@ -61,6 +61,10 @@ const subscriptionTierSchema = new mongoose.Schema(
     customer_lead_contact_fee: { type: Number, default: 0, min: 0 },
     driver_lead_contact_fee: { type: Number, default: 0, min: 0 },
     customer_ride_accept_fee: { type: Number, default: 0, min: 0 },
+    // Bill maker. No schema default on purpose: a plan saved before this option
+    // keeps bills on (see planBenefits.canGenerateBills). 0 bills = no limit.
+    can_generate_bills: { type: Boolean },
+    max_bills_per_month: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true }
 );
