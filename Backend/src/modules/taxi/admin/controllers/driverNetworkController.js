@@ -296,7 +296,7 @@ export const earningsSummaryController = asyncHandler(async (req, res) => {
   if (!permissions.includes('*') && !permissions.includes('earnings.view')) {
     throw new ApiError(403, 'You do not have permission to see earnings', null, 'FORBIDDEN');
   }
-  res.json({ success: true, data: await getEarningsSummary(req.query) });
+  res.json({ success: true, data: await getEarningsSummary({ ...req.query, exportAll: req.query.export === 'true' }) });
 });
 
 export const listPlanDriversController = asyncHandler(async (req, res) => {

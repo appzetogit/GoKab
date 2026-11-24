@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { BarChart3, Loader2, Search, Table2, X } from 'lucide-react';
+import { BarChart3, Download, Loader2, Search, Table2, X } from 'lucide-react';
 import api from '../../../../shared/api/axiosInstance';
 
 const unwrap = (res) => res?.data ?? res ?? {};
@@ -15,7 +15,7 @@ const pointLabel = (key) => {
   return date ? `${Number(date)} ${MONTHS[month - 1]}` : `${MONTHS[month - 1]} ${year}`;
 };
 const KIND_LABEL = {
-  plan: 'Plan sold', ride: 'Ride commission', lead_contact_fee: 'Lead contact fee', feed_accept_fee: 'Ride accept fee', paid_offer: 'Paid offer',
+  plan: 'Plan sold', ride: 'Ride commission', lead_contact_fee: 'Lead contact fee', feed_accept_fee: 'Ride accept fee', paid_offer: 'Paid offer', plan_refund: 'Plan refund',
 };
 
 const PARTS = [
@@ -86,6 +86,7 @@ const Bars = ({ rows, onPick }) => {
               </span>
               <span className="block mt-1 text-[11px] text-slate-500 tabular-nums">
                 {PARTS.filter((part) => row[part.key]).map((part) => `${part.label} ${money(row[part.key])}`).join(' · ') || 'No earnings in this period'}
+                {row.refunds ? ` · Refunds −${money(row.refunds)}` : ''}
                 {row.free_count > 0 ? ` · ${row.free_count} given free` : ''}
               </span>
             </button>
@@ -136,7 +137,7 @@ const Trend = ({ points }) => {
         className="w-full h-auto touch-pan-y focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600 rounded-lg"
         role="img"
         tabIndex={0}
-        aria-label={`Total earned, ${pointLabel(points[0].id)} to ${pointLabel(points[points.length - 1].id)}. Use arrow keys to read each point.`}
+        aria-label={`Net earned, ${pointLabel(points[0].id)} to ${pointLabel(points[points.length - 1].id)}. Use arrow keys to read each point.`}
         onPointerMove={follow}
         onPointerDown={follow}
         onPointerLeave={() => setAt(null)}
@@ -217,14 +218,130 @@ const DriverEntries = ({ driver }) => (
   </div>
 );
 
-const TABS = [['overview', 'Overview'], ['plans', 'Plan wise'], ['states', 'State wise'], ['drivers', 'Driver wise']];
+/** How rides were paid: one bar, every number written beside it. */
+const PaymentSplit = ({ payment }) => {
+  const ways = [
+    { key: 'cash', label: 'Cash', color: '#4f46e5', ...payment.cash },
+    { key: 'online', label: 'Online', color: '#d97706', ...payment.online },
+  ];
+  const all = ways.reduce((sum, way) => sum + way.rides, 0);
+  return (
+    <section className="space-y-2">
+      <h2 className="text-sm font-black text-slate-900">Cash and online rides</h2>
+      {all === 0 ? (
+        <p className="text-xs text-slate-500">No rides in this choice.</p>
+      ) : (
+        <>
+          <div className="flex gap-[2px] h-5 rounded overflow-hidden bg-slate-100">
+            {ways.filter((way) => way.rides).map((way) => (
+              <span key={way.key} title={`${way.label}: ${way.rides} rides`} style={{ width: `${(way.rides / all) * 100}%`, backgroundColor: way.color }} />
+            ))}
+          </div>
+          <ul className="flex flex-wrap gap-x-6 gap-y-1">
+            {ways.map((way) => (
+              <li key={way.key} className="inline-flex items-center gap-2 text-xs text-slate-600 tabular-nums">
+                <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: way.color }} />
+                <span><b className="text-slate-800">{way.label} {Math.round((way.rides / all) * 100)}%</b> · {way.rides} rides · Fare {money(way.fare)} · Commission {money(way.commission)}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+};
+
+const Settlement = ({ settlement }) => {
+  const { wallets, withdrawals, rows, rows_total: total } = settlement;
+  return (
+    <div className="space-y-6">
+      <section className="space-y-3">
+        <h2 className="text-sm font-black text-slate-900">Driver wallets now <span className="font-medium text-xs text-slate-500">not limited by the dates above</span></h2>
+        <div className="grid sm:grid-cols-3 gap-3">
+          <Card label="Held for drivers" value={money(wallets.to_drivers)} note="Balance in their wallets" />
+          <Card label="Drivers owe" value={money(wallets.from_drivers)} note="Wallets below zero" />
+          <Card label="On hold" value={money(wallets.on_hold)} note="Kept aside for running rides" />
+        </div>
+      </section>
+      <section className="space-y-3">
+        <h2 className="text-sm font-black text-slate-900">Withdrawals asked in this period</h2>
+        <div className="grid sm:grid-cols-3 gap-3">
+          <Card label="Waiting" value={money(withdrawals.pending.amount)} note={`${withdrawals.pending.count} requests`} />
+          <Card label="Paid" value={money(withdrawals.completed.amount)} note={`${withdrawals.completed.count} requests`} />
+          <Card label="Rejected" value={money(withdrawals.cancelled.amount)} note={`${withdrawals.cancelled.count} requests`} />
+        </div>
+      </section>
+      <section className="space-y-2">
+        <h2 className="text-sm font-black text-slate-900">Largest wallet balances</h2>
+        {rows.length === 0 ? (
+          <p className="text-xs text-slate-500">Every wallet here is at zero.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[480px] tabular-nums">
+              <thead>
+                <tr className="text-[11px] uppercase tracking-wider text-slate-400 border-b border-slate-200">
+                  <th className="p-3 text-left">Driver</th><th className="p-3 text-left">Plan</th><th className="p-3 text-right">Wallet</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.id} className="border-b border-slate-100 text-slate-700">
+                    <td className="p-3">
+                      <Link to={`/admin/drivers/${row.id}`} className="font-bold text-slate-800 hover:text-indigo-600">{row.name || 'No name'}</Link>
+                      <span className="block text-[11px] text-slate-500">{row.phone}</span>
+                    </td>
+                    <td className="p-3">{row.plan || '-'}</td>
+                    <td className="p-3 text-right font-bold">{row.balance < 0 ? `−${money(-row.balance)} (owes)` : money(row.balance)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {total > rows.length && <p className="text-[11px] text-slate-500">Largest {rows.length} of {total}. The Excel file has the totals.</p>}
+      </section>
+    </div>
+  );
+};
+
+/** Everything in the current choice as one workbook. */
+const saveExcel = async (data) => {
+  const XLSX = await import('xlsx');
+  const book = XLSX.utils.book_new();
+  const sheet = (name, rows) => XLSX.utils.book_append_sheet(book, XLSX.utils.json_to_sheet(rows.length ? rows : [{ Note: 'Nothing in this choice' }]), name);
+  const numbers = (row) => ({
+    'Plans sold': row.sales_count, 'Plan sales': row.sales, Rides: row.rides, Commission: row.commission, Fees: row.fees, Refunds: row.refunds, Net: row.total,
+  });
+  const { summary, settlement, payment } = data;
+  sheet('Summary', [
+    { Item: 'From', Value: data.from }, { Item: 'To', Value: data.to },
+    { Item: 'Plan sales', Value: summary.sales }, { Item: 'Commission', Value: summary.commission }, { Item: 'Fees', Value: summary.fees },
+    { Item: 'Refunds', Value: summary.refunds }, { Item: 'Net earned', Value: summary.total }, { Item: 'Plans given free', Value: summary.free_count },
+    { Item: 'Cash rides', Value: payment.cash.rides }, { Item: 'Online rides', Value: payment.online.rides },
+    { Item: 'Held for drivers now', Value: settlement.wallets.to_drivers }, { Item: 'Drivers owe now', Value: settlement.wallets.from_drivers },
+    { Item: 'Withdrawals waiting', Value: settlement.withdrawals.pending.amount }, { Item: 'Withdrawals paid', Value: settlement.withdrawals.completed.amount },
+    ...(data.test_payments ? [{ Item: 'Note', Value: 'Plan payments are in Razorpay test mode' }] : []),
+  ]);
+  sheet('Dates', data.trend.points.map((row) => ({ Date: row.id, ...numbers(row) })));
+  sheet('Plans', data.plans.map((row) => ({ Plan: row.name, Drivers: row.drivers, 'Given free': row.free_count, ...numbers(row) })));
+  sheet('States', data.states.map((row) => ({ State: row.name, Drivers: row.drivers, 'Given free': row.free_count, ...numbers(row) })));
+  sheet('Drivers', data.export.drivers.map((row) => ({ Driver: row.name, Phone: row.phone, 'Plan now': row.plan, City: row.city, ...numbers(row) })));
+  sheet('Entries', data.export.entries.map((row) => ({
+    Date: new Date(row.at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }), What: KIND_LABEL[row.kind] || row.kind, Driver: row.driver, Phone: row.phone,
+    State: row.state, 'Plan then': row.plan, 'Ride paid by': row.payment_method, 'Ride id': row.ride_id, Amount: row.amount,
+  })));
+  XLSX.writeFile(book, `GoKab-earnings-${data.from}-to-${data.to}.xlsx`);
+  return data.export.entries_total - data.export.entries.length;
+};
+
+const TABS = [['overview', 'Overview'], ['plans', 'Plan wise'], ['states', 'State wise'], ['drivers', 'Driver wise'], ['settlement', 'Settlement']];
 const ROW_HEADING = { overview: 'Date', plans: 'Plan', states: 'State', drivers: 'Driver' };
 // Plans sold and drivers are counts of the whole choice; a day or one driver has no driver count.
 const COLUMNS_FOR = (tab) => (tab === 'overview' || tab === 'drivers' ? COLUMNS.filter(([key]) => !['drivers', 'free_count'].includes(key)) : COLUMNS);
 
 const COLUMNS = [
   ['drivers', 'Drivers'], ['sales_count', 'Plans sold'], ['free_count', 'Given free'], ['sales', 'Plan sales', true],
-  ['rides', 'Rides'], ['commission', 'Commission', true], ['fees', 'Fees', true], ['total', 'Total', true],
+  ['rides', 'Rides'], ['commission', 'Commission', true], ['fees', 'Fees', true], ['refunds', 'Refunds', true], ['total', 'Net', true],
 ];
 
 const Grid = ({ rows, summary, heading, columns, onPick }) => (
@@ -266,6 +383,8 @@ const Earnings = () => {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saveNote, setSaveNote] = useState('');
 
   const custom = DAY_PATTERN.test(params.get('from') || '') && DAY_PATTERN.test(params.get('to') || '');
   const period = custom ? 'custom' : PERIODS.some(([key]) => key === params.get('period')) ? params.get('period') : 'month';
@@ -321,6 +440,21 @@ const Earnings = () => {
     };
   }, [from, to, state, cityId, planId, driverId, search, page]);
 
+  const exportExcel = async () => {
+    const query = { from, to, export: 'true' };
+    for (const [key, value] of Object.entries({ state, cityId, planId, driverId })) if (value) query[key] = value;
+    setSaving(true);
+    setSaveNote('');
+    try {
+      const left = await saveExcel(unwrap(await api.get('/admin/driver-network/earnings', { params: query })));
+      setSaveNote(left > 0 ? `${left} older entries did not fit. Choose a shorter period for them.` : '');
+    } catch (err) {
+      setSaveNote(err?.response?.data?.message || err?.message || 'Could not make the Excel file');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const options = data?.options || { plans: [], states: [], cities: [] };
   const cities = options.cities.filter((city) => !state || city.state === (state === 'none' ? '' : state));
   const chips = [
@@ -355,7 +489,12 @@ const Earnings = () => {
             <h1 className="text-xl font-black text-slate-900">Earnings</h1>
             <p className="text-xs text-slate-500">What the company earned: plans sold, ride commission and fees.</p>
           </div>
-          <Link to="/admin/earnings/rides" className="text-xs font-bold text-indigo-600">Ride by ride list</Link>
+          <div className="flex items-center gap-4">
+            <Link to="/admin/earnings/rides" className="text-xs font-bold text-indigo-600">Ride by ride list</Link>
+            <button type="button" disabled={saving || !data} onClick={exportExcel} className="inline-flex items-center gap-2 rounded-lg bg-white border border-slate-200 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Excel
+            </button>
+          </div>
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-4">
@@ -402,6 +541,7 @@ const Earnings = () => {
           )}
         </div>
 
+        {saveNote && <p role="status" className="text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3">{saveNote}</p>}
         {error && <p className="text-sm font-bold text-rose-600 bg-rose-50 rounded-xl p-4">{error}</p>}
 
         {summary && !error && (
@@ -412,11 +552,15 @@ const Earnings = () => {
               </p>
             )}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <Card label="Total earned" value={money(summary.total)} note={changeNote} tone={summary.change_percent == null ? 'text-slate-400' : summary.change_percent >= 0 ? 'text-emerald-700' : 'text-rose-700'} />
+              <Card label="Net earned" value={money(summary.total)} note={changeNote} tone={summary.change_percent == null ? 'text-slate-400' : summary.change_percent >= 0 ? 'text-emerald-700' : 'text-rose-700'} />
               <Card label="Plan sales" value={money(summary.sales)} note={`${summary.sales_count} sold, ${summary.free_count} given free`} />
               <Card label="Ride commission" value={money(summary.commission)} note={`${summary.rides} rides`} />
               <Card label="Fees" value={money(summary.fees)} note="Leads, ride accept, paid offers" />
             </div>
+
+            <p className="text-xs text-slate-600 tabular-nums">
+              Net earned = Plan sales {money(summary.sales)} + Commission {money(summary.commission)} + Fees {money(summary.fees)} − Refunds {money(summary.refunds)} = <b className="text-slate-900">{money(summary.total)}</b>
+            </p>
 
             <div className="bg-white rounded-2xl border border-slate-200 p-4 md:p-6 space-y-5">
               <div className="flex flex-wrap justify-between gap-3">
@@ -425,7 +569,7 @@ const Earnings = () => {
                     <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => change({ tab: key === 'overview' ? '' : key })} className={toggle(tab === key)}>{label}</button>
                   ))}
                 </div>
-                <div className="flex gap-2">
+                <div className={`flex gap-2 ${tab === 'settlement' ? 'hidden' : ''}`}>
                   <button type="button" aria-pressed={view === 'graph'} onClick={() => change({ view: '' })} className={toggle(view === 'graph')}><BarChart3 size={14} /> Graph</button>
                   <button type="button" aria-pressed={view === 'table'} onClick={() => change({ view: 'table' })} className={toggle(view === 'table')}><Table2 size={14} /> Table</button>
                 </div>
@@ -436,14 +580,19 @@ const Earnings = () => {
                   <input aria-label="Search drivers" value={search} onChange={(event) => change({ search: event.target.value })} placeholder="Driver name or phone" className="w-full border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-sm" />
                 </label>
               )}
-              {tab === 'drivers' && driverId ? (
+              {tab === 'settlement' ? (
+                <Settlement settlement={data.settlement} />
+              ) : tab === 'drivers' && driverId ? (
                 data.driver?.id === driverId ? <DriverEntries driver={data.driver} /> : <Loader2 size={18} className="animate-spin text-indigo-600" />
               ) : rows.length === 0 || (tab === 'overview' && view === 'graph' && !points.some((point) => point.total)) ? (
                 <p className="p-8 text-center text-sm text-slate-500">No earnings for this choice.</p>
               ) : view === 'table' ? (
                 <Grid rows={rows} summary={summary} heading={ROW_HEADING[tab]} columns={COLUMNS_FOR(tab)} onPick={tab === 'overview' ? null : pick} />
               ) : tab === 'overview' ? (
-                <Trend key={`${from}${to}`} points={points} />
+                <>
+                  <Trend key={`${from}${to}`} points={points} />
+                  <PaymentSplit payment={data.payment} />
+                </>
               ) : (
                 <Bars rows={tab === 'drivers' ? rows.slice(0, 10) : rows} onPick={pick} />
               )}
@@ -459,7 +608,7 @@ const Earnings = () => {
                 </div>
               )}
               <p className="text-[11px] text-slate-400">
-                State is the driver&apos;s city today. Commission goes to the plan the driver was on when the ride ended. Click a row to look inside it.
+                Net = after refunds. State is the driver&apos;s city today. Commission goes to the plan the driver was on when the ride ended. Click a row to look inside it.
               </p>
             </div>
           </>
