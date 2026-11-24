@@ -6,6 +6,7 @@ import { operatorModuleRouter } from '../operators/routes/operatorRoutes.js';
 import { driverModuleRouter } from '../driver/routes/index.js';
 import { supportModuleRouter } from '../support/routes/index.js';
 import { userModuleRouter } from '../user/routes/index.js';
+import { adminComplaintRouter, complaintRouter } from '../complaints/routes/complaintRoutes.js';
 import { commonRouter } from '../common/routes/commonRoutes.js';
 import { userAdvertisementRouter } from '../user/routes/advertisementRoutes.js';
 import { cmsPublicRouter } from '../admin/routes/cmsRoutes.js';
@@ -16,6 +17,8 @@ import { AppLanguage } from '../admin/models/AppLanguage.js';
 
 export const taxiRouter = Router();
 
+taxiRouter.use('/complaints', complaintRouter);
+taxiRouter.use('/admin/complaints', adminComplaintRouter);
 taxiRouter.use(chatModuleRouter);
 taxiRouter.use(offerModuleRouter);
 taxiRouter.use(operatorModuleRouter);

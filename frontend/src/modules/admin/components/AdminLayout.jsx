@@ -1283,6 +1283,7 @@ const AdminLayout = () => {
             label: 'Help and Support',
             subItems: [
               { label: 'Chat', path: '/admin/chat', permission: 'chat.view' },
+              { label: 'Complaints', path: '/admin/complaints', permission: 'support.view' },
               { label: 'Support Tickets', path: '/admin/support/tickets', permission: 'support.view' },
               { label: 'Ticket Title', path: '/admin/support/ticket-title', permission: 'support.view' },
             ],
