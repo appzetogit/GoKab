@@ -3,6 +3,8 @@ import { Ride } from '../user/models/Ride.js';
 import { Driver } from '../driver/models/Driver.js';
 import { getTierPhases, categoryOf } from './tierPhaseService.js';
 import { getDriverNetworkSettings } from './appSettingsService.js';
+import { kindOfRide, plansOpenAtStep, stepTimeLeftMs } from './requestSteps.js';
+import { areRequestStepsOn, getPlanIdsForDrivers, getRequestSteps } from './requestStepsService.js';
 import { findDriversWhoseActiveRouteMatches } from './routeMatchService.js';
 import { sendPushNotificationToEntities } from './pushNotificationService.js';
 
@@ -45,8 +47,10 @@ export const publishedAllowedCategories = (ride, phases) => {
   return index == null ? ALL_CATEGORIES : phases[index]?.categories || ALL_CATEGORIES;
 };
 
-export const isPublishedOpenToCategory = (ride, category, phases) =>
-  publishedAllowedCategories(ride, phases).includes(category);
+export const isPublishedOpenToCategory = (ride, category, phases, { stepsOn = false, planId = null } = {}) =>
+  stepsOn && ride.publish?.request_steps?.length
+    ? plansOpenAtStep(ride.publish.request_steps, ride.publish.step_index).includes(String(planId))
+    : publishedAllowedCategories(ride, phases).includes(category);
 
 const maskName = (name = '') => {
   const text = String(name || '').trim();
@@ -130,6 +134,13 @@ export const alertPublishedRide = async (rideId) => {
     return 0;
   }
 
+  // A ride already under way by the plan phases stays with them.
+  const onPhases = !ride.publish?.request_steps?.length && (ride.publish?.alerted_phase ?? -1) >= 0;
+  if (!onPhases) {
+    const { mode, steps, radiusKm } = await getRequestSteps(kindOfRide(ride));
+    if (mode === 'on') return alertPublishedByStep(ride, ride.publish?.request_steps || steps, radiusKm);
+  }
+
   const index = publishedPhaseIndex(ride, phases);
   // Past the phases: no more alerts, the feed keeps showing it.
   if (phases && index >= phases.length) return 0;
@@ -197,6 +208,83 @@ export const alertPublishedRide = async (rideId) => {
       $addToSet: { 'publish.alerted_driver_ids': { $each: drivers.map((d) => d._id) } },
     },
   );
+  return sendPublishedAlert(ride, drivers);
+};
+
+/**
+ * Request steps for a published ride: moves to the next step when the current one
+ * is over, skipping steps with nobody to ask. Each step is claimed, so publishing
+ * and the cron never alert one twice.
+ */
+const alertPublishedByStep = async (ride, steps, defaultRadiusKm) => {
+  let index = Number.isInteger(ride.publish?.step_index) ? ride.publish.step_index : -1;
+  if (index >= 0 && stepTimeLeftMs(steps[index], ride.publish.step_started_at) > 0) return 0;
+
+  const asked = index < 0 ? [] : (ride.publish?.alerted_driver_ids || []).map(String);
+  const skip = [String(ride.created_by_driver_id), ...asked, ...(ride.requestRejectedDriverIds || []).map(String)];
+
+  while (index + 1 < steps.length) {
+    const next = index + 1;
+    const claimed = await Ride.updateOne(
+      { _id: ride._id, 'publish.status': 'open', 'publish.step_index': index < 0 ? { $in: [-1, null] } : index },
+      {
+        $set: {
+          'publish.request_steps': steps,
+          'publish.step_index': next,
+          'publish.step_started_at': new Date(),
+          ...(index < 0 ? { 'publish.alerted_driver_ids': [] } : {}),
+        },
+      },
+    );
+    if (!claimed.modifiedCount) return 0;
+    index = next;
+
+    const drivers = await findStepDrivers({ ride, step: steps[next], defaultRadiusKm, skip });
+    if (drivers.length) {
+      await Ride.updateOne(
+        { _id: ride._id },
+        { $addToSet: { 'publish.alerted_driver_ids': { $each: drivers.map((driver) => driver._id) } } },
+      );
+      return sendPublishedAlert(ride, drivers);
+    }
+  }
+  return 0;
+};
+
+/** Free drivers of the step's plans: All Locations ones within the radius, Route ones whose route fits. */
+const findStepDrivers = async ({ ride, step, defaultRadiusKm, skip }) => {
+  const pickup = ride.pickupLocation?.coordinates;
+  if (pickup?.length !== 2) return [];
+  const free = { isOnline: true, isOnRide: { $ne: true }, approve: true, deletedAt: null };
+  const radiusKm = step.radius_km || defaultRadiusKm || 15;
+
+  const [nearby, routeMatched] = await Promise.all([
+    Driver.find({
+      ...free,
+      route_mode: { $ne: 'route' },
+      _id: { $nin: skip },
+      location: { $geoWithin: { $centerSphere: [pickup, radiusKm / 6378.1] } },
+    })
+      .select('_id')
+      .limit(MAX_ALERTS_PER_PHASE * 5)
+      .lean(),
+    findDriversWhoseActiveRouteMatches({
+      pickup,
+      drop: ride.dropLocation?.coordinates?.length === 2 ? ride.dropLocation.coordinates : null,
+      ignoreServiceLocation: true,
+      limit: MAX_ALERTS_PER_PHASE,
+    }),
+  ]);
+  const onRoute = routeMatched.filter(
+    (driver) => driver.isOnline === true && driver.isOnRide !== true && !skip.includes(String(driver._id)),
+  );
+
+  const drivers = [...nearby, ...onRoute];
+  const planIds = await getPlanIdsForDrivers(drivers.map((driver) => driver._id));
+  return drivers.filter((driver) => step.plan_ids.includes(planIds.get(String(driver._id)))).slice(0, MAX_ALERTS_PER_PHASE);
+};
+
+const sendPublishedAlert = async (ride, drivers) => {
   if (!drivers.length) return 0;
 
   const built = await buildPayload(ride);
@@ -237,6 +325,20 @@ export const alertPublishedRide = async (rideId) => {
 
 /** Run every minute: starts the next phase's alerts for rides still inside the alert window. */
 export const advancePublishedAlerts = async () => {
+  if (await areRequestStepsOn()) {
+    const stepped = await Ride.find({
+      origin: 'driver_created',
+      'publish.status': 'open',
+      'publish.request_steps.0': { $exists: true },
+      'publish.expires_at': { $gt: new Date() },
+    })
+      .select('_id')
+      .lean();
+    for (const { _id } of stepped) {
+      await alertPublishedRide(_id).catch((error) => console.error('[publishedAlert] step alert failed:', error.message));
+    }
+  }
+
   const phases = await getTierPhases();
   const windowMs = phases ? phases.reduce((sum, phase) => sum + phase.minutes * 60 * 1000, 0) : 0;
   if (!windowMs) return;

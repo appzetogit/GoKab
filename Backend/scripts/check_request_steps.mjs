@@ -1,7 +1,7 @@
 // node scripts/check_request_steps.mjs
 import assert from 'node:assert/strict';
 import {
-  allAskedHaveRejected, plansOpenAtStep, stepsForKind, validateRequestSteps,
+  allAskedHaveRejected, isRideInStepFeed, kindOfRide, plansOpenAtStep, stepsForKind, stepTimeLeftMs, validateRequestSteps,
 } from '../src/modules/taxi/services/requestSteps.js';
 
 const plans = [
@@ -46,4 +46,21 @@ for (const empty of [null, {}, { default: [] }, { default: 'x' }, { default: [{ 
 assert.equal(allAskedHaveRejected([], []), false);
 assert.equal(allAskedHaveRejected(['a', 'b'], ['a']), false);
 assert.equal(allAskedHaveRejected(['a', 'b'], ['b', 'a', 'c']), true);
+
+// Feed: asked drivers see it to the end wherever they are; a no hides it; others need plan, area and a started search.
+const ride = { requestSteps: saved.default, tierPhaseIndex: 1, requestAskedDriverIds: ['a'], requestRejectedDriverIds: ['r'] };
+const feed = (over) => isRideInStepFeed({ ride, driverId: 'x', planId: 'gold', inArea: true, searchStarted: true, ...over });
+assert.equal(feed({}), true);
+assert.equal(feed({ planId: 'silver' }), false);
+assert.equal(feed({ inArea: false }), false);
+assert.equal(feed({ searchStarted: false }), false);
+assert.equal(feed({ driverId: 'a', planId: 'silver', inArea: false }), true);
+assert.equal(feed({ driverId: 'r' }), false);
+assert.equal(feed({ driverId: 'a', ride: { ...ride, requestRejectedDriverIds: ['a'] } }), false);
+
+assert.equal(stepTimeLeftMs({ minutes: 2 }, new Date(1000), 61_000), 60_000);
+assert.equal(stepTimeLeftMs({ minutes: 2 }, new Date(1000), 999_000), 0);
+assert.equal(stepTimeLeftMs({ minutes: 2 }, null), 0);
+assert.equal(kindOfRide({ serviceType: 'intercity' }), 'outstation');
+assert.equal(kindOfRide({}), 'city');
 console.log('request steps: ok');

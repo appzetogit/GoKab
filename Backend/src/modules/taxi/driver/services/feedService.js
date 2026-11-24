@@ -20,7 +20,8 @@ import {
   notifyRideAccepted,
 } from '../../services/dispatchService.js';
 import { acceptRideAssignment, isRideScheduledForFuture } from '../../services/rideService.js';
-import { areRequestStepsOn, isRideOpenToPlan } from '../../services/requestStepsService.js';
+import { isRideInStepFeed, kindOfRide } from '../../services/requestSteps.js';
+import { areRequestStepsOn, getRequestSteps, isBeforeSearchTime } from '../../services/requestStepsService.js';
 import { categoryOf, getTierPhases, isRideOpenToCategory, withoutTeamMembers } from '../../services/tierPhaseService.js';
 import { holdForPublishedRide } from './escrowService.js';
 import {
@@ -155,6 +156,10 @@ export const publishRide = async ({ driverId, rideId, totalFare, ownerCommission
         'publish.status': 'open',
         'publish.taken_by_driver_id': null,
         'publish.taken_at': null,
+        'publish.request_steps': null,
+        'publish.step_index': -1,
+        'publish.step_started_at': null,
+        requestRejectedDriverIds: [],
       },
     },
     { new: true },
@@ -245,6 +250,9 @@ const broadcastNewDriverLead = async (ride) => {
     is_secure: isSecureRide(ride),
     expires_at: ride.publish?.expires_at || null,
   });
+
+  // With steps on, route drivers are asked in their plan's step above.
+  if (await areRequestStepsOn()) return;
 
   // Drivers running a matching corridor get an actual notification, not just a
   // feed row — they are the ones most likely to take the trip, and they may be
@@ -352,6 +360,47 @@ export const serializeFeedItem = (ride, { lead_type, publisher = null, distanceF
   createdAt: ride.createdAt,
 });
 
+const wasAsked = (ride, driverId) =>
+  [...(ride.requestAskedDriverIds || []), ...(ride.publish?.alerted_driver_ids || [])].some(
+    (id) => String(id) === String(driverId),
+  );
+
+/** The widest radius any request step uses, so the feed query misses nothing a step could reach. */
+const feedReachKm = async () => {
+  const settings = await getDriverNetworkSettings();
+  const config = await resolveTransportDispatchConfig();
+  const common = Number(settings.all_locations_radius_km) || config.baseDistanceMeters / 1000;
+  const own = Object.values(settings.request_steps || {}).flat().map((step) => Number(step?.radius_km) || 0);
+  return Math.max(common, ...own);
+};
+
+const keepOpenCustomerRides = async ({ candidates, driver, permissions, phases, stepsOn, feedPoint, followsRoute }) => {
+  if (!stepsOn) return candidates.filter((ride) => isRideOpenToCategory(ride, categoryOf(driver), phases));
+
+  const commonKm = {};
+  const kept = [];
+  for (const ride of candidates) {
+    const searchStarted = !(await isBeforeSearchTime(ride));
+    if (!ride.requestSteps?.length) {
+      if (searchStarted && isRideOpenToCategory(ride, categoryOf(driver), phases)) kept.push(ride);
+      continue;
+    }
+
+    // Route drivers are narrowed to their route further down; without a position
+    // the city filter has already done this job.
+    let inArea = true;
+    if (!followsRoute && feedPoint && ride.pickupLocation?.coordinates) {
+      const kind = kindOfRide(ride);
+      commonKm[kind] ??=
+        (await getRequestSteps(kind)).radiusKm || (await resolveTransportDispatchConfig()).baseDistanceMeters / 1000;
+      const km = ride.requestSteps[ride.tierPhaseIndex ?? 0]?.radius_km || commonKm[kind];
+      inArea = haversineMeters(feedPoint, ride.pickupLocation.coordinates) <= km * 1000;
+    }
+    if (isRideInStepFeed({ ride, driverId: driver._id, planId: permissions.tier?._id, inArea, searchStarted })) kept.push(ride);
+  }
+  return kept;
+};
+
 /**
  * The driver home feed.
  *
@@ -366,6 +415,7 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
   const safeLimit = Math.min(50, Math.max(1, Number(limit) || 20));
   const now = new Date();
   const leadMaxAgeMs = tab === 'customer' ? await customerLeadMaxAgeMs() : 0;
+  const stepsOn = await areRequestStepsOn();
 
   const baseFilter =
     tab === 'customer'
@@ -377,6 +427,8 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
           $or: [
             { createdAt: { $gt: new Date(now.getTime() - leadMaxAgeMs) } },
             { scheduledAt: { $gt: now } },
+            // Steps count the search from its start, not from the booking.
+            ...(stepsOn ? [{ dispatchStartedAt: { $gt: new Date(now.getTime() - leadMaxAgeMs) } }] : []),
           ],
         }
       : {
@@ -393,7 +445,36 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
   // A driver running a route corridor isn't limited to their home city — the
   // corridor filter below (JS, using activeRoute) is the geographic limit for
   // them instead, same reasoning as routeMatchService's ignoreServiceLocation.
-  if (driver.service_location_id && driver.route_mode !== 'route') {
+  const feedPoint =
+    Number.isFinite(Number(lat)) && Number.isFinite(Number(lng)) && (Number(lat) || Number(lng))
+      ? [Number(lng), Number(lat)]
+      : driver.location?.coordinates?.length === 2
+        ? driver.location.coordinates
+        : null;
+  // Steps: the feed covers the same area the requests do (the admin's radius, or the
+  // driver's route), and always the rides this driver was asked about.
+  const useStepArea = stepsOn && Boolean(feedPoint);
+  const followsRoute =
+    driver.route_mode === 'route' &&
+    driver.active_route_id &&
+    (!useStepArea || (await DriverRoute.exists({ _id: driver.active_route_id, deletedAt: null, is_active: true })));
+
+  if (useStepArea) {
+    const me = new mongoose.Types.ObjectId(String(driverId));
+    baseFilter.requestRejectedDriverIds = { $ne: me };
+    if (!followsRoute) {
+      const reachKm = await feedReachKm();
+      baseFilter.$and = [
+        {
+          $or: [
+            { pickupLocation: { $geoWithin: { $centerSphere: [feedPoint, reachKm / 6378.1] } } },
+            { requestAskedDriverIds: me },
+            { 'publish.alerted_driver_ids': me },
+          ],
+        },
+      ];
+    }
+  } else if (driver.service_location_id && driver.route_mode !== 'route') {
     baseFilter.service_location_id = driver.service_location_id;
   }
 
@@ -408,15 +489,10 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
   // their lead takes the ride and assigns it.
   if (tab === 'customer') {
     const phases = await getTierPhases();
-    const stepsOn = await areRequestStepsOn();
     const isTeamMember = (await withoutTeamMembers([driver])).length === 0;
     candidates = isTeamMember
       ? []
-      : candidates.filter((ride) =>
-          stepsOn && ride.requestSteps?.length
-            ? isRideOpenToPlan(ride, permissions.tier?._id)
-            : isRideOpenToCategory(ride, categoryOf(driver), phases),
-        );
+      : await keepOpenCustomerRides({ candidates, driver, permissions, phases, stepsOn, feedPoint, followsRoute });
   }
 
   // Rides other drivers published follow the same plan phases: Elite first, then
@@ -424,7 +500,11 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
   if (tab === 'driver') {
     const phases = await getTierPhases();
     const { isPublishedOpenToCategory } = await import('../../services/publishedAlertService.js');
-    candidates = candidates.filter((ride) => isPublishedOpenToCategory(ride, categoryOf(driver), phases));
+    candidates = candidates.filter(
+      (ride) =>
+        (useStepArea && wasAsked(ride, driverId)) ||
+        isPublishedOpenToCategory(ride, categoryOf(driver), phases, { stepsOn, planId: permissions.tier?._id }),
+    );
   }
 
   // Riders' advertised trips ride along on the customer tab, until pickup time.
@@ -458,8 +538,8 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
     let routeMatch = null;
     if (activeRoute) {
       const result = matchRideToRoute({ route: activeRoute, pickup, drop });
-      if (!result.match) continue;
-      routeMatch = { route_id: String(activeRoute._id), route_name: activeRoute.name };
+      if (!result.match && !(useStepArea && wasAsked(ride, driverId))) continue;
+      if (result.match) routeMatch = { route_id: String(activeRoute._id), route_name: activeRoute.name };
     }
 
     filtered.push({

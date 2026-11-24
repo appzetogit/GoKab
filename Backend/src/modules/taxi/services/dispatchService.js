@@ -7,14 +7,14 @@ import { Driver } from '../driver/models/Driver.js';
 import { WalletTransaction } from '../driver/models/WalletTransaction.js';
 import { applyDriverWalletAdjustment } from '../driver/services/walletService.js';
 import { matchDrivers, findZoneByPickup } from './matchingService.js';
-import { allAskedHaveRejected, plansOpenAtStep } from './requestSteps.js';
-import { areRequestStepsOn, getRequestSteps } from './requestStepsService.js';
+import { allAskedHaveRejected, plansOpenAtStep, stepTimeLeftMs } from './requestSteps.js';
+import { areRequestStepsOn, getDispatchLeadMs, getRequestSteps } from './requestStepsService.js';
 import { categoryOf, getTierPhases, phaseCategories, withoutTeamMembers } from './tierPhaseService.js';
 import {
   RIDE_LIVE_STATUS,
   RIDE_STATUS,
 } from '../constants/index.js';
-import { getRideRoom, getScheduledDispatchLeadMs, resolveSetPriceForRide } from './rideService.js';
+import { getRideRoom, resolveSetPriceForRide } from './rideService.js';
 import { releasePromoForCancelledRide } from './promoService.js';
 import { SOCKET_EVENTS } from '../socket/events.js';
 import { resolveTransportDispatchConfig } from './transportSettingsService.js';
@@ -791,6 +791,18 @@ export const markDriverRejectedFromDispatch = (rideId, driverId) => {
 
   saveDispatchState(rideId, { rejectedDriverIds });
   moveOnIfAllRejected(rideId);
+  rememberRejection(rideId, driverId).catch((error) =>
+    console.error('[requestSteps] rejection not saved:', error.message),
+  );
+};
+
+/** With steps on, a ride the driver said no to leaves their feed (customer and published rides). */
+const rememberRejection = async (rideId, driverId) => {
+  if (!mongoose.isValidObjectId(rideId) || !(await areRequestStepsOn())) return;
+  await Ride.updateOne(
+    { _id: rideId, status: RIDE_STATUS.SEARCHING },
+    { $addToSet: { requestRejectedDriverIds: driverId } },
+  );
 };
 
 const moveOnIfAllRejected = (rideId) => {
@@ -1367,6 +1379,15 @@ const dispatchTierPhase = async ({ ride, rideId, phaseIndex, phases, dispatchCon
   scheduleNextAttempt(rideId, phaseIndex + 1, waitMs);
 };
 
+const scheduleUnmatchedClose = (rideId, waitMs) => {
+  const timer = setTimeout(() => {
+    closeRideAsUnmatched(rideId)
+      .catch((error) => console.error('Failed to mark ride unmatched', error))
+      .finally(() => stopDispatchFlow(rideId));
+  }, waitMs);
+  saveDispatchState(rideId, { timer });
+};
+
 const matchDriversForStep = (ride, { planIds, radiusKm, excludeDriverIds = [], onlyDriverId = null }) =>
   matchDrivers(ride.pickupLocation.coordinates, {
     maxDistance: radiusKm * 1000,
@@ -1393,8 +1414,20 @@ const dispatchRequestStep = async ({ ride, rideId, stepIndex, steps, defaultRadi
 
   await Ride.updateOne(
     { _id: rideId, status: RIDE_STATUS.SEARCHING },
-    { $set: { tierPhaseIndex: stepIndex, requestSteps: steps, dispatchStartedAt: startedAt } },
+    {
+      $set: {
+        tierPhaseIndex: stepIndex,
+        requestSteps: steps,
+        requestStepStartedAt: new Date(),
+        dispatchStartedAt: startedAt,
+        ...(stepIndex === 0
+          ? { requestAskedDriverIds: [], requestRejectedDriverIds: dispatchState.rejectedDriverIds }
+          : {}),
+      },
+    },
   );
+  // A ride booked for later only reaches the feed now.
+  if (stepIndex === 0 && ride.scheduledAt) emitCustomerFeedEvent(ride, 'feed:customer:new');
 
   const { zone, drivers } = await matchDriversForStep(ride, {
     planIds: step.plan_ids,
@@ -1414,6 +1447,10 @@ const dispatchRequestStep = async ({ ride, rideId, stepIndex, steps, defaultRadi
   });
 
   if (targetDrivers.length) {
+    await Ride.updateOne(
+      { _id: rideId },
+      { $addToSet: { requestAskedDriverIds: { $each: targetDrivers.map((driver) => driver._id) } } },
+    );
     await emitRideRequestToDrivers({
       ride,
       targetDrivers,
@@ -1448,12 +1485,7 @@ const dispatchRequestStep = async ({ ride, rideId, stepIndex, steps, defaultRadi
 
   if (stepIndex >= steps.length - 1) {
     const leftMs = dispatchConfig.searchExpiryMs - (Date.now() - new Date(startedAt).getTime());
-    const timer = setTimeout(() => {
-      closeRideAsUnmatched(rideId)
-        .catch((error) => console.error('Failed to mark ride unmatched', error))
-        .finally(() => stopDispatchFlow(rideId));
-    }, Math.max(leftMs, step.minutes * 60 * 1000));
-    saveDispatchState(rideId, { timer });
+    scheduleUnmatchedClose(rideId, Math.max(leftMs, step.minutes * 60 * 1000));
     return;
   }
 
@@ -1646,11 +1678,13 @@ export const emitCustomerFeedEvent = (ride, event, extra = {}) => {
 export const startDispatchFlow = async (ride) => {
   stopDispatchFlow(ride._id);
 
-  emitCustomerFeedEvent(ride, 'feed:customer:new');
-
   const scheduledAt = ride?.scheduledAt ? new Date(ride.scheduledAt) : null;
+  // With steps on, a ride booked for later stays off the feed until its search starts.
+  if (!scheduledAt || String(ride.bookingMode || 'normal') !== 'normal' || !(await areRequestStepsOn())) {
+    emitCustomerFeedEvent(ride, 'feed:customer:new');
+  }
   // Offered to drivers ahead of the pickup time (admin lead time, 60 min by default).
-  const leadMs = scheduledAt ? await getScheduledDispatchLeadMs() : 0;
+  const leadMs = scheduledAt ? await getDispatchLeadMs(ride) : 0;
   const delayMs = scheduledAt ? scheduledAt.getTime() - leadMs - Date.now() : 0;
   const bookingMode = String(ride?.bookingMode || 'normal').trim().toLowerCase();
   const shouldDispatchImmediately = bookingMode === 'bidding';
@@ -1687,10 +1721,55 @@ export const restoreScheduledDispatches = async () => {
     liveStatus: RIDE_LIVE_STATUS.SEARCHING,
     scheduledAt: { $ne: null },
     'carpool.role': { $ne: 'member' },
-  }).select('_id scheduledAt');
+  }).select('_id scheduledAt serviceType requestSteps bookingMode');
+
+  const stepsOn = await areRequestStepsOn();
+  for (const ride of rides) {
+    if (stepsOn && ride.requestSteps?.length) continue; // resumed below, where it was
+    await startDispatchFlow(ride);
+  }
+  if (stepsOn) await resumeRequestSteps();
+};
+
+/** After a restart: searches sent by request steps go on from the step they were in, nobody is rung twice. */
+const resumeRequestSteps = async () => {
+  const rides = await Ride.find({
+    status: RIDE_STATUS.SEARCHING,
+    liveStatus: RIDE_LIVE_STATUS.SEARCHING,
+    'requestSteps.0': { $exists: true },
+    'carpool.role': { $ne: 'member' },
+  })
+    .select('requestSteps tierPhaseIndex requestStepStartedAt dispatchStartedAt requestAskedDriverIds requestRejectedDriverIds')
+    .lean();
+  const { searchExpiryMs } = await resolveTransportDispatchConfig();
 
   for (const ride of rides) {
-    await startDispatchFlow(ride);
+    try {
+      const rideId = String(ride._id);
+      const index = Math.min(Math.max(0, Number(ride.tierPhaseIndex) || 0), ride.requestSteps.length - 1);
+      const asked = (ride.requestAskedDriverIds || []).map(String);
+      saveDispatchState(rideId, {
+        radiusIndex: index,
+        driverIds: asked,
+        notifiedDriverIds: asked,
+        rejectedDriverIds: (ride.requestRejectedDriverIds || []).map(String),
+      });
+
+      const stepLeftMs = stepTimeLeftMs(ride.requestSteps[index], ride.requestStepStartedAt);
+      if (index < ride.requestSteps.length - 1) {
+        scheduleNextAttempt(rideId, index + 1, stepLeftMs);
+        if (asked.length) {
+          saveDispatchState(rideId, { nextStepOnReject: index + 1 });
+          moveOnIfAllRejected(rideId);
+        }
+        continue;
+      }
+
+      const searchLeftMs = new Date(ride.dispatchStartedAt || 0).getTime() + searchExpiryMs - Date.now();
+      scheduleUnmatchedClose(rideId, Math.max(searchLeftMs, stepLeftMs, 60 * 1000));
+    } catch (error) {
+      console.error(`[requestSteps] ride ${ride._id} not resumed:`, error);
+    }
   }
 };
 
@@ -1742,6 +1821,7 @@ export const notifyLateAvailableDriver = async (driverId) => {
 
       const notifiedDriverIds = [...latest.notifiedDriverIds, driverKey];
       saveDispatchState(rideId, { driverIds: notifiedDriverIds, notifiedDriverIds });
+      await Ride.updateOne({ _id: rideId }, { $addToSet: { requestAskedDriverIds: driver._id } });
       await emitRideRequestToDrivers({
         ride,
         targetDrivers: drivers,

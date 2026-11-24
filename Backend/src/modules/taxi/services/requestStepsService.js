@@ -1,7 +1,7 @@
 import { SubscriptionTier } from '../admin/models/SubscriptionTier.js';
 import { DriverSubscription } from '../driver/models/DriverSubscription.js';
 import { getDriverNetworkSettings, isPlanRulesEnabled } from './appSettingsService.js';
-import { REQUEST_STEP_MODES, plansOpenAtStep, stepsForKind } from './requestSteps.js';
+import { REQUEST_STEP_MODES, kindOfRide, plansOpenAtStep, stepsForKind } from './requestSteps.js';
 
 /** The switch, the steps for this kind of ride and the All Locations radius. */
 export const getRequestSteps = async (kind = 'default') => {
@@ -51,6 +51,23 @@ export const getPlanIdsForDrivers = async (driverIds = []) => {
     if (usable.has(planId)) result.set(String(subscription.driver_id), planId);
   }
   return result;
+};
+
+/** How long before pickup a ride booked for later starts searching. */
+export const getDispatchLeadMs = async (ride) => {
+  // Imported when needed: rideService reaches this file through tierPhaseService.
+  const { getScheduledDispatchLeadMs } = await import('./rideService.js');
+  const commonMs = await getScheduledDispatchLeadMs();
+  if (kindOfRide(ride) !== 'outstation') return commonMs;
+  const settings = await getDriverNetworkSettings();
+  const minutes = Number(settings.outstation_dispatch_lead_minutes);
+  return settings.request_steps_mode === 'on' && minutes > 0 ? minutes * 60 * 1000 : commonMs;
+};
+
+/** True while a ride booked for later has not reached its search time. */
+export const isBeforeSearchTime = async (ride, now = Date.now()) => {
+  if (!ride?.scheduledAt || ride.tierPhaseIndex != null || String(ride.bookingMode || 'normal') !== 'normal') return false;
+  return now < new Date(ride.scheduledAt).getTime() - (await getDispatchLeadMs(ride));
 };
 
 /** Whether a ride sent by request steps is open to this plan now. */

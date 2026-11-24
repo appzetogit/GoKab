@@ -89,6 +89,10 @@ const rideSchema = new mongoose.Schema(
     // the search starts so an admin edit never changes a running search. Null =
     // plan phases.
     requestSteps: { type: mongoose.Schema.Types.Mixed, default: null },
+    requestStepStartedAt: { type: Date, default: null },
+    // Kept on the ride so the feed and a server restart know them.
+    requestAskedDriverIds: { type: [mongoose.Schema.Types.ObjectId], default: undefined },
+    requestRejectedDriverIds: { type: [mongoose.Schema.Types.ObjectId], default: undefined },
     // Why and by whom the ride was cancelled (rider's pick from the cancel sheet).
     cancellation: {
       by: { type: String, default: '', trim: true },
@@ -845,6 +849,10 @@ const rideSchema = new mongoose.Schema(
       // Tiered alerts: the last phase whose plans were alerted, and who got the alert.
       alerted_phase: { type: Number, default: -1 },
       alerted_driver_ids: { type: [mongoose.Schema.Types.ObjectId], default: [] },
+      // Request steps for a published ride: the steps, the one it is in, since when.
+      request_steps: { type: mongoose.Schema.Types.Mixed, default: null },
+      step_index: { type: Number, default: -1 },
+      step_started_at: { type: Date, default: null },
       // Secure (default): both sides' shares are frozen in escrow at accept and
       // settled through the wallets. Unsecure: no wallet check, no hold, cash
       // only — the two drivers settle the split between themselves offline.

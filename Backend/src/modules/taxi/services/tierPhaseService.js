@@ -1,6 +1,6 @@
 import { ApiError } from '../../../utils/ApiError.js';
 import { Driver } from '../driver/models/Driver.js';
-import { areRequestStepsOn, getPlanIdsForDrivers, isRideOpenToPlan } from './requestStepsService.js';
+import { areRequestStepsOn, getPlanIdsForDrivers, isBeforeSearchTime, isRideOpenToPlan } from './requestStepsService.js';
 import { getTransportRideSettings } from './transportSettingsService.js';
 
 const CATEGORIES = ['lower', 'middle', 'prime'];
@@ -80,8 +80,12 @@ export const assertDriverMayTakeCustomerRide = async (ride, driver) => {
     );
   }
 
+  const stepsOn = await areRequestStepsOn();
+  if (stepsOn && (await isBeforeSearchTime(ride))) {
+    throw new ApiError(409, 'This ride is not open to drivers yet', null, 'RIDE_NOT_OPEN_FOR_PLAN_YET');
+  }
   const isOpen =
-    ride.requestSteps?.length && (await areRequestStepsOn())
+    stepsOn && ride.requestSteps?.length
       ? isRideOpenToPlan(ride, (await getPlanIdsForDrivers([driver._id])).get(String(driver._id)))
       : isRideOpenToCategory(ride, categoryOf(driver), await getTierPhases());
   if (!isOpen) {

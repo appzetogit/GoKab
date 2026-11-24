@@ -13,7 +13,7 @@ const KINDS = [
 const MODES = [
   ['off', 'Off', 'Rides are sent as before: Elite, then Pro, then Basic.'],
   ['shadow', 'Test', 'Rides are sent as before. The server log shows whom these steps would have asked.'],
-  ['on', 'On', 'New customer rides are sent by these steps.'],
+  ['on', 'On', 'New customer rides and published rides are sent by these steps.'],
 ];
 
 const RequestSteps = () => {
@@ -24,6 +24,7 @@ const RequestSteps = () => {
   const [savedMode, setSavedMode] = useState('off');
   const [steps, setSteps] = useState({});
   const [radius, setRadius] = useState('');
+  const [outstationLead, setOutstationLead] = useState(0);
   const [plans, setPlans] = useState([]);
   const [kind, setKind] = useState('default');
 
@@ -39,6 +40,7 @@ const RequestSteps = () => {
         setSavedMode(settings.request_steps_mode || 'off');
         setSteps(settings.request_steps || {});
         setRadius(settings.all_locations_radius_km ?? '');
+        setOutstationLead(settings.outstation_dispatch_lead_minutes ?? 0);
         const list = plansRes?.data?.results || plansRes?.results || [];
         setPlans(Array.isArray(list) ? list : []);
       } catch (err) {
@@ -70,7 +72,7 @@ const RequestSteps = () => {
   const missing = current.length ? shownPlans.filter((plan) => !chosen.has(plan._id)) : [];
 
   const save = async () => {
-    if (mode === 'on' && savedMode !== 'on' && !window.confirm('Send all new customer rides by these steps from now on?')) return;
+    if (mode === 'on' && savedMode !== 'on' && !window.confirm('Send all new customer and published rides by these steps from now on?')) return;
     try {
       setSaving(true);
       const body = Object.fromEntries(
@@ -79,7 +81,11 @@ const RequestSteps = () => {
           (steps[key] || []).map((step) => ({ ...step, minutes: Number(step.minutes), radius_km: Number(step.radius_km) || null })),
         ]),
       );
-      await api.patch('/admin/driver-network/settings', { request_steps_mode: mode, request_steps: body });
+      await api.patch('/admin/driver-network/settings', {
+        request_steps_mode: mode,
+        request_steps: body,
+        outstation_dispatch_lead_minutes: Math.max(0, Number(outstationLead) || 0),
+      });
       setSavedMode(mode);
       toast.success('Request steps saved');
     } catch (err) {
@@ -108,7 +114,7 @@ const RequestSteps = () => {
           <div>
             <h1 className="text-xl font-black text-slate-900">Request Steps</h1>
             <p className="text-xs text-slate-500">
-              Which plans get a customer ride first, and for how long. A plan keeps the ride open to it until somebody takes it or the search ends.
+              Which plans get a customer or published ride first, and for how long. A plan keeps the ride open to it until somebody takes it or the search ends.
             </p>
           </div>
         </div>
@@ -187,6 +193,16 @@ const RequestSteps = () => {
             <li>The last step must include the default plan.</li>
             <li>Route mode drivers are asked for rides on their route, at any distance.</li>
           </ul>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 md:p-6">
+          <label className="text-xs font-bold text-slate-700">
+            Outstation rides booked for later: start searching (minutes before pickup)
+            <input type="number" min="0" value={outstationLead} onChange={(e) => setOutstationLead(e.target.value)} className="mt-1 w-full md:w-64 block border border-slate-200 rounded-lg py-2 px-3" />
+          </label>
+          <p className="text-[11px] text-slate-500 mt-1">
+            0 = same as other scheduled rides (Transport Ride Settings). Used while steps are On. Rides already waiting keep their old time until the server restarts.
+          </p>
         </div>
 
         <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-6 py-3 text-sm font-bold text-white hover:bg-indigo-700 disabled:opacity-60">

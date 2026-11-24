@@ -72,6 +72,32 @@ export const plansOpenAtStep = (steps = [], index = 0) => [
   ...new Set(steps.slice(0, Math.max(0, Number(index) || 0) + 1).flatMap((step) => step.plan_ids.map(String))),
 ];
 
+/** Outstation and other rides keep separate steps and lead times. */
+export const kindOfRide = (ride) =>
+  String(ride?.serviceType || 'ride').toLowerCase() === 'intercity' ? 'outstation' : 'city';
+
+/** Milliseconds left in a step that began at `startedAt`; 0 when it is over or the time is unknown. */
+export const stepTimeLeftMs = (step, startedAt, now = Date.now()) => {
+  const began = new Date(startedAt || 0).getTime();
+  if (!step || !(began > 0)) return 0;
+  return Math.max(0, began + Number(step.minutes) * 60 * 1000 - now);
+};
+
+const has = (ids, id) => (ids || []).some((item) => String(item) === String(id));
+
+/**
+ * Feed visibility of a customer ride while steps are on.
+ * Asked drivers always see it; those who said no never do; a ride booked for
+ * later stays hidden until its search starts; anyone else needs their plan's
+ * turn and to be in the area (`inArea`).
+ */
+export const isRideInStepFeed = ({ ride, driverId, planId, inArea, searchStarted }) => {
+  if (has(ride.requestRejectedDriverIds, driverId)) return false;
+  if (has(ride.requestAskedDriverIds, driverId)) return true;
+  if (!searchStarted || !inArea) return false;
+  return plansOpenAtStep(ride.requestSteps || [], ride.tierPhaseIndex ?? 0).includes(String(planId));
+};
+
 /** True when everybody asked so far has said no. */
 export const allAskedHaveRejected = (notified = [], rejected = []) =>
   notified.length > 0 && notified.every((id) => rejected.includes(id));

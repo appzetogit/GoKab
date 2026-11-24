@@ -41,6 +41,9 @@ export const DEFAULT_DRIVER_NETWORK_SETTINGS = Object.freeze({
   // those phases, plus a log line of whom the steps would ask; 'on' = the steps.
   request_steps_mode: 'off',
   request_steps: {},
+  // With steps on: outstation rides booked for later start searching this long
+  // before pickup. 0 = the same lead time as other scheduled rides.
+  outstation_dispatch_lead_minutes: 0,
 });
 
 let planRules = { enabled: false, readAt: 0 };

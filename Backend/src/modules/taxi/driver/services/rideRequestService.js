@@ -137,11 +137,15 @@ export const requestPublishedRide = async ({ driverId, rideId, note = '' }) => {
   }
 
   // Elite sees a published ride first, then Pro, then everyone (see publishedAlertService).
-  const [{ getTierPhases, categoryOf }, { isPublishedOpenToCategory }] = await Promise.all([
-    import('../../services/tierPhaseService.js'),
-    import('../../services/publishedAlertService.js'),
-  ]);
-  if (!isPublishedOpenToCategory(ride, categoryOf(driver), await getTierPhases())) {
+  const [{ getTierPhases, categoryOf }, { isPublishedOpenToCategory }, { areRequestStepsOn, getPlanIdsForDrivers }] =
+    await Promise.all([
+      import('../../services/tierPhaseService.js'),
+      import('../../services/publishedAlertService.js'),
+      import('../../services/requestStepsService.js'),
+    ]);
+  const stepsOn = Boolean(ride.publish?.request_steps?.length) && (await areRequestStepsOn());
+  const planId = stepsOn ? (await getPlanIdsForDrivers([driver._id])).get(String(driver._id)) : null;
+  if (!isPublishedOpenToCategory(ride, categoryOf(driver), await getTierPhases(), { stepsOn, planId })) {
     throw new ApiError(409, 'This ride is not open to your plan yet', null, 'RIDE_NOT_OPEN_FOR_PLAN_YET');
   }
 
