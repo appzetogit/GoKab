@@ -40,13 +40,197 @@ const PERIODS = [
 ];
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
-const Card = ({ label, value, note, tone = 'text-slate-500' }) => (
+/** The shape of a period in a card; the number beside it is the value. */
+const Spark = ({ values, color }) => {
+  const max = Math.max(...values, 0);
+  if (values.length < 2 || max <= 0) return null;
+  const line = values
+    .map((value, i) => `${i ? 'L' : 'M'}${((i / (values.length - 1)) * 116 + 2).toFixed(1)},${(30 - (Math.max(0, value) / max) * 26).toFixed(1)}`)
+    .join('');
+  return (
+    <svg viewBox="0 0 120 32" preserveAspectRatio="none" className="w-full h-8 mt-2" aria-hidden="true">
+      <path d={line} fill="none" stroke={color} strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+    </svg>
+  );
+};
+
+const Card = ({ label, value, note, tone = 'text-slate-500', spark, color }) => (
   <div className="bg-white rounded-2xl border border-slate-200 p-4">
-    <span className="text-xs text-slate-500 block">{label}</span>
+    <span className="text-xs text-slate-500 flex items-center gap-2">
+      {color && <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: color }} />}
+      {label}
+    </span>
     <span className="text-2xl font-black text-slate-900 tabular-nums">{value}</span>
     {note && <span className={`block text-[11px] font-bold ${tone}`}>{note}</span>}
+    {spark && <Spark values={spark} color={color || '#4f46e5'} />}
   </div>
 );
+
+// A fixed order checked for colour-blind readers, round the ring too. Three of the
+// five are pale on white, so every slice also has its name and number beside it.
+const SLICES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4'];
+const REST_COLOR = '#94a3b8';
+const percent = (value, all) => (all > 0 ? Math.round((Math.max(0, value) / all) * 100) : 0);
+
+/**
+ * Rows as slices, largest first; past five the rest are one. With five or fewer
+ * things in all, each keeps its colour whatever is filtered.
+ */
+const toSlices = (rows, order) => {
+  const ranked = rows.filter((row) => row.total > 0).sort((a, b) => b.total - a.total);
+  const fixed = order.length <= SLICES.length;
+  const shown = ranked.length > SLICES.length ? ranked.slice(0, SLICES.length) : ranked;
+  const slices = shown.map((row, i) => {
+    const place = order.indexOf(row.id);
+    return { ...row, color: fixed && place >= 0 ? SLICES[place] : SLICES[i], row };
+  });
+  const rest = ranked.slice(shown.length);
+  if (rest.length) {
+    slices.push({ id: 'rest', name: `Other ${rest.length}`, total: rest.reduce((sum, row) => sum + row.total, 0), color: REST_COLOR, row: null });
+  }
+  return slices;
+};
+
+const RING = { size: 200, radius: 78, stroke: 34 };
+
+/** Shares of a whole, with the whole in the middle. The list beside it carries every value. */
+const Donut = ({ slices, label, onPick }) => {
+  const [over, setOver] = useState('');
+  const all = slices.reduce((sum, slice) => sum + slice.total, 0);
+  const { size, radius, stroke } = RING;
+  const round = 2 * Math.PI * radius;
+  const gap = slices.length > 1 ? 2 : 0;
+  const hovered = slices.find((slice) => slice.id === over);
+  let turned = 0;
+
+  return (
+    <svg viewBox={`0 0 ${size} ${size}`} className="w-full max-w-[220px] mx-auto" role="img" aria-label={`${label}: ${slices.map((slice) => `${slice.name} ${percent(slice.total, all)}%`).join(', ')}`}>
+      <g transform={`rotate(-90 ${size / 2} ${size / 2})`}>
+        {slices.map((slice) => {
+          const length = (slice.total / all) * round;
+          const start = turned;
+          turned += length;
+          return (
+            <circle
+              key={slice.id || slice.name}
+              cx={size / 2}
+              cy={size / 2}
+              r={radius}
+              fill="none"
+              stroke={slice.color}
+              strokeWidth={over === slice.id ? stroke + 6 : stroke}
+              strokeDasharray={`${Math.max(0.5, length - gap)} ${round}`}
+              strokeDashoffset={-start}
+              className={`motion-safe:transition-all ${slice.row && onPick ? 'cursor-pointer' : ''}`}
+              onPointerEnter={() => setOver(slice.id)}
+              onPointerLeave={() => setOver('')}
+              onClick={() => slice.row && onPick?.(slice.row)}
+            />
+          );
+        })}
+      </g>
+      <text x={size / 2} y={size / 2 - 6} textAnchor="middle" fontSize="12" fill="#475569">{(hovered?.name || 'Total').slice(0, 16)}</text>
+      <text x={size / 2} y={size / 2 + 14} textAnchor="middle" fontSize="18" fontWeight="800" fill="#0f172a">{money(hovered ? hovered.total : all)}</text>
+      {hovered && <text x={size / 2} y={size / 2 + 31} textAnchor="middle" fontSize="12" fill="#475569">{percent(hovered.total, all)}%</text>}
+    </svg>
+  );
+};
+
+const Change = ({ value }) =>
+  value == null ? null : (
+    <span className={`text-[11px] font-bold ${value >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{value >= 0 ? '▲' : '▼'} {Math.abs(value)}%</span>
+  );
+
+/** Ring and ranking side by side; each ranked row opens what is inside it. */
+const Shares = ({ rows, order, label, onPick }) => {
+  const slices = toSlices(rows, order);
+  const colorOf = new Map(slices.map((slice) => [slice.id, slice.color]));
+  const all = slices.reduce((sum, slice) => sum + slice.total, 0);
+  const ranked = [...rows].sort((a, b) => b.total - a.total);
+  const top = Math.max(ranked[0]?.total || 0, 0);
+  return (
+    <div className="grid md:grid-cols-[240px_1fr] gap-6 items-start">
+      <div>
+        <h2 className="text-sm font-black text-slate-900 mb-3 text-center">{label}</h2>
+        {all > 0 ? <Donut slices={slices} label={label} onPick={onPick} /> : <p className="text-xs text-slate-500 text-center">Nothing earned yet.</p>}
+      </div>
+      <ol className="space-y-2">
+        {ranked.map((row, i) => (
+          <li key={row.id || row.name}>
+            <button
+              type="button"
+              disabled={!row.id}
+              onClick={() => onPick(row)}
+              className="w-full text-left rounded-xl p-2 enabled:hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-600"
+            >
+              <span className="flex items-baseline justify-between gap-3 mb-1.5">
+                <span className="text-sm font-bold text-slate-800 inline-flex items-center gap-2">
+                  <span className="w-5 text-slate-400 tabular-nums">{i + 1}</span>
+                  <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: colorOf.get(row.id) || REST_COLOR }} />
+                  {row.name}
+                  <span className="font-medium text-xs text-slate-500">{row.drivers} drivers</span>
+                </span>
+                <span className="text-sm font-black text-slate-900 tabular-nums whitespace-nowrap">
+                  {money(row.total)} <span className="font-bold text-xs text-slate-500">{percent(row.total, all)}%</span> <Change value={row.change_percent} />
+                </span>
+              </span>
+              <span className="block h-4 bg-slate-100 rounded overflow-hidden">
+                <span
+                  className="block h-full rounded-r motion-safe:transition-all motion-safe:duration-500"
+                  style={{ width: `${top > 0 ? (Math.max(0, row.total) / top) * 100 : 0}%`, backgroundColor: colorOf.get(row.id) || REST_COLOR }}
+                />
+              </span>
+              <span className="block mt-1 text-[11px] text-slate-500 tabular-nums">
+                {PARTS.filter((part) => row[part.key]).map((part) => `${part.label} ${money(row[part.key])}`).join(' · ') || 'No earnings in this period'}
+                {row.refunds ? ` · Refunds −${money(row.refunds)}` : ''}
+                {row.free_count > 0 ? ` · ${row.free_count} given free` : ''}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+};
+
+/** Where the money came from: the three parts, before refunds. */
+const Sources = ({ summary }) => {
+  const slices = PARTS.filter((part) => summary[part.key] > 0).map((part) => ({ id: part.key, name: part.label, total: summary[part.key], color: part.color, row: null }));
+  const all = slices.reduce((sum, slice) => sum + slice.total, 0);
+  if (!slices.length) return null;
+  return (
+    <section>
+      <h2 className="text-sm font-black text-slate-900 mb-3">Where it came from</h2>
+      <div className="grid sm:grid-cols-[200px_1fr] gap-4 items-center">
+        <Donut slices={slices} label="Where it came from" />
+        <ul className="space-y-2">
+          {slices.map((slice) => (
+            <li key={slice.id} className="flex items-center gap-2 text-sm text-slate-700 tabular-nums">
+              <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: slice.color }} />
+              {slice.name} <b className="text-slate-900">{money(slice.total)}</b> {percent(slice.total, all)}%
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
+};
+
+/** Short facts worth reading first, each one taken straight from the numbers below. */
+const factsOf = (data) => {
+  const facts = [];
+  const total = data.summary.total;
+  const bestOf = (rows) => [...rows].filter((row) => row.id && row.id !== 'none' && row.total > 0).sort((a, b) => b.total - a.total)[0];
+  const plan = bestOf(data.plans);
+  if (plan && total > 0) facts.push(`${plan.name} plan brought ${Math.min(100, percent(plan.total, total))}% of earnings`);
+  const states = bestOf(data.states);
+  if (states && data.states.length > 1 && total > 0) facts.push(`${states.name} leads with ${money(states.total)}`);
+  const best = bestOf(data.trend.points);
+  if (best && data.trend.points.length > 1) facts.push(`Best ${data.trend.unit}: ${pointLabel(best.id)}, ${money(best.total)}`);
+  const owed = data.settlement.wallets.from_drivers;
+  if (owed > 0) facts.push(`Drivers owe ${money(owed)} now`);
+  return facts;
+};
 
 /** One stacked bar per row. Every value is written out too, so no colour has to be read alone. */
 const Bars = ({ rows, onPick }) => {
@@ -97,7 +281,7 @@ const Bars = ({ rows, onPick }) => {
   );
 };
 
-const CHART = { width: 720, height: 240, left: 56, right: 12, top: 12, bottom: 28 };
+const CHART = { width: 720, height: 240, left: 56, right: 34, top: 12, bottom: 28 };
 
 /** A round number at or above the largest value, so the axis reads 0, half, full. */
 const niceTop = (value) => {
@@ -552,12 +736,19 @@ const Earnings = () => {
               </p>
             )}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-              <Card label="Net earned" value={money(summary.total)} note={changeNote} tone={summary.change_percent == null ? 'text-slate-400' : summary.change_percent >= 0 ? 'text-emerald-700' : 'text-rose-700'} />
-              <Card label="Plan sales" value={money(summary.sales)} note={`${summary.sales_count} sold, ${summary.free_count} given free`} />
-              <Card label="Ride commission" value={money(summary.commission)} note={`${summary.rides} rides`} />
-              <Card label="Fees" value={money(summary.fees)} note="Leads, ride accept, paid offers" />
+              <Card label="Net earned" spark={points.map((point) => point.total)} value={money(summary.total)} note={changeNote} tone={summary.change_percent == null ? 'text-slate-400' : summary.change_percent >= 0 ? 'text-emerald-700' : 'text-rose-700'} />
+              <Card label="Plan sales" color={PARTS[0].color} spark={points.map((point) => point.sales)} value={money(summary.sales)} note={`${summary.sales_count} sold, ${summary.free_count} given free`} />
+              <Card label="Ride commission" color={PARTS[1].color} spark={points.map((point) => point.commission)} value={money(summary.commission)} note={`${summary.rides} rides`} />
+              <Card label="Fees" color={PARTS[2].color} spark={points.map((point) => point.fees)} value={money(summary.fees)} note="Leads, ride accept, paid offers" />
             </div>
 
+            {factsOf(data).length > 0 && (
+              <ul aria-label="Highlights" className="flex flex-wrap gap-2">
+                {factsOf(data).map((fact) => (
+                  <li key={fact} className="px-3 py-1.5 rounded-full bg-white border border-slate-200 text-xs font-bold text-slate-700 tabular-nums">{fact}</li>
+                ))}
+              </ul>
+            )}
             <p className="text-xs text-slate-600 tabular-nums">
               Net earned = Plan sales {money(summary.sales)} + Commission {money(summary.commission)} + Fees {money(summary.fees)} − Refunds {money(summary.refunds)} = <b className="text-slate-900">{money(summary.total)}</b>
             </p>
@@ -591,10 +782,20 @@ const Earnings = () => {
               ) : tab === 'overview' ? (
                 <>
                   <Trend key={`${from}${to}`} points={points} />
-                  <PaymentSplit payment={data.payment} />
+                  <div className="grid lg:grid-cols-2 gap-8 items-start">
+                    <Sources summary={summary} />
+                    <PaymentSplit payment={data.payment} />
+                  </div>
                 </>
+              ) : tab === 'drivers' ? (
+                <Bars rows={rows.slice(0, 10)} onPick={pick} />
               ) : (
-                <Bars rows={tab === 'drivers' ? rows.slice(0, 10) : rows} onPick={pick} />
+                <Shares
+                  rows={rows}
+                  order={tab === 'plans' ? options.plans.map((plan) => plan.id) : [...options.states, 'none']}
+                  label={tab === 'plans' ? 'Share by plan' : 'Share by state'}
+                  onPick={pick}
+                />
               )}
               {tab === 'drivers' && !driverId && view === 'graph' && rows.length > 10 && <p className="text-[11px] text-slate-500">Top 10 here. The table lists every driver.</p>}
               {tab === 'drivers' && !driverId && view === 'table' && (search || meta.totalPages > 1) && (

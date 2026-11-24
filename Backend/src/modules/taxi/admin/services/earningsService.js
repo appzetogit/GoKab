@@ -161,11 +161,16 @@ export const getEarningsSummary = async ({ from, to, state = '', cityId = '', pl
   const payment = { cash: { rides: 0, fare: 0, commission: 0 }, online: { rides: 0, fare: 0, commission: 0 } };
   const summary = emptyRow({});
   let previousTotal = 0;
+  const previousByPlan = new Map();
+  const previousByState = new Map();
+  const addTo = (map, key, amount) => map.set(key, (map.get(key) || 0) + amount);
   for (const entry of entries) {
     const plan = entry.planId || planOf(entry.driverId, entry.at);
     if (!inFilters(entry.driverId, plan)) continue;
     if (new Date(entry.at) < range.start) {
       previousTotal += netOf(entry);
+      addTo(previousByPlan, plan, netOf(entry));
+      addTo(previousByState, stateOf(entry.driverId) || 'none', netOf(entry));
       continue;
     }
     addEntry(summary, entry);
@@ -270,14 +275,15 @@ export const getEarningsSummary = async ({ from, to, state = '', cityId = '', pl
   const safePage = Math.min(totalPages, Math.max(1, Math.floor(Number(page)) || 1));
   const chosen = driverId ? driverById.get(String(driverId)) : null;
 
+  const withChange = (map) => (row) => ({ ...finishRow(row), change_percent: changePercent(row.total, map.get(row.id) || 0) });
   const hasSomething = (row) => row.total || row.drivers || row.rides || row.free_count;
   finishRow(summary);
   return {
     from,
     to,
     summary: { ...summary, previous_total: roundMoney(previousTotal), change_percent: changePercent(summary.total, previousTotal) },
-    plans: [...plans.values()].filter((row) => hasSomething(row) || (row.is_active && !planId)).map(finishRow),
-    states: [...states.values()].filter(hasSomething).map(finishRow).sort((a, b) => b.total - a.total || b.drivers - a.drivers),
+    plans: [...plans.values()].filter((row) => hasSomething(row) || (row.is_active && !planId)).map(withChange(previousByPlan)),
+    states: [...states.values()].filter(hasSomething).map(withChange(previousByState)).sort((a, b) => b.total - a.total || b.drivers - a.drivers),
     trend: { unit, points: [...trend.values()].map(finishRow) },
     drivers: {
       results: rankedDrivers.slice((safePage - 1) * DRIVERS_PER_PAGE, safePage * DRIVERS_PER_PAGE),
