@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { ApiError } from '../../../../utils/ApiError.js';
 import { asyncHandler } from '../../../../utils/asyncHandler.js';
 import { authenticate } from '../../middlewares/authMiddleware.js';
+import { getBillAllowance } from '../services/billAllowanceService.js';
 import { createBill, deleteBill, getBill, importBills, listBills } from '../services/billService.js';
 
 /**
@@ -66,6 +67,15 @@ billRouter.get(
       data: { results: result.results, total: result.total, pagination: meta },
       meta,
     });
+  }),
+);
+
+// Before /bills/:id so "allowance" is never read as an id.
+billRouter.get(
+  '/bills/allowance',
+  driverOnly,
+  asyncHandler(async (req, res) => {
+    res.json({ success: true, data: await getBillAllowance(req.auth.sub) });
   }),
 );
 

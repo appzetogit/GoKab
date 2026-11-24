@@ -65,6 +65,18 @@ driverBillSchema.index({ ride_id: 1 }, { partialFilterExpression: { ride_id: { $
 export const DriverBill =
   mongoose.models.TaxiDriverBill || mongoose.model('TaxiDriverBill', driverBillSchema);
 
+/**
+ * Bills made in a month against a plan's limit. The id is `<plan holder>:<YYYY-MM>`,
+ * so one row per month needs no extra index. A deleted bill still counts.
+ */
+const driverBillUsageSchema = new mongoose.Schema(
+  { _id: { type: String }, used: { type: Number, default: 0 } },
+  { timestamps: true },
+);
+
+export const DriverBillUsage =
+  mongoose.models.TaxiDriverBillUsage || mongoose.model('TaxiDriverBillUsage', driverBillUsageSchema);
+
 /** Per-driver bill number sequence (GK-000001, GK-000002, ...). */
 const driverBillCounterSchema = new mongoose.Schema(
   {

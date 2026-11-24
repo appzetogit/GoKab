@@ -35,6 +35,9 @@ const number = (value) => {
 /** Plans saved before the bill option existed keep bills on, as every driver has today. */
 export const canGenerateBills = (plan) => plan?.can_generate_bills !== false;
 
+/** The calendar month in India, as YYYY-MM: monthly limits restart on the 1st, Indian time. */
+export const indianMonth = (at = Date.now()) => new Date(Number(at) + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 7);
+
 const grants = (plan, key) => {
   if (key === 'can_generate_bills') return canGenerateBills(plan);
   if (key === 'can_use_contacts' && (plan?.can_use_contacts ?? null) === null) {

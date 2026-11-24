@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { ApiError } from '../../../../utils/ApiError.js';
 import { Ride } from '../../user/models/Ride.js';
 import { DriverBill, DriverBillCounter } from '../models/DriverBill.js';
+import { takeBillAllowance } from './billAllowanceService.js';
 
 /**
  * Driver bills (invoices) stored on the server.
@@ -293,6 +294,18 @@ export const createBill = async ({ driverId, body = {} }) => {
   if (values.ride_id) await assertRideBelongsToDriver(values.ride_id, driverId);
   await assertCreateRate(driverId);
 
+  const giveBack = await takeBillAllowance(driverId);
+  try {
+    const result = await saveNewBill({ driverId, values, clientRef });
+    if (!result.created) await giveBack();
+    return result;
+  } catch (error) {
+    await giveBack();
+    throw error;
+  }
+};
+
+const saveNewBill = async ({ driverId, values, clientRef }) => {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const bill = await DriverBill.create({

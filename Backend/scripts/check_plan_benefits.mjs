@@ -1,6 +1,6 @@
 // node scripts/check_plan_benefits.mjs
 import assert from 'node:assert/strict';
-import { canGenerateBills, captureBenefits, mergeBenefits } from '../src/modules/taxi/services/planBenefits.js';
+import { canGenerateBills, captureBenefits, indianMonth, mergeBenefits } from '../src/modules/taxi/services/planBenefits.js';
 
 const gold = {
   name: 'Gold', driver_category: 'middle', can_create_rides: true, can_publish_rides: true, can_manage_fleet: true,
@@ -57,4 +57,7 @@ assert.equal(mergeBenefits({ ...gold, customer_ride_accept_fee: 20 }, { driver_c
 // Old plans without the bill field keep bills on.
 assert.equal(canGenerateBills({}), true);
 assert.equal(canGenerateBills(null), true);
+// The month turns over at midnight in India (18:30 UTC).
+assert.equal(indianMonth(Date.UTC(2026, 10, 30, 18, 29)), '2026-11');
+assert.equal(indianMonth(Date.UTC(2026, 10, 30, 18, 30)), '2026-12');
 console.log('plan benefits: ok');

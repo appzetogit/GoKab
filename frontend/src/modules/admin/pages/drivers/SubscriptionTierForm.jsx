@@ -402,7 +402,7 @@ export default function SubscriptionTierForm({ tier, onClose, onSuccess }) {
               {renderNumber(
                 'max_bills_per_month',
                 'Max Bills Per Month',
-                '0 = no limit. Saved now; the driver app starts following it in a later update.',
+                '0 = no limit. Counted per calendar month; team drivers share their lead\'s limit. Enforced while plan rules are on.',
                 !formData.can_generate_bills,
               )}
             </div>
