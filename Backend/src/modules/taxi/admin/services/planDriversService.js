@@ -59,9 +59,9 @@ const limitsOf = (tier) => {
 };
 
 /** One tab per plan on sale (or still holding drivers), dearest first, with how many drivers each has. */
-const buildPlanTabs = async ({ tiers, byDriver, notTeam }) => {
+const buildPlanTabs = async ({ tiers, byDriver, notTeam, inState }) => {
   // ponytail: reads every driver id to count; aggregate in Mongo if drivers reach tens of thousands.
-  const drivers = await Driver.find({ $and: [{ deletedAt: null }, notTeam] }).select('_id').lean();
+  const drivers = await Driver.find({ $and: [{ deletedAt: null }, notTeam, inState] }).select('_id').lean();
   const defaultPlan = tiers.find((tier) => tier.is_default && tier.is_active);
   const counts = new Map();
   for (const driver of drivers) {
@@ -83,8 +83,15 @@ const buildPlanTabs = async ({ tiers, byDriver, notTeam }) => {
   };
 };
 
+/** Drivers whose city is in the state; "none" = the city has no state, or there is no city. */
+const stateFilter = (state, cities) => {
+  if (!state) return {};
+  if (state === 'none') return { service_location_id: { $nin: cities.filter((city) => city.state).map((city) => city._id) } };
+  return { service_location_id: { $in: cities.filter((city) => city.state === state).map((city) => city._id) } };
+};
+
 /** `tierId` "all" = drivers of every plan. */
-export const listPlanDrivers = async ({ tierId, page = 1, limit = 20, search = '', cityId = '', online = '', expiring = '', includeTeam = '' }) => {
+export const listPlanDrivers = async ({ tierId, page = 1, limit = 20, search = '', state = '', cityId = '', online = '', expiring = '', includeTeam = '' }) => {
   const everyPlan = String(tierId) === 'all';
   if (!everyPlan) assertId(tierId, 'tierId');
   const safePage = Math.max(1, Number(page) || 1);
@@ -107,7 +114,9 @@ export const listPlanDrivers = async ({ tierId, page = 1, limit = 20, search = '
   // A team member (their organisation has a lead who drives) is listed under the lead.
   const leadOrgs = (await Driver.distinct('owner_id', { is_self_drive_owner: true, deletedAt: null })).filter(Boolean);
   const notTeam = { $nor: [{ owner_id: { $in: leadOrgs }, is_self_drive_owner: { $ne: true } }] };
-  const base = [{ deletedAt: null }, membership, ...(String(includeTeam) === 'true' ? [] : [notTeam])];
+  const cities = await ServiceLocation.find({}).select('name service_location_name state').sort({ name: 1 }).lean();
+  const inState = stateFilter(String(state || '').trim(), cities);
+  const base = [{ deletedAt: null }, membership, inState, ...(String(includeTeam) === 'true' ? [] : [notTeam])];
 
   const filters = [...base];
   const term = String(search || '').trim().slice(0, 60);
@@ -122,7 +131,7 @@ export const listPlanDrivers = async ({ tierId, page = 1, limit = 20, search = '
   if (String(online) === 'true') filters.push({ isOnline: true });
   if (String(expiring) === 'true') filters.push({ _id: { $in: onThisPlan.filter(isExpiring).map((item) => item.driver_id) } });
 
-  const [drivers, total, planTotal, planOnline, expiringCount, cities, tabs] = await Promise.all([
+  const [drivers, total, planTotal, planOnline, expiringCount, tabs] = await Promise.all([
     Driver.find({ $and: filters })
       .select('name phone city service_location_id owner_id is_self_drive_owner isOnline isOnRide approve status vehicleNumber')
       .sort({ createdAt: -1, _id: -1 })
@@ -133,8 +142,7 @@ export const listPlanDrivers = async ({ tierId, page = 1, limit = 20, search = '
     Driver.countDocuments({ $and: base }),
     Driver.countDocuments({ $and: [...base, { isOnline: true }] }),
     Driver.countDocuments({ $and: [...base, { _id: { $in: onThisPlan.filter(isExpiring).map((item) => item.driver_id) } }] }),
-    ServiceLocation.find({}).select('name service_location_name').sort({ name: 1 }).lean(),
-    buildPlanTabs({ tiers, byDriver, notTeam }),
+    buildPlanTabs({ tiers, byDriver, notTeam, inState }),
   ]);
 
   const orgIds = drivers.map((driver) => driver.owner_id).filter(Boolean);
@@ -151,7 +159,8 @@ export const listPlanDrivers = async ({ tierId, page = 1, limit = 20, search = '
     plates.set(key, [...(plates.get(key) || []), plate(item.license_plate_number)]);
   }
   const leadByOrg = new Map(leads.map((item) => [String(item.owner_id), item]));
-  const cityName = new Map(cities.map((city) => [String(city._id), city.name || city.service_location_name || '']));
+  const cityById = new Map(cities.map((city) => [String(city._id), city]));
+  const nameOfCity = (city) => city?.name || city?.service_location_name || '';
 
   const results = await Promise.all(
     drivers.map(async (driver) => {
@@ -165,7 +174,8 @@ export const listPlanDrivers = async ({ tierId, page = 1, limit = 20, search = '
         id: String(driver._id),
         name: driver.name || '',
         phone: driver.phone || '',
-        city: cityName.get(String(driver.service_location_id)) || driver.city || '',
+        city: nameOfCity(cityById.get(String(driver.service_location_id))) || driver.city || '',
+        state: cityById.get(String(driver.service_location_id))?.state || '',
         approved: driver.approve === true,
         online: Boolean(driver.isOnline),
         on_ride: Boolean(driver.isOnRide),
@@ -184,7 +194,8 @@ export const listPlanDrivers = async ({ tierId, page = 1, limit = 20, search = '
     tabs,
     summary: { drivers: planTotal, online: planOnline, expiring: expiringCount, expiring_days: EXPIRING_DAYS },
     results,
-    cities: cities.map((city) => ({ id: String(city._id), name: city.name || city.service_location_name || '' })),
+    cities: cities.map((city) => ({ id: String(city._id), name: nameOfCity(city), state: city.state || '' })),
+    states: [...new Set(cities.map((city) => city.state).filter(Boolean))].sort(),
     pagination: { page: safePage, limit: safeLimit, total, totalPages: Math.max(1, Math.ceil(total / safeLimit)) },
   };
 };

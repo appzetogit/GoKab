@@ -194,6 +194,7 @@ const PlanDrivers = () => {
   const openTeams = (params.get('teams') || '').split(',').filter(Boolean);
   const filters = {
     search: params.get('search') || '',
+    state: params.get('state') || '',
     cityId: params.get('cityId') || '',
     ...Object.fromEntries(SWITCHES.map((key) => [key, params.get(key) === 'true'])),
   };
@@ -303,9 +304,14 @@ const PlanDrivers = () => {
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input aria-label="Search drivers" value={filters.search} onChange={(event) => change({ search: event.target.value })} placeholder="Name, phone or vehicle number" className="w-full border border-slate-200 rounded-lg py-2 pl-9 pr-3 text-sm" />
           </label>
+          <select aria-label="State" value={filters.state} onChange={(event) => change({ state: event.target.value, cityId: '' })} className="border border-slate-200 rounded-lg py-2 px-3 text-sm">
+            <option value="">All states</option>
+            {(data?.states || []).map((state) => <option key={state} value={state}>{state}</option>)}
+            <option value="none">State not set</option>
+          </select>
           <select aria-label="City" value={filters.cityId} onChange={(event) => change({ cityId: event.target.value })} className="border border-slate-200 rounded-lg py-2 px-3 text-sm">
             <option value="">All cities</option>
-            {(data?.cities || []).map((city) => <option key={city.id} value={city.id}>{city.name}</option>)}
+            {(data?.cities || []).filter((city) => !filters.state || city.state === (filters.state === 'none' ? '' : filters.state)).map((city) => <option key={city.id} value={city.id}>{city.name}</option>)}
           </select>
           {[
             ['online', 'Online only'],
@@ -366,7 +372,7 @@ const PlanDrivers = () => {
                             ) : '-'}
                           </td>
                         )}
-                        <td className="p-4 text-slate-600">{row.city || '-'}</td>
+                        <td className="p-4 text-slate-600">{row.city || '-'}{row.state && <span className="block text-[11px] text-slate-400">{row.state}</span>}</td>
                         <td className="p-4 text-slate-600">{day(row.valid_until) || 'No subscription'}</td>
                         <td className="p-4">{row.limits.can_manage_fleet || row.team_count ? <Count used={row.team_count} max={row.limits.can_manage_fleet ? row.limits.max_team : 0} /> : '-'}</td>
                         <td className="p-4"><Count used={row.vehicle_count} max={row.limits.max_vehicles} /></td>

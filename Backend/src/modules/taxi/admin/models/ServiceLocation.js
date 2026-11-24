@@ -32,6 +32,12 @@ const serviceLocationSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: 'India',
     },
+    // Groups cities for admin filters; drivers take it from their city.
+    state: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     translation_dataset: {
       type: String,
       default: '',

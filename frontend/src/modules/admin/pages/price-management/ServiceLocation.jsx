@@ -23,6 +23,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useNavigate, useParams } from 'react-router-dom';
 import { adminService } from '../../services/adminService';
 import countryMetadata from '../../constants/countries.json';
+import { INDIAN_STATES } from '../../constants/indianStates';
 
 const DEFAULT_TIMEZONES = [
   'Asia/Kolkata',
@@ -37,6 +38,7 @@ const ADMIN_LANGUAGE_OPTIONS = ['English', 'Hindi', 'Arabic', 'French', 'Spanish
 const defaultFormData = {
   name: '',
   country: '',
+  state: '',
   currency_code: '',
   currency_symbol: '',
   timezone: ''
@@ -81,6 +83,7 @@ const ServiceLocation = ({ mode }) => {
           setFormData({
             name: item.name || item.service_location_name || '',
             country: matchedCountry?._id || matchedCountry?.id || '',
+            state: item.state || '',
             currency_code: item.currency_code || '',
             currency_symbol: item.currency_symbol || '',
             timezone: item.timezone || ''
@@ -347,6 +350,24 @@ const ServiceLocation = ({ mode }) => {
                       </select>
                       <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                     </div>
+                 </div>
+
+                 <div className="space-y-2">
+                    <label className={labelClass} htmlFor="service-location-state">State</label>
+                    <div className="relative">
+                      <select
+                         id="service-location-state"
+                         value={formData.state}
+                         onChange={(e) => setFormData(p => ({ ...p, state: e.target.value }))}
+                         className={inputClass + " appearance-none cursor-pointer"}
+                      >
+                         <option value="">Not set</option>
+                         {formData.state && !INDIAN_STATES.includes(formData.state) && <option value={formData.state}>{formData.state}</option>}
+                         {INDIAN_STATES.map(state => <option key={state} value={state}>{state}</option>)}
+                      </select>
+                      <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                    </div>
+                    <p className="text-[11px] text-gray-400">Used to filter drivers by state.</p>
                  </div>
 
                  <div className="space-y-2">

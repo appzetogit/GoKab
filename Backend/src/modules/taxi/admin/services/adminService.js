@@ -1654,6 +1654,7 @@ const normalizeServiceLocationPayload = (payload = {}, fallback = {}) => {
     service_location_name: name,
     address: payload.address ?? fallback.address ?? '',
     country: payload.country ?? fallback.country ?? 'India',
+    state: String(payload.state ?? fallback.state ?? '').trim().slice(0, 60),
     currency_name: payload.currency_name ?? fallback.currency_name ?? currencyCode,
     currency_symbol: payload.currency_symbol ?? fallback.currency_symbol ?? '₹',
     currency_code: currencyCode,
