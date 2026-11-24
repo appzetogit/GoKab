@@ -79,7 +79,7 @@ export default function SubscriptionTierList() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8 pt-6 border-t border-slate-800/80">
           <div className="bg-slate-800/50 p-4 rounded-2xl border border-slate-700/50 backdrop-blur-sm">
             <span className="text-xs text-slate-400 font-medium block">Total Active Tiers</span>
-            <span className="text-2xl font-black text-white">{tiers.length}</span>
+            <span className="text-2xl font-black text-white">{tiers.filter((t) => t.is_active !== false).length}</span>
           </div>
           <div className="bg-slate-800/50 p-4 rounded-2xl border border-slate-700/50 backdrop-blur-sm">
             <span className="text-xs text-slate-400 font-medium block">Default Fallback Tier</span>
@@ -161,6 +161,11 @@ export default function SubscriptionTierList() {
                               Default Fallback
                             </span>
                           )}
+                          {tier.is_active === false && (
+                            <span className="px-2.5 py-0.5 bg-gray-100 text-gray-600 text-[10px] font-black uppercase tracking-wider rounded-full border border-gray-300">
+                              Off
+                            </span>
+                          )}
                         </div>
                         <p className="text-xs text-gray-500 font-medium">
                           Support: <strong className="text-gray-800">{tier.support_channel_type_id?.name || 'Standard Chat'}</strong>
@@ -196,6 +201,18 @@ export default function SubscriptionTierList() {
                       <div className="flex items-center justify-between p-2 bg-gray-50 rounded-xl">
                         <span className="text-gray-500">Max Allowed Cash Debt</span>
                         <span className="font-bold text-gray-900">₹{tier.max_cash_debt_allowed || 0}</span>
+                      </div>
+                      <div className="flex items-center justify-between p-2 bg-gray-50 rounded-xl">
+                        <span className="text-gray-500">Drivers with this subscription</span>
+                        <span className="font-bold text-gray-900">{tier.active_drivers ?? '-'}</span>
+                      </div>
+                      <div className="flex items-center justify-between p-2 bg-gray-50 rounded-xl">
+                        <span className="text-gray-500">Bills</span>
+                        <span className="font-bold text-gray-900">
+                          {tier.can_generate_bills === false
+                            ? 'No'
+                            : tier.max_bills_per_month > 0 ? `${tier.max_bills_per_month} / month` : 'No limit'}
+                        </span>
                       </div>
                       {tier.free_cancellations_per_day > 0 && (
                         <div className="flex items-center justify-between p-2 bg-emerald-50 text-emerald-900 rounded-xl font-bold">

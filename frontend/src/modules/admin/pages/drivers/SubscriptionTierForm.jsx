@@ -2,6 +2,25 @@ import React, { useState, useEffect } from 'react';
 import { X, Save, AlertTriangle, ShieldCheck, HelpCircle, Layers, DollarSign, Zap } from 'lucide-react';
 import { adminService } from '../../services/adminService.js';
 
+const FEATURES = [
+  ['can_create_rides', 'Can create rides', 'Add own bookings and give them to team or contacts.'],
+  ['can_publish_rides', 'Can publish rides', 'Put rides on the driver network feed.'],
+  ['can_use_contacts', 'Can use contacts', 'Save drivers and assign rides to them directly.'],
+  ['can_manage_fleet', 'Can add team drivers and vehicles', ''],
+  ['can_generate_bills', 'Can make bills', 'Bill maker in the driver app.'],
+];
+
+const VEHICLE_RULES = [
+  ['requires_commercial_at_purchase', 'Needs a commercial vehicle to buy this plan'],
+  ['requires_commercial_and_private', 'Must keep one commercial and one private vehicle'],
+];
+
+const FEES = [
+  ['customer_lead_contact_fee', 'Customer Lead Contact Fee (₹)'],
+  ['driver_lead_contact_fee', 'Driver Lead Contact Fee (₹)'],
+  ['customer_ride_accept_fee', 'Customer Ride Accept Fee (₹)'],
+];
+
 export default function SubscriptionTierForm({ tier, onClose, onSuccess }) {
   const isEdit = Boolean(tier?._id);
 
@@ -28,6 +47,17 @@ export default function SubscriptionTierForm({ tier, onClose, onSuccess }) {
     max_vehicles: tier?.max_vehicles ?? 0,
     max_fleet_drivers: tier?.max_fleet_drivers ?? 0,
     max_routes: tier?.max_routes ?? 2,
+    can_create_rides: Boolean(tier?.can_create_rides),
+    can_publish_rides: Boolean(tier?.can_publish_rides),
+    // Plans saved before these options: contacts follow the level, bills are on.
+    can_use_contacts: tier?.can_use_contacts ?? ['middle', 'prime'].includes(tier?.driver_category),
+    can_generate_bills: tier?.can_generate_bills !== false,
+    max_bills_per_month: tier?.max_bills_per_month ?? 0,
+    requires_commercial_at_purchase: Boolean(tier?.requires_commercial_at_purchase),
+    requires_commercial_and_private: Boolean(tier?.requires_commercial_and_private),
+    customer_lead_contact_fee: tier?.customer_lead_contact_fee ?? 0,
+    driver_lead_contact_fee: tier?.driver_lead_contact_fee ?? 0,
+    customer_ride_accept_fee: tier?.customer_ride_accept_fee ?? 0,
   });
 
   const [modulesList, setModulesList] = useState([]);
@@ -63,6 +93,40 @@ export default function SubscriptionTierForm({ tier, onClose, onSuccess }) {
       };
     });
   };
+
+  const setNumber = (key, value) => setFormData((prev) => ({ ...prev, [key]: Math.max(0, Number(value) || 0) }));
+
+  const renderCheckbox = (key, label, hint = '') => (
+    <div key={key} className="flex items-start gap-3">
+      <input
+        id={key}
+        type="checkbox"
+        checked={formData[key]}
+        onChange={(e) => setFormData((prev) => ({ ...prev, [key]: e.target.checked }))}
+        className="h-5 w-5 mt-0.5"
+      />
+      <label htmlFor={key} className="text-xs font-bold text-gray-700">
+        {label}
+        {hint && <span className="text-[11px] text-gray-400 font-medium block">{hint}</span>}
+      </label>
+    </div>
+  );
+
+  const renderNumber = (key, label, hint = '', disabled = false) => (
+    <div key={key}>
+      <label htmlFor={key} className="block text-xs font-bold text-gray-700 mb-1">{label}</label>
+      <input
+        id={key}
+        type="number"
+        min="0"
+        value={formData[key]}
+        disabled={disabled}
+        onChange={(e) => setNumber(key, e.target.value)}
+        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-2xl text-sm font-bold disabled:opacity-50"
+      />
+      {hint && <span className="text-[11px] text-gray-400 block mt-1">{hint}</span>}
+    </div>
+  );
 
   const handleSubmitAttempt = (e) => {
     e.preventDefault();
@@ -276,17 +340,12 @@ export default function SubscriptionTierForm({ tier, onClose, onSuccess }) {
                 </span>
               </div>
 
-              <div className="flex items-center gap-3 pt-6">
-                <input
-                  id="can_manage_fleet"
-                  type="checkbox"
-                  checked={formData.can_manage_fleet}
-                  onChange={(e) => setFormData({ ...formData, can_manage_fleet: e.target.checked })}
-                  className="h-5 w-5"
-                />
-                <label htmlFor="can_manage_fleet" className="text-xs font-bold text-gray-700">
-                  Can add team drivers and vehicles
-                </label>
+              <div className="pt-6">
+                {renderCheckbox(
+                  'is_active',
+                  'Plan is on sale',
+                  tier?.is_default ? 'The default plan cannot be turned off.' : 'Off = drivers can no longer buy it.',
+                )}
               </div>
             </div>
 
@@ -326,6 +385,32 @@ export default function SubscriptionTierForm({ tier, onClose, onSuccess }) {
                 />
                 <span className="text-[11px] text-gray-400 block mt-1">0 = routes not included in this plan.</span>
               </div>
+            </div>
+          </div>
+
+          <hr className="border-gray-100" />
+
+          {/* SECTION: FEATURES */}
+          <div className="space-y-4">
+            <h3 className="text-xs font-black uppercase tracking-wider text-indigo-600 flex items-center gap-2">
+              <ShieldCheck size={14} /> Features In This Plan
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {FEATURES.map(([key, label, hint]) => renderCheckbox(key, label, hint))}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {renderNumber(
+                'max_bills_per_month',
+                'Max Bills Per Month',
+                '0 = no limit. Saved now; the driver app starts following it in a later update.',
+                !formData.can_generate_bills,
+              )}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {VEHICLE_RULES.map(([key, label]) => renderCheckbox(key, label))}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {FEES.map(([key, label]) => renderNumber(key, label, '0 = free.'))}
             </div>
           </div>
 

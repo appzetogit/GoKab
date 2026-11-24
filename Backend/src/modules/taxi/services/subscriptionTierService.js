@@ -71,11 +71,20 @@ export const subscriptionTierService = {
   // --- Admin CRUD for Tiers ---
   async getAllTiers(adminView = false) {
     const query = adminView ? {} : { is_active: true };
-    return SubscriptionTier.find(query)
+    const tiers = await SubscriptionTier.find(query)
       .sort({ display_order: 1, priority_score: -1 })
       .populate('support_channel_type_id')
       .populate('ride_module_ids')
       .lean();
+    if (!adminView) return tiers;
+
+    const now = new Date();
+    const counts = await DriverSubscription.aggregate([
+      { $match: { status: 'active', start_date: { $lte: now }, end_date: { $gte: now } } },
+      { $group: { _id: '$tier_id', drivers: { $addToSet: '$driver_id' } } },
+    ]);
+    const driversByTier = new Map(counts.map((row) => [String(row._id), row.drivers.length]));
+    return tiers.map((tier) => ({ ...tier, active_drivers: driversByTier.get(String(tier._id)) || 0 }));
   },
 
   /**
