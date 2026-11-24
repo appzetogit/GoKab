@@ -257,6 +257,7 @@ const AdminCustomizationSettings = lazy(() => import('./modules/admin/pages/sett
 const AdminTransportRideSettings = lazy(() => import('./modules/admin/pages/settings/TransportRideSettings'));
 const AdminCarpoolSettings = lazy(() => import('./modules/admin/pages/settings/CarpoolSettings'));
 const AdminRouteSettings = lazy(() => import('./modules/admin/pages/settings/RouteSettings'));
+const AdminRequestSteps = lazy(() => import('./modules/admin/pages/settings/RequestSteps'));
 const AdminEliteSlots = lazy(() => import('./modules/admin/pages/settings/EliteSlots'));
 const AdminEliteDrivers = lazy(() => import('./modules/admin/pages/elite/EliteDrivers'));
 const AdminEliteDriverCreate = lazy(() => import('./modules/admin/pages/elite/EliteDriverCreate'));
@@ -1433,6 +1434,7 @@ function App() {
                   path="settings/business/driver-routes"
                   element={<AdminRouteSettings />}
                 />
+                <Route path="settings/business/request-steps" element={<AdminRequestSteps />} />
                 <Route
                   path="settings/business/elite-slots"
                   element={<AdminEliteSlots />}

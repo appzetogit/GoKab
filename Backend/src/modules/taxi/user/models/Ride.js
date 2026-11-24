@@ -85,6 +85,10 @@ const rideSchema = new mongoose.Schema(
     // null means the ride is not phase-gated (scheduled for later, bidding).
     dispatchStartedAt: { type: Date, default: null },
     tierPhaseIndex: { type: Number, default: null },
+    // The request steps this ride is being sent by (requestSteps.js), copied when
+    // the search starts so an admin edit never changes a running search. Null =
+    // plan phases.
+    requestSteps: { type: mongoose.Schema.Types.Mixed, default: null },
     // Why and by whom the ride was cancelled (rider's pick from the cancel sheet).
     cancellation: {
       by: { type: String, default: '', trim: true },

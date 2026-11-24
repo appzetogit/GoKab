@@ -9,8 +9,13 @@ import { Zone } from '../driver/models/Zone.js';
 import { getDriverIdsBlockedByUpcomingScheduledRides } from './rideService.js';
 import { driverAcceptsTrip, findDriversWhoseActiveRouteMatches } from './routeMatchService.js';
 import { subscriptionTierService } from './subscriptionTierService.js';
+import { getPlanIdsForDrivers } from './requestStepsService.js';
 
 const EARTH_RADIUS_METERS = 6371000;
+
+// ponytail: the nearest this many per request step; raise it if one step ever has more drivers in range.
+const STEP_CANDIDATE_LIMIT = 300;
+const STEP_CHECKS_AT_ONCE = 20;
 
 const normalizeVehicleKey = (value = '') => String(value || '').trim().toLowerCase();
 
@@ -224,6 +229,9 @@ const sortDriversByDispatchAnchorDistance = (drivers = [], pickupCoords) =>
     .sort((left, right) => left.distanceMeters - right.distanceMeters)
     .map(({ driver }) => driver);
 
+const MATCH_FIELDS =
+  'name phone socketId vehicleTypeId vehicleType vehicleIconType vehicleNumber vehicleColor vehicleMake vehicleModel rating location zoneId service_location_id isOnline isOnRide routeBooking owner_id is_self_drive_owner assignedFleetVehicleId wallet route_mode active_route_id driver_category';
+
 const findDriversForZone = async ({
   zoneId,
   serviceLocationId,
@@ -244,8 +252,7 @@ const findDriversForZone = async ({
   // `wallet` has to be selected for the cash-debt check downstream to see a real
   // balance — without it every driver reads as balance 0 and the tier's debt
   // limit silently never applies.
-  const selectedFields =
-    'name phone socketId vehicleTypeId vehicleType vehicleIconType vehicleNumber vehicleColor vehicleMake vehicleModel rating location zoneId service_location_id isOnline isOnRide routeBooking owner_id is_self_drive_owner assignedFleetVehicleId wallet route_mode active_route_id driver_category';
+  const selectedFields = MATCH_FIELDS;
 
   // Staleness only matters for drivers matched on their *live* position. A
   // route-booking driver is matched on their saved anchor point, which never
@@ -290,6 +297,9 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
     rideModuleCode = null, // e.g. 'outstation', 'airport', 'carpool'
     paymentMethod = 'cash',
     dropCoords = null,
+    // Request steps: ask every eligible driver of these plans instead of the top few.
+    // { planIds, excludeDriverIds, onlyDriverId }
+    step = null,
   } = options;
   const normalizedVehicleTypeIds = normalizeVehicleTypeIds(vehicleTypeIds, vehicleTypeId);
   const allowedVehicles = normalizedVehicleTypeIds.length
@@ -305,17 +315,23 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
     : [];
 
   const zone = await findZoneByPickup(coordinates);
-  const zoneBoundaryCapMeters = zone ? getZoneBoundaryCapMeters(zone, coordinates) : null;
+  // A step's radius is the admin's; the zone edge does not shrink it.
+  const zoneBoundaryCapMeters = zone && !step ? getZoneBoundaryCapMeters(zone, coordinates) : null;
   const effectiveMaxDistance = Number.isFinite(zoneBoundaryCapMeters) && zoneBoundaryCapMeters >= 0
     ? Math.min(Math.max(1, Math.round(maxDistance)), Math.max(1, zoneBoundaryCapMeters))
     : Math.max(1, Math.round(maxDistance));
 
+  const candidateLimit = step ? STEP_CANDIDATE_LIMIT : limit * 2;
+  const excluded = new Set((step?.excludeDriverIds || []).map(String));
+  const isWanted = (driver) =>
+    !excluded.has(String(driver._id)) && (!step?.onlyDriverId || String(driver._id) === String(step.onlyDriverId));
+
   let rawDrivers = await findDriversForZone({
-    zoneId: zone?._id || null,
+    zoneId: step ? null : zone?._id || null,
     serviceLocationId,
     coordinates,
     effectiveMaxDistance,
-    limit: limit * 2, // Fetch extra candidate buffer before filtering
+    limit: candidateLimit, // Fetch extra candidate buffer before filtering
     normalizedVehicleTypeIds,
     vehicleTypeKeys,
     fleetOwnerIds,
@@ -326,7 +342,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
   );
   rawDrivers = rawDrivers.filter((driver) => !blockedDriverIds.has(String(driver?._id || '')));
 
-  if (rawDrivers.length === 0 && zone?._id) {
+  if (rawDrivers.length === 0 && zone?._id && !step) {
     rawDrivers = await findDriversForZone({
       zoneId: null,
       serviceLocationId,
@@ -353,7 +369,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
       pickup: coordinates,
       drop: dropCoords,
       serviceLocationId,
-      limit: limit * 2,
+      limit: candidateLimit,
       // The driver's saved route, not their home city, is the geographic
       // filter for these candidates — see routeMatchService.js.
       ignoreServiceLocation: true,
@@ -368,8 +384,31 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
           driver.isOnRide !== true &&
           !blockedDriverIds.has(String(driver._id)),
       );
-      rawDrivers = [...rawDrivers, ...eligibleRouteMatched];
+      if (step) {
+        // The route search ignores vehicle, wallet and approval, and loads too few
+        // fields to tell a team lead from a member: read these drivers again under
+        // the same rules as everyone else.
+        const ids = eligibleRouteMatched.filter(isWanted).map((driver) => driver._id);
+        const blockedIds = await getDriverIdsBlockedByUpcomingScheduledRides(ids.map(String));
+        const eligible = ids.length
+          ? await Driver.find({
+              _id: { $in: ids },
+              deletedAt: null,
+              ...buildDriverMatchFilters({ vehicleTypeIds: normalizedVehicleTypeIds, vehicleTypeKeys, fleetOwnerIds }),
+            }).select(MATCH_FIELDS)
+          : [];
+        rawDrivers = [...rawDrivers, ...eligible.filter((driver) => !blockedIds.has(String(driver._id)))];
+      } else {
+        rawDrivers = [...rawDrivers, ...eligibleRouteMatched];
+      }
     }
+  }
+
+  if (step) {
+    rawDrivers = rawDrivers.filter(isWanted);
+    const planIds = await getPlanIdsForDrivers(rawDrivers.map((driver) => driver._id));
+    const wantedPlans = new Set(step.planIds.map(String));
+    rawDrivers = rawDrivers.filter((driver) => wantedPlans.has(planIds.get(String(driver._id))));
   }
 
   // Filter candidates by Subscription Tier rules (Module permissions, Cash Debt limits, and Priority score sort)
@@ -377,7 +416,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
   const qualifiedDrivers = [];
   const skippedForDebt = [];
   const candidateCount = rawDrivers.length;
-  for (const driver of rawDrivers) {
+  const checkDriver = async (driver) => {
     // Honour the corridor the driver selected: in `route` mode they only want
     // trips that run along it, in the right direction.
     if (driver.route_mode === 'route') {
@@ -387,18 +426,18 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
         drop: dropCoords,
         routeCache,
       });
-      if (!routeResult.match) continue;
+      if (!routeResult.match) return;
     }
 
     try {
       const tier = await subscriptionTierService.getEffectiveDriverTier(driver._id);
-      if (!tier) continue; // Blocked if no subscription and no fallback default tier
+      if (!tier) return; // Blocked if no subscription and no fallback default tier
 
       // Module Access Check
       if (rideModuleCode) {
         const allowedModules = (tier.ride_module_ids || []).map((m) => String(m.code || m._id || m).toLowerCase());
         if (allowedModules.length > 0 && !allowedModules.includes(String(rideModuleCode).toLowerCase())) {
-          continue; // Tier doesn't allow this module
+          return; // Tier doesn't allow this module
         }
       }
 
@@ -408,7 +447,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
         const maxDebtAllowed = Number(tier.max_cash_debt_allowed || 0);
         if (currentBalance < -maxDebtAllowed) {
           skippedForDebt.push(`${driver.phone || driver._id}(balance ${currentBalance}, limit ${maxDebtAllowed})`);
-          continue; // Driver cash debt exceeds tier limit
+          return; // Driver cash debt exceeds tier limit
         }
       }
 
@@ -423,6 +462,10 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
     } catch (e) {
       qualifiedDrivers.push(driver);
     }
+  };
+  const checksAtOnce = step ? STEP_CHECKS_AT_ONCE : 1;
+  for (let i = 0; i < rawDrivers.length; i += checksAtOnce) {
+    await Promise.all(rawDrivers.slice(i, i + checksAtOnce).map(checkDriver));
   }
 
   console.log(
@@ -440,7 +483,7 @@ export const matchDrivers = async (pickupCoords, options = {}) => {
 
   return {
     zone,
-    drivers: qualifiedDrivers.slice(0, limit),
+    drivers: step ? qualifiedDrivers : qualifiedDrivers.slice(0, limit),
     searchRadiusMeters: effectiveMaxDistance,
     zoneBoundaryCapMeters,
   };

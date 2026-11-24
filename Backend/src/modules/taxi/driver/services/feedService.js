@@ -20,6 +20,7 @@ import {
   notifyRideAccepted,
 } from '../../services/dispatchService.js';
 import { acceptRideAssignment, isRideScheduledForFuture } from '../../services/rideService.js';
+import { areRequestStepsOn, isRideOpenToPlan } from '../../services/requestStepsService.js';
 import { categoryOf, getTierPhases, isRideOpenToCategory, withoutTeamMembers } from '../../services/tierPhaseService.js';
 import { holdForPublishedRide } from './escrowService.js';
 import {
@@ -407,10 +408,15 @@ export const getFeed = async ({ driverId, tab = 'driver', page = 1, limit = 20, 
   // their lead takes the ride and assigns it.
   if (tab === 'customer') {
     const phases = await getTierPhases();
+    const stepsOn = await areRequestStepsOn();
     const isTeamMember = (await withoutTeamMembers([driver])).length === 0;
     candidates = isTeamMember
       ? []
-      : candidates.filter((ride) => isRideOpenToCategory(ride, categoryOf(driver), phases));
+      : candidates.filter((ride) =>
+          stepsOn && ride.requestSteps?.length
+            ? isRideOpenToPlan(ride, permissions.tier?._id)
+            : isRideOpenToCategory(ride, categoryOf(driver), phases),
+        );
   }
 
   // Rides other drivers published follow the same plan phases: Elite first, then

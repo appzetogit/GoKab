@@ -17,6 +17,7 @@ import {
 } from '../../services/appSettingsService.js';
 import { DriverSubscription } from '../../driver/models/DriverSubscription.js';
 import { createDriver as createAdminDriver } from '../services/adminService.js';
+import { REQUEST_STEP_MODES, validateRequestSteps } from '../../services/requestSteps.js';
 import {
   applyCategoryFromSubscription,
   downgradeToLower,
@@ -74,6 +75,24 @@ export const updateNetworkSettingsController = asyncHandler(async (req, res) => 
         : !['false', '0', 'no', 'off', ''].includes(String(value).trim().toLowerCase());
     } else {
       next[key] = value;
+    }
+  }
+
+  if ('request_steps' in (req.body || {}) || 'request_steps_mode' in (req.body || {})) {
+    if (!REQUEST_STEP_MODES.includes(next.request_steps_mode)) {
+      throw new ApiError(400, 'request_steps_mode must be off, shadow or on', null, 'INVALID_REQUEST_STEPS');
+    }
+    // Turning steps off must always work, whatever is stored.
+    if ('request_steps' in req.body || next.request_steps_mode !== 'off') {
+      const plans = await SubscriptionTier.find({}).select('name is_default is_active').lean();
+      try {
+        next.request_steps = validateRequestSteps(next.request_steps, {
+          plans,
+          requireDefault: next.request_steps_mode !== 'off',
+        });
+      } catch (error) {
+        throw new ApiError(400, error.message, null, 'INVALID_REQUEST_STEPS');
+      }
     }
   }
 

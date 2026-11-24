@@ -37,6 +37,10 @@ export const DEFAULT_DRIVER_NETWORK_SETTINGS = Object.freeze({
   // Admin-managed plans: drivers keep the benefits they bought until renewal.
   // Off = plans work as before.
   plan_rules_enabled: false,
+  // Request steps (requestSteps.js). 'off' = the earlier plan phases; 'shadow' =
+  // those phases, plus a log line of whom the steps would ask; 'on' = the steps.
+  request_steps_mode: 'off',
+  request_steps: {},
 });
 
 let planRules = { enabled: false, readAt: 0 };

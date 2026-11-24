@@ -7,6 +7,8 @@ import { Driver } from '../driver/models/Driver.js';
 import { WalletTransaction } from '../driver/models/WalletTransaction.js';
 import { applyDriverWalletAdjustment } from '../driver/services/walletService.js';
 import { matchDrivers, findZoneByPickup } from './matchingService.js';
+import { allAskedHaveRejected, plansOpenAtStep } from './requestSteps.js';
+import { areRequestStepsOn, getRequestSteps } from './requestStepsService.js';
 import { categoryOf, getTierPhases, phaseCategories, withoutTeamMembers } from './tierPhaseService.js';
 import {
   RIDE_LIVE_STATUS,
@@ -633,6 +635,8 @@ const getDispatchState = (rideId) => {
     driverIds: Array.isArray(state.driverIds) ? state.driverIds : [],
     notifiedDriverIds: Array.isArray(state.notifiedDriverIds) ? state.notifiedDriverIds : [],
     rejectedDriverIds: Array.isArray(state.rejectedDriverIds) ? state.rejectedDriverIds : [],
+    // Request steps: the step to move to as soon as everyone asked has said no.
+    nextStepOnReject: Number.isInteger(state.nextStepOnReject) ? state.nextStepOnReject : null,
   };
 };
 
@@ -786,6 +790,17 @@ export const markDriverRejectedFromDispatch = (rideId, driverId) => {
   const rejectedDriverIds = [...new Set([...state.rejectedDriverIds, String(driverId)])];
 
   saveDispatchState(rideId, { rejectedDriverIds });
+  moveOnIfAllRejected(rideId);
+};
+
+const moveOnIfAllRejected = (rideId) => {
+  const state = getDispatchState(rideId);
+  if (state.nextStepOnReject === null) return;
+  if (!allAskedHaveRejected(state.notifiedDriverIds, state.rejectedDriverIds)) return;
+
+  clearDispatchTimer(rideId);
+  saveDispatchState(rideId, { timer: null, nextStepOnReject: null });
+  scheduleNextAttempt(rideId, state.nextStepOnReject, 0);
 };
 
 const closeRideAsUnmatched = async (rideId) => {
@@ -1263,7 +1278,7 @@ const dispatchTierPhase = async ({ ride, rideId, phaseIndex, phases, dispatchCon
 
   await Ride.updateOne(
     { _id: rideId, status: RIDE_STATUS.SEARCHING },
-    { $set: { tierPhaseIndex: phaseIndex, ...(phaseIndex === 0 ? { dispatchStartedAt: new Date() } : {}) } },
+    { $set: { tierPhaseIndex: phaseIndex, requestSteps: null, ...(phaseIndex === 0 ? { dispatchStartedAt: new Date() } : {}) } },
   );
 
   const { zone, drivers, searchRadiusMeters } = await matchDrivers(ride.pickupLocation.coordinates, {
@@ -1292,6 +1307,7 @@ const dispatchTierPhase = async ({ ride, rideId, phaseIndex, phases, dispatchCon
 
   saveDispatchState(rideId, {
     radiusIndex: phaseIndex,
+    nextStepOnReject: null,
     driverIds: nextNotifiedDriverIds,
     notifiedDriverIds: nextNotifiedDriverIds,
     timer: null,
@@ -1351,6 +1367,151 @@ const dispatchTierPhase = async ({ ride, rideId, phaseIndex, phases, dispatchCon
   scheduleNextAttempt(rideId, phaseIndex + 1, waitMs);
 };
 
+const matchDriversForStep = (ride, { planIds, radiusKm, excludeDriverIds = [], onlyDriverId = null }) =>
+  matchDrivers(ride.pickupLocation.coordinates, {
+    maxDistance: radiusKm * 1000,
+    vehicleTypeId: ride.vehicleTypeId,
+    vehicleTypeIds: getDispatchVehicleTypeIds(ride),
+    rideModuleCode: getRideModuleCode(ride),
+    paymentMethod: ride.paymentMethod,
+    dropCoords: ride.dropLocation?.coordinates || null,
+    step: { planIds, excludeDriverIds, onlyDriverId },
+  });
+
+/**
+ * One admin-made request step: every eligible driver of its plans is asked at
+ * once. A step with nobody to ask passes to the next at once, and so does one
+ * where everybody says no. After the last step the ride stays open (feed) until
+ * the search expiry, counted from when the search started.
+ */
+const dispatchRequestStep = async ({ ride, rideId, stepIndex, steps, defaultRadiusKm, dispatchConfig }) => {
+  const step = steps[stepIndex];
+  const radiusKm = step.radius_km || defaultRadiusKm || dispatchConfig.baseDistanceMeters / 1000;
+  const startedAt = stepIndex === 0 || !ride.dispatchStartedAt ? new Date() : ride.dispatchStartedAt;
+  const dispatchState = getDispatchState(rideId);
+  saveDispatchState(rideId, { nextStepOnReject: null });
+
+  await Ride.updateOne(
+    { _id: rideId, status: RIDE_STATUS.SEARCHING },
+    { $set: { tierPhaseIndex: stepIndex, requestSteps: steps, dispatchStartedAt: startedAt } },
+  );
+
+  const { zone, drivers } = await matchDriversForStep(ride, {
+    planIds: step.plan_ids,
+    radiusKm,
+    excludeDriverIds: [...dispatchState.notifiedDriverIds, ...dispatchState.rejectedDriverIds],
+  });
+  const targetDrivers = await withoutTeamMembers(drivers);
+
+  // Read again: a driver may have said no while matching ran.
+  const asked = getDispatchState(rideId).notifiedDriverIds;
+  const notifiedDriverIds = [...new Set([...asked, ...targetDrivers.map((driver) => String(driver._id))])];
+  saveDispatchState(rideId, {
+    radiusIndex: stepIndex,
+    driverIds: notifiedDriverIds,
+    notifiedDriverIds,
+    timer: null,
+  });
+
+  if (targetDrivers.length) {
+    await emitRideRequestToDrivers({
+      ride,
+      targetDrivers,
+      zone,
+      effectiveRadius: Math.round(radiusKm * 1000),
+      dispatchVehicleTypeIds: getDispatchVehicleTypeIds(ride),
+      // The card rings for a minute at most; the ride stays on the feed after that.
+      dispatchConfig: { ...dispatchConfig, dispatchType: 'broadcast', retryWindowSeconds: 60, maxAttempts: steps.length },
+      attemptIndex: stepIndex,
+    });
+  }
+
+  emitToRoom(getUserRoom(ride.userId), 'rideSearchUpdate', {
+    rideId: String(ride._id),
+    status: ride.status,
+    radius: Math.round(radiusKm * 1000),
+    dispatchType: 'broadcast',
+    attempt: stepIndex + 1,
+    maxAttempts: steps.length,
+    matchedDrivers: targetDrivers.length,
+    totalNotifiedDrivers: notifiedDriverIds.length,
+    maxSearchSeconds: Math.round(dispatchConfig.searchExpiryMs / 1000),
+  });
+
+  // Taken, cancelled or restarted while the requests went out: start no timer for it.
+  const stillSearching = await Ride.exists({ _id: rideId, status: RIDE_STATUS.SEARCHING });
+  if (!stillSearching) {
+    closeDriverRequestWindow(rideId, targetDrivers.map((driver) => driver._id));
+    stopDispatchFlow(rideId);
+    return;
+  }
+
+  if (stepIndex >= steps.length - 1) {
+    const leftMs = dispatchConfig.searchExpiryMs - (Date.now() - new Date(startedAt).getTime());
+    const timer = setTimeout(() => {
+      closeRideAsUnmatched(rideId)
+        .catch((error) => console.error('Failed to mark ride unmatched', error))
+        .finally(() => stopDispatchFlow(rideId));
+    }, Math.max(leftMs, step.minutes * 60 * 1000));
+    saveDispatchState(rideId, { timer });
+    return;
+  }
+
+  scheduleNextAttempt(rideId, stepIndex + 1, targetDrivers.length ? step.minutes * 60 * 1000 : 0);
+  if (targetDrivers.length) {
+    saveDispatchState(rideId, { nextStepOnReject: stepIndex + 1 });
+    moveOnIfAllRejected(rideId);
+  }
+};
+
+/** Sends this attempt by request steps. False = the earlier phases should handle it. */
+const tryRequestSteps = async ({ ride, rideId, attemptIndex, dispatchConfig }) => {
+  if (String(ride.bookingMode || 'normal') !== 'normal') return false;
+  try {
+    const { mode, steps, radiusKm } = await getRequestSteps(getRideModuleCode(ride));
+
+    if (mode === 'shadow' && attemptIndex === 0) {
+      logShadowSteps({ ride, steps, radiusKm, dispatchConfig }).catch((error) =>
+        console.error('[requestSteps] shadow failed:', error.message),
+      );
+    }
+    if (mode !== 'on') return false;
+
+    // A search keeps the way it started in; one begun by the phases stays there.
+    const running = attemptIndex === 0 ? steps : ride.requestSteps;
+    if (!running?.length) return false;
+
+    await dispatchRequestStep({
+      ride,
+      rideId,
+      stepIndex: Math.min(attemptIndex, running.length - 1),
+      steps: running,
+      defaultRadiusKm: radiusKm,
+      dispatchConfig,
+    });
+    return true;
+  } catch (error) {
+    console.error(`[requestSteps] ride ${rideId} falls back to plan phases:`, error);
+    saveDispatchState(rideId, { nextStepOnReject: null });
+    await Ride.updateOne({ _id: rideId }, { $set: { requestSteps: null } });
+    return false;
+  }
+};
+
+const logShadowSteps = async ({ ride, steps, radiusKm, dispatchConfig }) => {
+  const asked = [];
+  for (const [index, step] of steps.entries()) {
+    const { drivers } = await matchDriversForStep(ride, {
+      planIds: step.plan_ids,
+      radiusKm: step.radius_km || radiusKm || dispatchConfig.baseDistanceMeters / 1000,
+      excludeDriverIds: asked,
+    });
+    const ids = (await withoutTeamMembers(drivers)).map((driver) => String(driver._id));
+    asked.push(...ids);
+    console.log(`[requestSteps:shadow] ride=${ride._id} step=${index + 1}/${steps.length} would ask ${ids.length}: ${ids.join(',')}`);
+  }
+};
+
 const dispatchAttempt = async (rideId, attemptIndex = 0) => {
   const ride = await Ride.findById(rideId).populate('userId', 'name phone countryCode');
 
@@ -1361,9 +1522,13 @@ const dispatchAttempt = async (rideId, attemptIndex = 0) => {
 
   try {
     const dispatchConfig = await resolveTransportDispatchConfig();
+    if (await tryRequestSteps({ ride, rideId, attemptIndex, dispatchConfig })) return;
+
     const tierPhases = String(ride.bookingMode || 'normal') === 'normal' ? await getTierPhases() : null;
     if (tierPhases) {
-      await dispatchTierPhase({ ride, rideId, phaseIndex: attemptIndex, phases: tierPhases, dispatchConfig });
+      // A search handed over from request steps can be past the last phase.
+      const phaseIndex = Math.min(attemptIndex, tierPhases.length - 1);
+      await dispatchTierPhase({ ride, rideId, phaseIndex, phases: tierPhases, dispatchConfig });
       return;
     }
     const radius = getAttemptRadiusMeters(
@@ -1557,6 +1722,35 @@ export const notifyLateAvailableDriver = async (driverId) => {
       dispatchState.notifiedDriverIds.includes(driverKey) ||
       dispatchState.rejectedDriverIds.includes(driverKey)
     ) {
+      continue;
+    }
+
+    if (ride.requestSteps?.length && (await areRequestStepsOn())) {
+      if ((await withoutTeamMembers([driver])).length === 0) continue;
+      const { radiusKm } = await getRequestSteps(getRideModuleCode(ride));
+      const stepIndex = Math.max(0, Number(ride.tierPhaseIndex) || 0);
+      const config = await resolveTransportDispatchConfig();
+      const km = ride.requestSteps[stepIndex]?.radius_km || radiusKm || config.baseDistanceMeters / 1000;
+      const { zone, drivers } = await matchDriversForStep(ride, {
+        planIds: plansOpenAtStep(ride.requestSteps, stepIndex),
+        radiusKm: km,
+        onlyDriverId: driverKey,
+      });
+      // Checked again after the waits above: two position updates must not ring twice.
+      const latest = getDispatchState(rideId);
+      if (!drivers.length || !activeDispatches.has(rideId) || latest.notifiedDriverIds.includes(driverKey)) continue;
+
+      const notifiedDriverIds = [...latest.notifiedDriverIds, driverKey];
+      saveDispatchState(rideId, { driverIds: notifiedDriverIds, notifiedDriverIds });
+      await emitRideRequestToDrivers({
+        ride,
+        targetDrivers: drivers,
+        zone,
+        effectiveRadius: Math.round(km * 1000),
+        dispatchVehicleTypeIds: getDispatchVehicleTypeIds(ride),
+        dispatchConfig: { ...config, dispatchType: 'broadcast', retryWindowSeconds: 60, maxAttempts: ride.requestSteps.length },
+        attemptIndex: stepIndex,
+      });
       continue;
     }
 
